@@ -1,0 +1,23 @@
+.visor {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 18%;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.eye {
+  display: block;
+  width: 24%;
+  height: 14%;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.right {
+  background: var(--magenta);
+}

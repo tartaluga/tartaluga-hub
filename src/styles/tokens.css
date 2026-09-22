@@ -1,0 +1,82 @@
+/* Дизайн-токены «1a Визор» (design/1a-vizor-today.*).
+   Тёмная тема основная; светлая — «визор выключен». Переключатель ставит
+   data-theme на <html>; без него тема следует системе. */
+
+:root {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --status-idea: #8a8fa6;
+  --status-active: #6fc2b4;
+  --status-paused: #d9b36a;
+  --status-done: #9dbb7a;
+  --status-archived: #595d6c;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Светлая палитра — база, тёмная переопределяет её ниже. */
+:root {
+  color-scheme: light;
+  --bg: #f3f2f9;
+  --bg-glow: #e7e4f7;
+  --surface: #ffffff;
+  --surface-2: #ebe9f5;
+  --line: #d9d7e7;
+  --text: #1d1e2c;
+  --text-muted: #5f6276;
+  --text-faint: #8e91a6;
+  --accent: #6b5cc7;
+  --accent-soft: #e6e2fb;
+  --magenta: #b8438f;
+  --magenta-soft: #f7e2ef;
+  --glow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #161826;
+    --bg-glow: #1e2036;
+    --surface: #1d1f2e;
+    --surface-2: #232532;
+    --line: #2f3244;
+    --text: #e9e9ed;
+    --text-muted: #9397ab;
+    --text-faint: #595d6c;
+    --accent: #9184d9;
+    --accent-soft: #2b2741;
+    --magenta: #d472b2;
+    --magenta-soft: #3a2436;
+    --glow: 0 0 14px rgb(145 132 217 / 0.45);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #161826;
+  --bg-glow: #1e2036;
+  --surface: #1d1f2e;
+  --surface-2: #232532;
+  --line: #2f3244;
+  --text: #e9e9ed;
+  --text-muted: #9397ab;
+  --text-faint: #595d6c;
+  --accent: #9184d9;
+  --accent-soft: #2b2741;
+  --magenta: #d472b2;
+  --magenta-soft: #3a2436;
+  --glow: 0 0 14px rgb(145 132 217 / 0.45);
+}
