@@ -7,6 +7,7 @@ import { Ideas } from '../screens/Ideas'
 import { Stats } from '../screens/Stats'
 import { NotFound } from '../screens/NotFound'
 import { Security } from '../screens/Security'
+import { Branches } from '../screens/Branches'
 
 // Hash-роутинг (#/projects): адреса не зависят от сервера статики (ADR-006).
 export const router = createHashRouter([
@@ -19,6 +20,7 @@ export const router = createHashRouter([
       { path: 'ideas', element: <Ideas /> },
       { path: 'stats', element: <Stats /> },
       { path: 'security', element: <Security /> },
+      { path: 'branches', element: <Branches /> },
       { path: '*', element: <NotFound /> },
     ],
   },

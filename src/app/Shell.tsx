@@ -1,13 +1,14 @@
 import { useEffect } from 'react'
 import { Link, NavLink, Outlet } from 'react-router'
-import { ChartBar, Lightbulb, ShieldCheck, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
+import { ChartBar, GitBranch, Lightbulb, ShieldCheck, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { Visor } from '../components/Visor'
 import { ThemeSwitch } from '../components/ThemeSwitch'
 import { SyncIndicator } from '../components/SyncIndicator'
 import { SecurityBanner } from '../components/SecurityBanner'
+import { BranchBanner } from '../components/BranchBanner'
 import { Login } from '../screens/Login'
-import { useSession } from './session'
+import { MAIN, useSession } from './session'
 import css from './Shell.module.css'
 
 const NAV: { to: string; label: string; icon: Icon }[] = [
@@ -22,6 +23,7 @@ export function Shell() {
   const sync = useSession((s) => s.sync)
   const boot = useSession((s) => s.boot)
   const signOut = useSession((s) => s.signOut)
+  const branch = useSession((s) => s.branch)
 
   useEffect(() => {
     void boot()
@@ -61,6 +63,10 @@ export function Shell() {
           ))}
         </nav>
         <div className={css.sideFoot}>
+          <NavLink to="/branches" className={({ isActive }) => (isActive ? `${css.branch} ${css.active}` : css.branch)} title="Ветки репо данных">
+            <GitBranch size={18} aria-hidden />
+            <span className="mono">{branch}</span>
+          </NavLink>
           <SyncIndicator />
           <div className={css.footRow}>
             <ThemeSwitch />
@@ -77,9 +83,15 @@ export function Shell() {
       </aside>
 
       <main className={css.main}>
-        <Link to="/security" className={css.mobileSecurity} aria-label="Ключи и входы">
-          <ShieldCheck size={22} aria-hidden />
-        </Link>
+        <div className={css.mobileTop}>
+          <Link to="/branches" className={css.mobileIcon} data-draft={branch !== MAIN || undefined} aria-label={`Ветки, открыта ${branch}`}>
+            <GitBranch size={22} aria-hidden />
+          </Link>
+          <Link to="/security" className={css.mobileIcon} aria-label="Ключи и входы">
+            <ShieldCheck size={22} aria-hidden />
+          </Link>
+        </div>
+        <BranchBanner />
         <SecurityBanner />
         <Outlet />
       </main>
