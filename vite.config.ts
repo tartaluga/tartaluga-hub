@@ -3,10 +3,6 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// Сборка для старого адреса tartaluga.github.io: только прощальная страница «Хаб переехал» (ADR-007, съезд).
-// Её service worker сам себя снимает и чистит кэши на уже установленных приложениях.
-const MOVED = process.env.VITE_MOVED === '1'
-
 // CSP и прочие заголовки безопасности ставит Cloudflare (public/_headers), а не <meta>.
 
 export default defineConfig({
@@ -14,7 +10,6 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      selfDestroying: MOVED,
       // Новая версия не подменяется молча: пользователь сам жмёт «Обновить» (ADR-006).
       registerType: 'prompt',
       // Регистрацию делает UpdateBanner (virtual:pwa-register/react), отдельный registerSW.js не нужен.
