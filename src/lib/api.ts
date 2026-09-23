@@ -63,6 +63,17 @@ export async function readBlobText(sha: string): Promise<string> {
   return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(base64ToBytes(base64))
 }
 
+/** Создать (без sha) или обновить (с sha) один JSON-файл данных. Сервер проверяет его схемой. */
+export const putFile = (branch: string, path: string, text: string, sha?: string) =>
+  api<{ branch: string; path: string; sha: string }>('/api/file', { method: 'PUT', body: { branch, path, text, ...(sha ? { sha } : {}) } })
+
+/** Изменение для атомарного коммита: text — JSON-файл, base64 — картинка, null — удалить. */
+export type CommitChange = { path: string; text: string | null } | { path: string; base64: string | null }
+
+/** Несколько изменений одним коммитом; expectedHead — коммит ветки, от которого считались изменения. */
+export const commitChanges = (branch: string, changes: CommitChange[], expectedHead: string, message: string) =>
+  api<{ branch: string; head: string; shas: Record<string, string> }>('/api/commit', { method: 'POST', body: { branch, changes, expectedHead, message } })
+
 // ---------- Ветки ----------
 
 export interface Branch {

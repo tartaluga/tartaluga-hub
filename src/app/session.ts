@@ -2,7 +2,7 @@
 // вход — HttpOnly cookie, которую ставит сервер. Старт работает офлайн: сначала кэш из IndexedDB, потом сверка.
 // Хаб всегда смотрит на одну ветку репо данных; у каждой ветки свой кэш на устройстве.
 import { create } from 'zustand'
-import { ApiError, getMe, isNetworkError, listFiles, logout, readBlobText, type Me } from '../lib/api'
+import { ApiError, commitChanges, getMe, isNetworkError, listFiles, logout, putFile, readBlobText, type CommitChange, type Me } from '../lib/api'
 import {
   dropBranchCache,
   getCachedFiles,
@@ -21,11 +21,19 @@ type SyncState = 'idle' | 'syncing' | 'offline' | 'error' | 'sessionExpired'
 /** Откуда берём данные. В тестах подменяется. */
 export interface Remote {
   me(): Promise<Me>
-  listFiles(branch: string): Promise<{ files: { path: string; sha: string }[] }>
+  listFiles(branch: string): Promise<{ head: string; files: { path: string; sha: string }[] }>
   readBlobText(sha: string): Promise<string>
+  putFile(branch: string, path: string, text: string, sha?: string): Promise<{ sha: string }>
+  commit(branch: string, changes: CommitChange[], expectedHead: string, message: string): Promise<{ head: string; shas: Record<string, string> }>
 }
 
-const serverRemote: Remote = { me: getMe, listFiles, readBlobText }
+const serverRemote: Remote = { me: getMe, listFiles, readBlobText, putFile, commit: commitChanges }
+
+/** Дерево открытой ветки на момент последней сверки: коммит и все пути данных (включая обложки). */
+export interface Tree {
+  head: string
+  paths: string[]
+}
 
 export const MAIN = 'main'
 
@@ -37,6 +45,8 @@ interface Session {
   /** Сообщение о ветке, которое нужно показать один раз (например, её удалили на другом устройстве). */
   branchNotice: string | null
   files: CachedFile[]
+  /** null — ветку ещё не сверяли с сервером (старт без сети). Записи, которым нужен head, без него не идут. */
+  tree: Tree | null
   sync: SyncState
   syncError: string | null
   lastSync: Date | null
@@ -52,6 +62,10 @@ interface Session {
   /** Ветку удалили: стереть её кэш; если она была открыта — вернуться на main. */
   branchDeleted(name: string): Promise<void>
   dismissBranchNotice(): void
+  /** Записать новый JSON-файл в открытую ветку. Повторяемо: тот же путь с тем же текстом — успех. */
+  createFile(path: string, text: string): Promise<void>
+  /** Удалить файлы одним коммитом. Если ветку успели сдвинуть — сверка и одна повторная попытка. */
+  deleteFiles(paths: (tree: Tree) => string[], message: string): Promise<void>
 }
 
 // Идущие сверки по веткам: повторный refresh той же ветки ждёт текущий, другой ветки — идёт параллельно.
@@ -72,6 +86,7 @@ export const useSession = create<Session>((set, get) => ({
   branch: MAIN,
   branchNotice: null,
   files: [],
+  tree: null,
   sync: 'idle',
   syncError: null,
   lastSync: null,
@@ -105,7 +120,7 @@ export const useSession = create<Session>((set, get) => ({
       /* без сети — всё равно стираем устройство; сессия истечёт сама */
     }
     await wipeDevice().catch(() => undefined)
-    set({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], sync: 'idle', syncError: null, lastSync: null })
+    set({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null })
   },
 
   async refreshMe() {
@@ -130,7 +145,7 @@ export const useSession = create<Session>((set, get) => ({
     if (name === get().branch) return
     await setCurrentBranch(name).catch(() => undefined)
     const files = await getCachedFiles(name).catch(() => [])
-    set({ branch: name, files, branchNotice: notice ?? null, sync: 'idle', syncError: null, lastSync: null })
+    set({ branch: name, files, tree: null, branchNotice: notice ?? null, sync: 'idle', syncError: null, lastSync: null })
     await get().refresh()
   },
 
@@ -142,7 +157,50 @@ export const useSession = create<Session>((set, get) => ({
   dismissBranchNotice() {
     set({ branchNotice: null })
   },
+
+  async createFile(path, text) {
+    const { branch, remote } = get()
+    const { sha } = await remote.putFile(branch, path, text)
+    await applyWrite(branch, [{ path, sha, text }], [])
+    void get().refresh()
+  },
+
+  async deleteFiles(pathsOf, message) {
+    const { branch, remote } = get()
+    for (let attempt = 0; ; attempt++) {
+      if (!get().tree) await get().refresh()
+      const tree = get().tree
+      if (!tree || get().branch !== branch) throw new ApiError(0, 'network', 'Нет связи с сервером хаба — удаление не отправлено')
+      const paths = pathsOf(tree).filter((p) => tree.paths.includes(p))
+      if (!paths.length) return // уже удалено (например, на другом устройстве)
+      try {
+        const res = await remote.commit(branch, paths.map((path) => ({ path, text: null })), tree.head, message)
+        await applyWrite(branch, [], paths, res.head)
+        void get().refresh()
+        return
+      } catch (e) {
+        // Ветку сдвинули после нашей сверки: перечитываем дерево и пробуем ещё раз, но только один.
+        if (!(e instanceof ApiError && e.status === 409) || attempt > 0) throw e
+        set({ tree: null })
+      }
+    }
+  },
 }))
+
+/** Сразу показать результат записи: кэш на устройстве, файлы на экране и дерево ветки. */
+async function applyWrite(branch: string, changed: CachedFile[], removed: string[], head?: string): Promise<void> {
+  await putCachedFiles(branch, changed, removed).catch(() => undefined)
+  const state = useSession.getState()
+  if (state.branch !== branch) return
+  const files = new Map(state.files.map((f) => [f.path, f]))
+  for (const p of removed) files.delete(p)
+  for (const f of changed) files.set(f.path, f)
+  const tree = state.tree && {
+    head: head ?? state.tree.head,
+    paths: [...state.tree.paths.filter((p) => !removed.includes(p)), ...changed.map((f) => f.path).filter((p) => !state.tree!.paths.includes(p))],
+  }
+  useSession.setState({ files: [...files.values()], tree })
+}
 
 /** Сверить кэш ветки с сервером. Если за это время открыли другую ветку, кэш обновляем, а экран не трогаем. */
 async function syncBranch(branch: string): Promise<void> {
@@ -150,7 +208,7 @@ async function syncBranch(branch: string): Promise<void> {
   const current = () => useSession.getState().branch === branch
   useSession.setState({ sync: 'syncing', syncError: null })
   try {
-    const { files: remoteFiles } = await remote.listFiles(branch)
+    const { head, files: remoteFiles } = await remote.listFiles(branch)
     // На экране — кэш открытой ветки; если за время запроса ветку сменили, берём её кэш с устройства.
     const base = current() ? useSession.getState().files : await getCachedFiles(branch).catch(() => [] as CachedFile[])
     const cached = new Map(base.map((f) => [f.path, f]))
@@ -170,7 +228,7 @@ async function syncBranch(branch: string): Promise<void> {
     const next = new Map(cached)
     for (const p of removed) next.delete(p)
     for (const f of changed) next.set(f.path, f)
-    useSession.setState({ files: [...next.values()], sync: 'idle', lastSync: new Date() })
+    useSession.setState({ files: [...next.values()], tree: { head, paths: remoteFiles.map((f) => f.path) }, sync: 'idle', lastSync: new Date() })
     if (!useSession.getState().me) void useSession.getState().refreshMe() // запускались без сети — теперь узнаём сессию
   } catch (e) {
     if (!current()) return

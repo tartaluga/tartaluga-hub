@@ -2,9 +2,10 @@
 // Фильтр живёт в адресе, поэтому «назад» из карточки возвращает ту же выборку.
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { ArrowsDownUp, MagnifyingGlass, Warning, X } from '@phosphor-icons/react'
+import { ArrowsDownUp, MagnifyingGlass, Plus, Warning, X } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
+import { NewProjectDialog } from '../components/NewProjectDialog'
 import {
   activityText,
   applyFilter,
@@ -46,6 +47,7 @@ export function Projects() {
   const shown = useMemo(() => applyFilter(lib.projects, filter), [lib, filter])
   const counts = useMemo(() => countByStatus(lib.projects), [lib])
   const [searchOpen, setSearchOpen] = useState(filter.query !== '')
+  const [creating, setCreating] = useState(false)
 
   const set = (next: Partial<Filter>) => setParams(filterToParams({ ...filter, ...next }), { replace: true })
   const total = lib.projects.length - counts.archived
@@ -67,9 +69,9 @@ export function Projects() {
           </div>
           <h1 className={css.title}>Проекты</h1>
         </div>
-        {lib.projects.length > 0 && (
-          <div className={css.headActions}>
-            {searchOpen ? (
+        <div className={css.headActions}>
+          {lib.projects.length > 0 &&
+            (searchOpen ? (
               <label className={css.search}>
                 <MagnifyingGlass size={18} aria-hidden />
                 <input
@@ -89,10 +91,13 @@ export function Projects() {
               <button type="button" className={css.iconButton} onClick={() => setSearchOpen(true)} aria-label="Поиск по проектам">
                 <MagnifyingGlass size={20} aria-hidden />
               </button>
-            )}
-          </div>
-        )}
+            ))}
+          <button type="button" className={css.create} onClick={() => setCreating(true)}>
+            <Plus size={18} aria-hidden /> Новый проект
+          </button>
+        </div>
       </header>
+      <NewProjectDialog open={creating} onClose={() => setCreating(false)} />
 
       {lib.projects.length > 0 && (
         <>
@@ -143,7 +148,7 @@ export function Projects() {
 
       {lib.projects.length === 0 ? (
         <p className={css.empty}>
-          {branch === MAIN ? 'Проектов пока нет.' : `В ветке «${branch}» проектов нет.`} Создание проекта из хаба появится следующим шагом.
+          {branch === MAIN ? 'Проектов пока нет.' : `В ветке «${branch}» проектов нет.`} Начни с кнопки «Новый проект».
         </p>
       ) : shown.length === 0 ? (
         <p className={css.empty}>

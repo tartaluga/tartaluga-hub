@@ -45,6 +45,27 @@
   border-color: var(--accent);
 }
 
+/* «+ Новый проект» — контурная акцентная кнопка, как в макете. */
+.create {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.create:hover {
+  background: var(--accent-soft);
+}
+
 .search {
   display: flex;
   align-items: center;
@@ -436,13 +457,18 @@
     margin-right: 104px;
   }
 
-  /* Открытый поиск занимает свою строку; закрытый — только значок рядом с заголовком. */
-  .headActions:has(.search) {
+  /* На телефоне действия — отдельной строкой под заголовком: поиск растягивается, кнопка справа. */
+  .headActions {
     flex: 1 1 100%;
   }
 
+  .headActions .search {
+    flex: 1;
+  }
+
   .search {
-    width: 100%;
+    width: auto;
+    min-width: 0;
   }
 
   .tabs {
