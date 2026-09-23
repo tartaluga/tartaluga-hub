@@ -4,6 +4,7 @@ import { GitHubError } from '../src/lib/github'
 import { listFiles, readBlob, readStatus } from './api'
 import { CALLBACK_PATH, githubCallback, githubStart } from './authGithub'
 import type { Env } from './env'
+import { commit, createBranch, deleteBranch, listBranches, mergeBranch, putFile, refreshStatus } from './write'
 import { assertSameOriginMutation, errorResponse, HttpError, json } from './http'
 import { cleanup, clearSessionCookie, deleteSession, isFresh, logEvent, readSession, type Session } from './sessions'
 
@@ -68,6 +69,34 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
   if (pathname === '/api/status') {
     allow(method, 'GET')
     return readStatus(env, deps.fetch)
+  }
+  if (pathname === '/api/status/refresh') {
+    allow(method, 'POST')
+    return refreshStatus(env, deps.fetch)
+  }
+  if (pathname === '/api/file') {
+    allow(method, 'PUT')
+    return putFile(request, env, deps.fetch)
+  }
+  if (pathname === '/api/commit') {
+    allow(method, 'POST')
+    return commit(request, env, deps.fetch)
+  }
+  if (pathname === '/api/branches') {
+    if (method === 'GET') return listBranches(env, deps.fetch)
+    allow(method, 'POST')
+    return createBranch(request, env, deps.fetch)
+  }
+  const branchRoute = /^\/api\/branches\/([^/]+)(\/merge)?$/.exec(pathname)
+  if (branchRoute) {
+    // Имя ветки — только [a-z0-9-], так что процент-кодирование не нужно и не принимается.
+    const name = branchRoute[1]!
+    if (branchRoute[2]) {
+      allow(method, 'POST')
+      return mergeBranch(name, env, deps.fetch)
+    }
+    allow(method, 'DELETE')
+    return deleteBranch(name, session, deps.now(), env, deps.fetch)
   }
   throw new HttpError(404, 'not_found', 'Нет такой команды')
 }
