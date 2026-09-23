@@ -1,4 +1,4 @@
--- Хранилище сервера хаба (ADR-007). Применяется вручную, после одобрения владельца.
+-- Хранилище сервера хаба (ADR-007). Применяется вручную, после одобрения владельца: весь файл целиком в консоли D1.
 
 -- Сессии. Храним только SHA-256 от id сессии: утечка базы не даёт войти.
 CREATE TABLE sessions (
@@ -34,3 +34,10 @@ CREATE TABLE security_log (
   seen    INTEGER NOT NULL DEFAULT 0       -- 1, когда владелец увидел плашку о событии
 ) STRICT;
 CREATE INDEX security_log_at ON security_log (at);
+
+-- Какие миграции применены. Каждый файл миграции заканчивается записью о себе.
+CREATE TABLE schema_migrations (
+  name       TEXT PRIMARY KEY,
+  applied_at INTEGER NOT NULL
+) STRICT;
+INSERT INTO schema_migrations (name, applied_at) VALUES ('0001_init', unixepoch() * 1000);
