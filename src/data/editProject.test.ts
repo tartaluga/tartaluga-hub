@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyEdit, linkHref, linkText, newLink, normalizePatch, patchError, rebaseEdit, vscodeHref, webUrl } from './editProject'
+import { applyEdit, linkHref, linkText, logKindLabel, logWhen, mergePatch, newLink, newLogEntry, normalizePatch, patchError, rebaseEdit, sortedLog, vscodeHref, webUrl } from './editProject'
 import { parseFile, serialize } from './model'
 
 const NOW = new Date(2026, 8, 23, 15, 0, 0)
@@ -130,5 +130,69 @@ describe('ссылки', () => {
       return r.link
     })
     expect(parseFile('projects/bot.json', '', serialize(applyEdit(base, { links }, NOW)))).toMatchObject({ ok: true, readOnly: false })
+  })
+})
+
+describe('лог', () => {
+  const e = (id: string, at: string, text = 'x', kind = 'done') => ({ id: id.padEnd(26, 'A'), at, kind, text })
+  const withLog = { ...base, log: [e('01J1', '2026-09-20T10:00:00+03:00')] }
+
+  it('новая запись — в конец лога, повтор с тем же id не дублирует, удаление по id', () => {
+    const added = applyEdit(withLog, normalizePatch({ logAdd: [e('01J2', '2026-09-23T10:00:00+03:00', '  текст \r\n')] }), NOW)
+    expect(added.log.map((x) => [x.id.slice(0, 4), x.text])).toEqual([
+      ['01J1', 'x'],
+      ['01J2', 'текст'],
+    ])
+    const again = applyEdit(added, { logAdd: [e('01J2', '2026-09-23T10:00:00+03:00', 'текст')] }, NOW)
+    expect(again.log).toHaveLength(2)
+    const removed = applyEdit(again, { logRemove: [e('01J1', '').id] }, NOW)
+    expect(removed.log.map((x) => x.id.slice(0, 4))).toEqual(['01J2'])
+    expect(applyEdit(removed, { logRemove: [e('01J2', '').id] }, NOW)).not.toHaveProperty('log')
+    expect(parseFile('projects/bot.json', '', serialize(again))).toMatchObject({ ok: true, readOnly: false })
+  })
+
+  it('пустая и слишком длинная запись не проходят', () => {
+    expect(patchError(normalizePatch({ logAdd: [e('01J2', '2026-09-23T10:00:00+03:00', '   ')] }))).toMatch(/Пустую/)
+    expect(patchError({ logAdd: [e('01J2', '2026-09-23T10:00:00+03:00', 'x'.repeat(2001))] })).toMatch(/длиннее/)
+  })
+
+  it('записи лога не конфликтуют с чужими правками; уже добавленная — «already»', () => {
+    const theirs = { ...withLog, log: [...withLog.log, e('01J9', '2026-09-23T09:00:00+03:00')], title: 'Чужое' }
+    expect(rebaseEdit(withLog, theirs, { logAdd: [e('01J2', '2026-09-23T10:00:00+03:00')] })).toEqual({ kind: 'apply' })
+    const both = { ...theirs, log: [...theirs.log, e('01J2', '2026-09-23T10:00:00+03:00')] }
+    expect(rebaseEdit(withLog, both, { logAdd: [e('01J2', '2026-09-23T10:00:00+03:00')] })).toEqual({ kind: 'already' })
+    expect(rebaseEdit(withLog, { ...withLog, log: [] }, { logRemove: [e('01J1', '').id] })).toEqual({ kind: 'already' })
+    // Поле рядом с записью лога по-прежнему проверяется на конфликт.
+    expect(rebaseEdit(withLog, theirs, { title: 'Моё', logAdd: [e('01J2', '2026-09-23T10:00:00+03:00')] })).toEqual({ kind: 'conflict', fields: ['title'] })
+  })
+
+  it('mergePatch копит записи, а добавленная и сразу убранная до отправки не попадает в файл', () => {
+    const a = { logAdd: [e('01J2', 't')], title: 'А' }
+    const b = { logAdd: [e('01J3', 't')], title: 'Б' }
+    expect(mergePatch(a, b)).toEqual({ title: 'Б', logAdd: [e('01J2', 't'), e('01J3', 't')] })
+    expect(mergePatch(a, { logRemove: [e('01J2', '').id, e('01J1', '').id] })).toEqual({ title: 'А', logRemove: [e('01J1', '').id] })
+  })
+
+  it('лента: свежие сверху по времени, а не по порядку в файле; битая дата внизу', () => {
+    const log = [e('01J1', '2026-09-20T10:00:00+03:00'), e('01J2', 'нет даты'), e('01J3', '2026-09-23T10:00:00+03:00'), e('01J4', '2026-09-21T10:00:00Z')]
+    expect(sortedLog(log).map((x) => x.id.slice(0, 4))).toEqual(['01J3', '01J4', '01J1', '01J2'])
+  })
+
+  it('подписи: вид записи и местное время', () => {
+    expect([logKindLabel('done'), logKindLabel('decision'), logKindLabel('thought'), logKindLabel('idea-new')]).toEqual(['сделано', 'решение', 'мысль', 'запись'])
+    const now = new Date(2026, 8, 23, 15, 0)
+    const local = (d: number, h: number, m: number, y = 2026, mo = 8) => new Date(y, mo, d, h, m).toISOString()
+    expect(logWhen(local(23, 9, 5), now)).toBe('сегодня · 09:05')
+    expect(logWhen(local(22, 23, 59), now)).toBe('вчера · 23:59')
+    expect(logWhen(local(1, 0, 0), now)).toBe('01.09 · 00:00')
+    expect(logWhen(local(31, 12, 0, 2025, 11), now)).toBe('31.12.2025')
+    expect(logWhen('мусор', now)).toBe('мусор')
+  })
+
+  it('newLogEntry: ULID, момент со смещением, текст без пробелов по краям — проходит схему', () => {
+    const entry = newLogEntry('decision', '  Берём Визор \r\n', NOW)
+    expect(entry).toMatchObject({ kind: 'decision', text: 'Берём Визор' })
+    expect(entry.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/)
+    expect(parseFile('projects/bot.json', '', serialize(applyEdit(base, { logAdd: [entry] }, NOW)))).toMatchObject({ ok: true, readOnly: false })
   })
 })

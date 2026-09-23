@@ -14,7 +14,7 @@ import {
   type CachedFile,
 } from '../lib/localdb'
 import { parseFile, serialize } from '../data/model'
-import { applyEdit, EditConflict, rebaseEdit, type ProjectPatch } from '../data/editProject'
+import { applyEdit, EditConflict, mergePatch, rebaseEdit, type ProjectPatch } from '../data/editProject'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
 /** sessionExpired: сессия кончилась, пока данные на экране — нужен вход, кэш и (позже) очередь правок ждут. */
@@ -204,7 +204,7 @@ export const useSession = create<Session>((set, get) => ({
 ${path}`
     const next = waiting.get(key)
     if (next) {
-      Object.assign(next.patch, patch)
+      next.patch = mergePatch(next.patch, patch)
       return next.done
     }
     const batch = { patch: { ...patch }, done: Promise.resolve() }
