@@ -108,15 +108,18 @@ describe('hotItems', () => {
     expect(items.every((i) => i.slug === 'a' && i.project === 'A')).toBe(true)
   })
 
-  it('архив не горит, пауза и остальные — горят', () => {
+  it('горят только проекты в работе: идея, пауза, готово и архив — нет', () => {
     const items = hotItems(
       lib([
         project('a', { status: 'archived', tasks: [task('A', '2026-09-22')] }),
         project('b', { status: 'paused', tasks: [task('B', '2026-09-22')] }),
+        project('c', { status: 'done', tasks: [task('C', '2026-09-22')] }),
+        project('d', { status: 'idea', milestones: [{ id: id('D'), title: 'm', due: '2026-09-22' }] }),
+        project('e', { tasks: [task('E', '2026-09-22')] }),
       ]),
       TODAY,
     )
-    expect(items.map((i) => i.slug)).toEqual(['b'])
+    expect(items.map((i) => i.slug)).toEqual(['e'])
   })
 
   it('сортировка по сроку, потом по проекту и названию', () => {
@@ -171,6 +174,7 @@ describe('nextSteps и abandoned', () => {
       ['quieter', 22],
       ['quiet', 13],
     ])
+    expect(abandoned(ps, false).map((p) => p.data.slug)).toEqual(['quiet', 'quieter'])
   })
 })
 

@@ -21,13 +21,13 @@ const collator = new Intl.Collator('ru', { sensitivity: 'base', numeric: true })
 
 /**
  * Открытые задачи и незакрытые вехи со сроком не дальше 3 дней, просроченные тоже.
- * Архив не горит: проект убран с глаз, его сроки на главном экране — шум.
+ * Горят только проекты в работе (решение владельца): у идеи, паузы, готового и архива сроки на главном экране — шум.
  */
 export function hotItems(projects: ProjectView[], today: Date): HotItem[] {
   const out: HotItem[] = []
   for (const p of projects) {
     const d = p.data
-    if (d.status === 'archived') continue
+    if (d.status !== 'active') continue
     const tasks = d.tasks ?? []
     const push = (kind: HotItem['kind'], id: string, title: string, due: string) => {
       const days = daysUntil(due, today)
@@ -63,11 +63,12 @@ export function nextSteps(projects: ProjectView[]): ProjectView[] {
     .sort((a, b) => b.activityAt - a.activityAt || collator.compare(a.data.title, b.data.title))
 }
 
-/** Проекты в работе, где лог молчит дольше порога; самые тихие сверху. */
-export function abandoned(projects: ProjectView[]): (ProjectView & { silentDays: number })[] {
+/** Проекты в работе, где лог молчит дольше порога; по умолчанию самые тихие сверху, можно наоборот. */
+export function abandoned(projects: ProjectView[], quietestFirst = true): (ProjectView & { silentDays: number })[] {
+  const dir = quietestFirst ? 1 : -1
   return projects
     .filter((p): p is ProjectView & { silentDays: number } => p.data.status === 'active' && p.silentDays !== null)
-    .sort((a, b) => b.silentDays - a.silentDays || collator.compare(a.data.title, b.data.title))
+    .sort((a, b) => dir * (b.silentDays - a.silentDays) || collator.compare(a.data.title, b.data.title))
 }
 
 // ---------- Пульс ----------
