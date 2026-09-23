@@ -10,6 +10,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import Ajv2020 from 'ajv/dist/2020.js'
 import standaloneCode from 'ajv/dist/standalone/index.js'
 import { compile } from 'json-schema-to-typescript'
@@ -29,19 +30,26 @@ const ajv = new Ajv2020({ code: { source: true, esm: true }, allErrors: true, st
 ajv.addSchema(defs)
 for (const s of Object.values(schemas)) ajv.addSchema(s)
 const exportsMap = Object.fromEntries(NAMES.map((n) => [`validate${n[0].toUpperCase()}${n.slice(1)}`, schemas[n].$id]))
-// Ajv даже в режиме esm оставляет require() для рантайм-хелперов — меняем на import.
-const runtimeImports = []
+// Ajv даже в режиме esm оставляет require() для рантайм-хелперов (ucs2length и т. п.). Это CommonJS-модули:
+// импорт «по умолчанию» из них Vitest и Rollup понимают по-разному, и в продакшен-сборке вместо функции
+// приходит объект модуля. Поэтому код хелпера встраиваем прямо в validators.js — без импортов вообще.
+const require = createRequire(import.meta.url)
+const runtimeHelpers = []
 const standalone = standaloneCode(ajv, exportsMap).replace(
   /const (\w+) = require\("(ajv\/dist\/runtime\/[\w-]+)"\)\.default;?/g,
   (_, name, mod) => {
-    runtimeImports.push(`import ${name} from "${mod}.js";`)
+    const fn = require(mod).default
+    const src = typeof fn === 'function' ? fn.toString() : ''
+    // Встраивать можно только самодостаточную функцию: без require и без ссылок на соседей по модулю.
+    if (!/^function \w+\(/.test(src) || /require\(/.test(src)) throw new Error(`Хелпер ${mod} нельзя встроить — нужен другой способ`)
+    runtimeHelpers.push(`const ${name} = ${src};`)
     return ''
   },
 )
 if (/require\(/.test(standalone)) throw new Error('В validators.js остался require() — нужен ещё один import')
 const validators =
   '/* eslint-disable */\n// Сгенерировано scripts/schema.mjs — не править руками.\n' +
-  runtimeImports.join('\n') +
+  runtimeHelpers.join('\n') +
   '\n' +
   standalone.replace(/^"use strict";/, '')
 
