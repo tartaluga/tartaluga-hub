@@ -459,3 +459,36 @@ describe('правка проекта (saveProject)', () => {
     expect(data().title).toBe('В')
   })
 })
+
+describe('лог через saveProject', () => {
+  const entry = (c: string, text: string) => ({ id: c.repeat(26), at: '2026-09-23T10:00:00+03:00', kind: 'done', text })
+  const file = (log: object[]) =>
+    JSON.stringify({ schemaVersion: 1, slug: 'a', title: 'А', status: 'active', log, createdAt: '2026-09-01T10:00:00+03:00', updatedAt: '2026-09-01T10:00:00+03:00' })
+  const data = () => JSON.parse(useSession.getState().files.find((f) => f.path === 'projects/a.json')!.text)
+
+  it('пока шла запись, с телефона добавили свою запись — после 409 в файле обе', async () => {
+    const blobs: Record<string, string> = { a1: file([]) }
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    blobs.ext = file([entry('B', 'с телефона')])
+    r.trees.main = [{ path: 'projects/a.json', sha: 'ext' }]
+    await useSession.getState().saveProject('a', { logAdd: [entry('C', 'с ПК')] })
+    expect(data().log.map((e: { text: string }) => e.text)).toEqual(['с телефона', 'с ПК'])
+  })
+
+  it('две записи подряд, пока идёт первая запись, — обе в файле, коммитов два', async () => {
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], { a1: file([]) })
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    const s = useSession.getState()
+    const first = s.saveProject('a', { logAdd: [entry('C', 'один')] })
+    await Promise.resolve()
+    await Promise.resolve()
+    const second = s.saveProject('a', { logAdd: [entry('D', 'два')] })
+    const third = s.saveProject('a', { logAdd: [entry('E', 'три')] })
+    await Promise.all([first, second, third])
+    expect(r.writes).toHaveLength(2)
+    expect(data().log.map((e: { text: string }) => e.text)).toEqual(['один', 'два', 'три'])
+  })
+})
