@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
 import { router } from './app/router'
 import { UpdateBanner } from './components/UpdateBanner'
+import { Moved } from './screens/Moved'
 import './styles/global.css'
 
 // Тема до первого кадра, чтобы не мигала светлая (inline-скрипты запрещены CSP).
@@ -15,7 +16,13 @@ try {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <RouterProvider router={router} />
-    <UpdateBanner />
+    {import.meta.env.VITE_MOVED === '1' ? (
+      <Moved />
+    ) : (
+      <>
+        <RouterProvider router={router} />
+        <UpdateBanner />
+      </>
+    )}
   </StrictMode>,
 )

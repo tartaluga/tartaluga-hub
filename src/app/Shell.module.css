@@ -86,6 +86,15 @@
   cursor: pointer;
 }
 
+.footActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mobileSecurity {
+  display: none;
+}
+
 .signOut:hover {
   color: var(--magenta);
   border-color: var(--magenta);
@@ -98,6 +107,7 @@
 }
 
 .main {
+  position: relative;
   min-width: 0;
   padding: var(--space-6) var(--space-7) var(--space-7);
 }
@@ -113,6 +123,18 @@
 
   .side {
     display: none;
+  }
+
+  .mobileSecurity {
+    position: absolute;
+    top: calc(var(--space-4) + env(safe-area-inset-top, 0px));
+    right: var(--space-4);
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
   }
 
   .main {
