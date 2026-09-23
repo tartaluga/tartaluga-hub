@@ -189,8 +189,8 @@ function Tile({ p }: { p: ProjectView }) {
   const pct = p.progress === null ? 0 : Math.round(p.progress * 100)
   const hot = p.deadline && isHot(p.deadline) ? p.deadline : null
   return (
-    <Link to={`/projects/${d.slug}`} className={css.tile} data-status={d.status}>
-      <div className={css.coverWrap}>
+    <Link to={`/projects/${d.slug}`} className={css.tile} data-status={d.status} viewTransition>
+      <div className={css.coverWrap} style={{ viewTransitionName: `cover-${d.slug}` }}>
         <Cover slug={d.slug} muted={d.status === 'paused' || d.status === 'done' || d.status === 'archived'} />
         <span className={css.pill}>
           <span className={css.dot} aria-hidden />

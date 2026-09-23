@@ -13,6 +13,8 @@ import {
   wipeDevice,
   type CachedFile,
 } from '../lib/localdb'
+import { parseFile, serialize } from '../data/model'
+import { applyEdit, EditConflict, rebaseEdit, type ProjectPatch } from '../data/editProject'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
 /** sessionExpired: сессия кончилась, пока данные на экране — нужен вход, кэш и (позже) очередь правок ждут. */
@@ -66,10 +68,19 @@ interface Session {
   createFile(path: string, text: string): Promise<void>
   /** Удалить файлы одним коммитом. Если ветку успели сдвинуть — сверка и одна повторная попытка. */
   deleteFiles(paths: (tree: Tree) => string[], message: string): Promise<void>
+  /**
+   * Правка полей проекта. Правки одного файла идут по очереди, а все, что накопились, пока шла запись,
+   * уходят следующим одним коммитом. Если файл успели изменить — слияние по полям и одна повторная попытка.
+   */
+  saveProject(slug: string, patch: ProjectPatch): Promise<void>
 }
 
 // Идущие сверки по веткам: повторный refresh той же ветки ждёт текущий, другой ветки — идёт параллельно.
 const inFlight = new Map<string, Promise<void>>()
+
+// Очередь правок по файлам: запись, которая идёт, и следующая, в которую склеиваются новые правки.
+const saving = new Map<string, Promise<void>>()
+const waiting = new Map<string, { patch: ProjectPatch; done: Promise<void> }>()
 
 // Какие файлы держим в кэше как текст. Обложки грузятся отдельно (этап 8).
 const isDataFile = (path: string) => /^(projects|ideas)\/[^/]+\.json$|^settings\.json$/.test(path)
@@ -185,7 +196,74 @@ export const useSession = create<Session>((set, get) => ({
       }
     }
   },
+
+  saveProject(slug, patch) {
+    const branch = get().branch
+    const path = `projects/${slug}.json`
+    const key = `${branch}
+${path}`
+    const next = waiting.get(key)
+    if (next) {
+      Object.assign(next.patch, patch)
+      return next.done
+    }
+    const batch = { patch: { ...patch }, done: Promise.resolve() }
+    const before = saving.get(key) ?? Promise.resolve()
+    batch.done = before
+      .catch(() => undefined)
+      .then(() => {
+        waiting.delete(key)
+        return writeProject(branch, path, batch.patch)
+      })
+    waiting.set(key, batch)
+    saving.set(key, batch.done)
+    const cleanup = () => {
+      if (saving.get(key) === batch.done) saving.delete(key)
+    }
+    batch.done.then(cleanup, cleanup)
+    return batch.done
+  },
 }))
+
+/** Текущая версия файла проекта на экране: разобранные данные и sha, от которого считается правка. */
+function currentProject(branch: string, path: string) {
+  const state = useSession.getState()
+  if (state.branch !== branch) throw new ApiError(0, 'network', 'Открыта другая ветка — правка не отправлена')
+  const file = state.files.find((f) => f.path === path)
+  if (!file) throw new ApiError(404, 'not_found', 'Проекта больше нет в этой ветке')
+  const parsed = parseFile(path, file.sha, file.text)
+  if (!parsed.ok) throw new ApiError(422, 'validation', `Файл не читается: ${parsed.error}`)
+  if (parsed.readOnly) throw new ApiError(422, 'validation', parsed.reason)
+  return { sha: file.sha, data: parsed.data as Record<string, unknown> }
+}
+
+async function writeProject(branch: string, path: string, patch: ProjectPatch): Promise<void> {
+  const { remote } = useSession.getState()
+  const base = currentProject(branch, path)
+  const put = async (from: { sha: string; data: Record<string, unknown> }) => {
+    const text = serialize(applyEdit(from.data, patch))
+    const { sha } = await remote.putFile(branch, path, text, from.sha)
+    await applyWrite(branch, [{ path, sha, text }], [])
+  }
+  try {
+    await put(base)
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 409)) throw e
+    // Файл изменили в другом месте: берём свежую версию и накладываем правку, если её поля там не трогали.
+    await useSession.getState().refresh()
+    let fresh = currentProject(branch, path)
+    // refresh мог вернуть сверку, начатую до конфликта, — тогда дочитываем ещё раз.
+    if (fresh.sha === base.sha) {
+      await useSession.getState().refresh()
+      fresh = currentProject(branch, path)
+    }
+    if (fresh.sha === base.sha) throw e
+    const r = rebaseEdit(base.data, fresh.data, patch)
+    if (r.kind === 'already') return
+    if (r.kind === 'conflict') throw new EditConflict(r.fields)
+    await put(fresh)
+  }
+}
 
 /** Сразу показать результат записи: кэш на устройстве, файлы на экране и дерево ветки. */
 async function applyWrite(branch: string, changed: CachedFile[], removed: string[], head?: string): Promise<void> {

@@ -1,25 +1,79 @@
-// Карточка проекта. Пока — основное и удаление; поля с правкой на месте, ссылки и лог появятся следующим шагом (C4–C6).
-import { useMemo, useState } from 'react'
+// Карточка проекта с правкой на месте (C4). Каждая правка — один коммит; правки, сделанные, пока идёт запись,
+// склеиваются в следующий (session.saveProject). До ответа сервера на экране уже новое значение; при ошибке оно
+// откатывается, а причина видна рядом с полем.
+import { lazy, Suspense, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { ArrowLeft, Trash } from '@phosphor-icons/react'
+import {
+  ArrowLeft,
+  Code,
+  Copy,
+  FileText,
+  Folder,
+  GithubLogo,
+  Globe,
+  HardDrives,
+  LinkSimple,
+  PencilSimple,
+  Plus,
+  Trash,
+  X,
+  type Icon,
+} from '@phosphor-icons/react'
 import { errorText, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
+import { InlineText } from '../components/InlineText'
 import { activityText, buildLibrary, STATUS_LABEL, type Status } from '../data/projects'
-import { projectPaths } from '../data/newProject'
+import { NEXT_STEP_MAX, projectPaths, TITLE_MAX } from '../data/newProject'
+import {
+  applyEdit,
+  DESCRIPTION_MAX,
+  EditConflict,
+  LINK_KIND_LABEL,
+  LINK_KINDS,
+  LINK_LABEL_MAX,
+  LINK_PLACEHOLDER,
+  linkHref,
+  linkText,
+  newLink,
+  normalizePatch,
+  patchError,
+  STACK_ITEM_MAX,
+  vscodeHref,
+  type LinkKind,
+  type ProjectPatch,
+} from '../data/editProject'
+import type { Link as ProjectLink, Project as ProjectData } from '../schema/types'
 import { ApiError } from '../lib/api'
 import css from './Project.module.css'
 
+// Разбор Markdown — отдельный чанк: стартовый экран его не ждёт, офлайн он в кэше service worker.
+const Markdown = lazy(() => import('../components/Markdown').then((m) => ({ default: m.Markdown })))
+
+const STATUSES: Status[] = ['idea', 'active', 'paused', 'done', 'archived']
+
+const LINK_ICON: Record<string, Icon> = { folder: Folder, repo: GithubLogo, site: Globe, local: HardDrives, doc: FileText }
+
+type Save = (patch: ProjectPatch) => Promise<string | null>
+
 export function Project() {
   const { slug = '' } = useParams()
+  // Свой экземпляр на каждый проект: неподтверждённые правки и открытые поля не переезжают в другой.
+  return <ProjectCard key={slug} slug={slug} />
+}
+
+function ProjectCard({ slug }: { slug: string }) {
   const navigate = useNavigate()
   const files = useSession((s) => s.files)
   const sync = useSession((s) => s.sync)
   const deleteFiles = useSession((s) => s.deleteFiles)
+  const saveProject = useSession((s) => s.saveProject)
   const lib = useMemo(() => buildLibrary(files, new Date()), [files])
   const p = lib.projects.find((x) => x.data.slug === slug)
   const broken = lib.broken.find((b) => b.path === `projects/${slug}.json`)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Правки, отправленные, но ещё не подтверждённые сервером: показываем их сразу.
+  const [pending, setPending] = useState<ProjectPatch>({})
 
   async function remove(title: string) {
     const ok = window.confirm(
@@ -34,6 +88,29 @@ export function Project() {
     } catch (e) {
       setError(e instanceof ApiError && e.status === 409 ? 'Данные в репо изменились дважды подряд — обнови страницу и попробуй ещё раз.' : errorText(e))
       setBusy(false)
+    }
+  }
+
+  const save: Save = async (raw) => {
+    const patch = normalizePatch(raw)
+    const invalid = patchError(patch)
+    if (invalid) return invalid
+    setPending((cur) => ({ ...cur, ...patch }))
+    try {
+      await saveProject(slug, patch)
+      return null
+    } catch (e) {
+      if (e instanceof EditConflict) return e.message
+      if (e instanceof ApiError && e.status === 0) return 'Нет связи с сервером хаба — правка не сохранена. Попробуй, когда появится сеть.'
+      if (e instanceof ApiError && e.status === 409) return 'Файл снова изменился в другом месте. Показаны свежие данные — внеси правку ещё раз.'
+      return errorText(e)
+    } finally {
+      // Убираем только свои значения: если поле успели поправить ещё раз, его новое значение остаётся.
+      setPending((cur) => {
+        const next = { ...cur }
+        for (const k of Object.keys(patch) as (keyof ProjectPatch)[]) if (next[k] === patch[k]) delete next[k]
+        return next
+      })
     }
   }
 
@@ -61,22 +138,47 @@ export function Project() {
     )
   }
 
-  const d = p.data
+  const d = applyEdit(p.data as ProjectData & Record<string, unknown>, pending)
+  const ro = p.readOnly
   return (
     <section className={css.page}>
-      <Link to="/projects" className={css.back}>
+      <Link to="/projects" className={css.back} viewTransition>
         <ArrowLeft size={16} aria-hidden /> Проекты
       </Link>
-      <div className={css.cover} data-status={d.status}>
+      <div className={css.cover} data-status={d.status} style={{ viewTransitionName: `cover-${d.slug}` }}>
         <Cover slug={d.slug} muted={d.status === 'paused' || d.status === 'done' || d.status === 'archived'} />
       </div>
       <div className="eyebrow">
         {STATUS_LABEL[d.status as Status]} · {activityText(p.activityDays)}
       </div>
-      <h1 className={css.title}>{d.title}</h1>
-      <p className={css.next}>{d.nextStep ? `→ ${d.nextStep}` : 'Следующий шаг не задан'}</p>
-      {p.readOnly && <p className={css.muted}>Файл записан новой версией формата — пока только чтение.</p>}
-      <p className={css.muted}>Правка полей на месте, ссылки и лог появятся следующим шагом.</p>
+      <h1 className={css.title}>
+        <InlineText value={d.title} placeholder="Без названия" label="Название" maxLength={TITLE_MAX} readOnly={ro} onSave={(title) => save({ title })} />
+      </h1>
+      <div className={css.next}>
+        <InlineText
+          value={d.nextStep ?? ''}
+          display={`→ ${d.nextStep}`}
+          placeholder="→ Следующий шаг не задан"
+          label="Следующий шаг"
+          maxLength={NEXT_STEP_MAX}
+          readOnly={ro}
+          onSave={(nextStep) => save({ nextStep })}
+        />
+      </div>
+      {ro && <p className={css.notice}>Файл записан новой версией формата данных — править его может только новая версия хаба. Здесь только чтение.</p>}
+
+      <StatusPicker status={d.status as Status} readOnly={ro} save={save} />
+
+      <div className={css.body}>
+        <div className={css.main}>
+          <Description text={d.description ?? ''} readOnly={ro} save={save} />
+        </div>
+        <aside className={css.aside}>
+          <Stack items={d.stack ?? []} readOnly={ro} save={save} />
+          <Tags ids={d.tags ?? []} known={lib.tags} settingsProblem={lib.settingsProblem} readOnly={ro} save={save} />
+          <Links links={d.links ?? []} readOnly={ro} save={save} />
+        </aside>
+      </div>
 
       <div className={css.dangerZone}>
         <button type="button" className={css.danger} onClick={() => void remove(d.title)} disabled={busy}>
@@ -89,5 +191,295 @@ export function Project() {
         )}
       </div>
     </section>
+  )
+}
+
+/** Сохранение без поля ввода (кнопки, чипы): ошибка показывается под блоком. */
+function useAction(save: Save) {
+  const [error, setError] = useState<string | null>(null)
+  const run = async (patch: ProjectPatch) => {
+    setError(null)
+    const err = await save(patch)
+    setError(err)
+    return err
+  }
+  const alert = error && (
+    <p className={css.error} role="alert">
+      {error}
+    </p>
+  )
+  return { run, alert }
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className={css.section}>
+      <h2 className={css.sectionTitle}>{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+function StatusPicker({ status, readOnly, save }: { status: Status; readOnly: boolean; save: Save }) {
+  const { run, alert } = useAction(save)
+  return (
+    <div className={css.statusRow}>
+      <div className={css.segment} role="group" aria-label="Статус">
+        {STATUSES.map((s) => (
+          <button key={s} type="button" aria-pressed={status === s} data-status={s} disabled={readOnly} onClick={() => status !== s && void run({ status: s })}>
+            <span className={css.dot} aria-hidden />
+            {STATUS_LABEL[s]}
+          </button>
+        ))}
+      </div>
+      {alert}
+    </div>
+  )
+}
+
+function Description({ text, readOnly, save }: { text: string; readOnly: boolean; save: Save }) {
+  const [editing, setEditing] = useState(false)
+  return (
+    <Section title="Описание">
+      {editing ? (
+        <InlineText
+          value={text}
+          placeholder=""
+          label="Описание"
+          maxLength={DESCRIPTION_MAX}
+          multiline
+          autoOpen
+          onClose={() => setEditing(false)}
+          onSave={(description) => save({ description })}
+        />
+      ) : (
+        <>
+          {text ? (
+            <Suspense fallback={<p className={css.plain}>{text}</p>}>
+              <Markdown text={text} />
+            </Suspense>
+          ) : <p className={css.muted}>Описания пока нет. Можно Markdown: списки, ссылки, код.</p>}
+          {!readOnly && (
+            <button type="button" className={css.textButton} onClick={() => setEditing(true)} aria-label={text ? 'Изменить описание' : undefined}>
+              <PencilSimple size={15} aria-hidden /> {text ? 'Изменить' : 'Добавить описание'}
+            </button>
+          )}
+        </>
+      )}
+    </Section>
+  )
+}
+
+function Stack({ items, readOnly, save }: { items: string[]; readOnly: boolean; save: Save }) {
+  const { run, alert } = useAction(save)
+  const [draft, setDraft] = useState('')
+  async function add(e: FormEvent) {
+    e.preventDefault()
+    const item = draft.trim()
+    if (!item) return
+    if (!(await run({ stack: [...items, item] }))) setDraft('')
+  }
+  return (
+    <Section title="Стек">
+      {items.length > 0 && (
+        <ul className={css.chips}>
+          {items.map((s) => (
+            <li key={s} className={css.chip}>
+              {s}
+              {!readOnly && (
+                <button type="button" className={css.chipRemove} aria-label={`Убрать ${s}`} onClick={() => void run({ stack: items.filter((x) => x !== s) })}>
+                  <X size={12} aria-hidden />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {!readOnly && (
+        <form className={css.addRow} onSubmit={add}>
+          <input value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={STACK_ITEM_MAX} placeholder="Добавить: React, Python…" aria-label="Добавить в стек" />
+          <button type="submit" className={css.iconButton} aria-label="Добавить в стек" disabled={!draft.trim()}>
+            <Plus size={16} aria-hidden />
+          </button>
+        </form>
+      )}
+      {readOnly && items.length === 0 && <p className={css.muted}>Не указан</p>}
+      {alert}
+    </Section>
+  )
+}
+
+interface TagInfo {
+  id: string
+  name: string
+  color: string
+}
+
+function Tags({ ids, known, settingsProblem, readOnly, save }: { ids: string[]; known: TagInfo[]; settingsProblem: string | null; readOnly: boolean; save: Save }) {
+  const { run, alert } = useAction(save)
+  const [picking, setPicking] = useState(false)
+  const byId = new Map(known.map((t) => [t.id, t]))
+  const free = known.filter((t) => !ids.includes(t.id))
+  return (
+    <Section title="Теги">
+      {ids.length > 0 && (
+        <ul className={css.chips}>
+          {ids.map((id) => {
+            const t = byId.get(id)
+            return (
+              <li key={id} className={css.chip} data-unknown={t ? undefined : true} title={t ? undefined : 'Такого тега нет в settings.json'}>
+                <span className={css.tagDot} style={{ background: t?.color ?? 'var(--text-faint)' }} aria-hidden />
+                {t?.name ?? id}
+                {!readOnly && (
+                  <button type="button" className={css.chipRemove} aria-label={`Убрать тег ${t?.name ?? id}`} onClick={() => void run({ tags: ids.filter((x) => x !== id) })}>
+                    <X size={12} aria-hidden />
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {!readOnly &&
+        (known.length === 0 ? (
+          <p className={css.muted}>{settingsProblem ?? 'Тегов пока нет'} — теги заводятся в настройках.</p>
+        ) : picking ? (
+          <div className={css.picker} role="group" aria-label="Добавить тег">
+            {free.map((t) => (
+              <button key={t.id} type="button" className={css.pick} onClick={() => void run({ tags: [...ids, t.id] })}>
+                <span className={css.tagDot} style={{ background: t.color }} aria-hidden />
+                {t.name}
+              </button>
+            ))}
+            {free.length === 0 && <span className={css.muted}>Все теги уже стоят</span>}
+            <button type="button" className={css.textButton} onClick={() => setPicking(false)}>
+              Закрыть
+            </button>
+          </div>
+        ) : (
+          <button type="button" className={css.textButton} onClick={() => setPicking(true)}>
+            <Plus size={15} aria-hidden /> Добавить тег
+          </button>
+        ))}
+      {readOnly && ids.length === 0 && <p className={css.muted}>Нет</p>}
+      {alert}
+    </Section>
+  )
+}
+
+function Links({ links, readOnly, save }: { links: ProjectLink[]; readOnly: boolean; save: Save }) {
+  const { run, alert } = useAction(save)
+  const [adding, setAdding] = useState(false)
+  const [kind, setKind] = useState<LinkKind>('site')
+  const [value, setValue] = useState('')
+  const [label, setLabel] = useState('')
+  const [formError, setFormError] = useState<string | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  async function add(e: FormEvent) {
+    e.preventDefault()
+    const r = newLink(kind, value, label)
+    if (!r.ok) return setFormError(r.error)
+    setFormError(null)
+    if (!(await run({ links: [...links, r.link] }))) {
+      setValue('')
+      setLabel('')
+      setAdding(false)
+    }
+  }
+
+  async function copy(link: ProjectLink) {
+    try {
+      await navigator.clipboard.writeText(link.value)
+      setCopied(link.id)
+      setTimeout(() => setCopied((c) => (c === link.id ? null : c)), 1500)
+    } catch {
+      setFormError('Браузер не дал скопировать — выдели путь и скопируй вручную.')
+    }
+  }
+
+  return (
+    <Section title="Ссылки">
+      {links.length > 0 && (
+        <ul className={css.links}>
+          {links.map((l) => {
+            const href = linkHref(l)
+            const LinkIcon = LINK_ICON[l.kind] ?? LinkSimple
+            const text = linkText(l)
+            const external = href?.startsWith('http')
+            return (
+              <li key={l.id} className={css.link}>
+                <LinkIcon size={18} className={css.linkIcon} aria-hidden />
+                <span className={css.linkMain}>
+                  {href ? (
+                    <a href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})} title={l.value}>
+                      {text}
+                    </a>
+                  ) : (
+                    <span title={l.value}>{text}</span>
+                  )}
+                  <span className={css.linkKind}>{LINK_KIND_LABEL[l.kind as LinkKind] ?? l.kind}</span>
+                </span>
+                {l.kind === 'folder' && (
+                  <>
+                    <button type="button" className={css.iconButton} onClick={() => void copy(l)} aria-label="Скопировать путь" title="Скопировать путь">
+                      <Copy size={16} aria-hidden />
+                    </button>
+                    {copied === l.id && (
+                      <span className={css.copied} role="status">
+                        скопировано
+                      </span>
+                    )}
+                    {vscodeHref(l.value) && (
+                      <a className={css.iconButton} href={vscodeHref(l.value)!} aria-label="Открыть в VS Code" title="Открыть в VS Code">
+                        <Code size={16} aria-hidden />
+                      </a>
+                    )}
+                  </>
+                )}
+                {!readOnly && (
+                  <button type="button" className={css.iconButton} aria-label={`Убрать ссылку ${text}`} onClick={() => void run({ links: links.filter((x) => x.id !== l.id) })}>
+                    <X size={16} aria-hidden />
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {links.length === 0 && <p className={css.muted}>Папка на ПК, репо, сайт, локальный адрес, документы.</p>}
+      {!readOnly &&
+        (adding ? (
+          <form className={css.linkForm} onSubmit={add}>
+            <select value={kind} onChange={(e) => setKind(e.target.value as LinkKind)} aria-label="Вид ссылки">
+              {LINK_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {LINK_KIND_LABEL[k]}
+                </option>
+              ))}
+            </select>
+            <input value={value} onChange={(e) => setValue(e.target.value)} placeholder={LINK_PLACEHOLDER[kind]} aria-label="Адрес или путь" autoFocus />
+            <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={LINK_LABEL_MAX} placeholder="Подпись, можно пусто" aria-label="Подпись" />
+            <div className={css.formActions}>
+              <button type="button" className={css.textButton} onClick={() => (setAdding(false), setFormError(null))}>
+                Отмена
+              </button>
+              <button type="submit" className={css.primary} disabled={!value.trim()}>
+                Добавить
+              </button>
+            </div>
+          </form>
+        ) : (
+          <button type="button" className={css.textButton} onClick={() => setAdding(true)}>
+            <Plus size={15} aria-hidden /> Добавить ссылку
+          </button>
+        ))}
+      {formError && (
+        <p className={css.error} role="alert">
+          {formError}
+        </p>
+      )}
+      {alert}
+    </Section>
   )
 }

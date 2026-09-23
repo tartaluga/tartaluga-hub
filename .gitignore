@@ -32,3 +32,6 @@ dist-ssr
 *.key
 *.p8
 .wrangler
+
+# Рабочие копии параллельных агентов Claude
+.claude/worktrees/

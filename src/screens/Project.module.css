@@ -1,8 +1,11 @@
+/* Карточка проекта. Своего макета нет — язык «1a Визор»: моно-подписи разделов капсом,
+   тонкие рамки, правая колонка как на «Сегодня», статусы точками. */
+
 .page {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
-  max-width: 860px;
+  max-width: 1180px;
 }
 
 .back {
@@ -20,24 +23,26 @@
 }
 
 .cover {
-  aspect-ratio: 16 / 5;
+  aspect-ratio: 16 / 3.5;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   margin-bottom: var(--space-2);
 }
 
+.cover[data-status='archived'] {
+  filter: grayscale(0.8);
+}
+
 .title {
   margin: 0;
   font-size: clamp(30px, 5vw, 44px);
   font-weight: 600;
-  line-height: 1.1;
+  line-height: 1.15;
   letter-spacing: -0.02em;
-  overflow-wrap: anywhere;
 }
 
 .next {
-  margin: 0;
   font-size: 17px;
   color: var(--text-muted);
 }
@@ -47,6 +52,381 @@
   font-size: 14px;
   color: var(--text-faint);
 }
+
+.notice {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ---------- Статус ---------- */
+
+.statusRow {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.segment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.segment button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.segment button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.segment button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.segment button:disabled {
+  cursor: default;
+}
+
+.segment button:disabled:not([aria-pressed='true']) {
+  opacity: 0.5;
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dot, var(--text-faint));
+}
+
+[data-status='idea'] {
+  --dot: var(--status-idea);
+}
+[data-status='active'] {
+  --dot: var(--status-active);
+}
+[data-status='paused'] {
+  --dot: var(--status-paused);
+}
+[data-status='done'] {
+  --dot: var(--status-done);
+}
+[data-status='archived'] {
+  --dot: var(--status-archived);
+}
+
+/* ---------- Разделы ---------- */
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+  margin-top: var(--space-5);
+}
+
+@media (min-width: 1100px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr) 360px;
+    align-items: start;
+  }
+}
+
+.main,
+.aside {
+  display: grid;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.sectionTitle {
+  margin: 0;
+  font: 500 13px/1.3 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.textButton {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.textButton:hover {
+  text-decoration: underline;
+}
+
+.iconButton {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.iconButton:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---------- Чипы: стек и теги ---------- */
+
+.chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.chip:not(:has(button)) {
+  padding-right: var(--space-3);
+}
+
+.chip[data-unknown] {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.chipRemove {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.chipRemove:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.tagDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.addRow {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.addRow input,
+.linkForm input,
+.linkForm select {
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.addRow input:focus-visible,
+.linkForm input:focus-visible,
+.linkForm select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.addRow .iconButton {
+  width: 38px;
+  height: 38px;
+}
+
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pick:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ---------- Ссылки ---------- */
+
+.links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 52px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+}
+
+.link + .link {
+  border-top: 1px solid var(--line);
+}
+
+.linkIcon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.linkMain {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+
+.linkMain a,
+.linkMain > span:first-child {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkMain a {
+  text-decoration: none;
+}
+
+.linkMain a:hover {
+  color: var(--accent);
+}
+
+.linkKind {
+  font: 400 11px/1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.copied {
+  font: 400 12px var(--font-mono);
+  color: var(--status-active);
+}
+
+.linkForm {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.primary {
+  min-height: 38px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- Удаление ---------- */
 
 .dangerZone {
   display: grid;
@@ -90,4 +470,17 @@
   .back {
     margin-right: 104px;
   }
+
+  .cover {
+    aspect-ratio: 16 / 6;
+  }
+}
+
+/* Пока грузится разбор Markdown — исходный текст как есть. */
+.plain {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

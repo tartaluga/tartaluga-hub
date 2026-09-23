@@ -64,3 +64,17 @@ select {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+
+/* Переход плитка → карточка (View Transitions): обложка перелетает, остальное меняется наплывом. */
+::view-transition-group(*) {
+  animation-duration: 0.32s;
+  animation-timing-function: var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
