@@ -58,7 +58,7 @@ export function Today() {
             <time dateTime={now.toISOString()}>{eyebrowDate(now)}</time>
           </div>
           <h1 className={css.title}>Сегодня</h1>
-          <p className={css.summary}>{summary(hot, quiet.length, total)}</p>
+          {total > 0 && <p className={css.summary}>{summary(hot, quiet.length, total)}</p>}
         </div>
         <button type="button" className={css.create} onClick={() => setCreating(true)}>
           <Plus size={18} aria-hidden /> Новый проект
