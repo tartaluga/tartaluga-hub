@@ -1,41 +1,20 @@
 /// <reference types="vitest/config" />
 import react from '@vitejs/plugin-react'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// Строгая CSP только в сборке: dev-сервер Vite вставляет inline-скрипты для HMR.
-// Разрешены только свои файлы и api.github.com (ADR-001).
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self'",
-  // 'unsafe-inline' для стилей нужен Motion: он анимирует через атрибут style.
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' blob: data:",
-  "font-src 'self'",
-  "connect-src 'self' https://api.github.com",
-  "worker-src 'self'",
-  "manifest-src 'self'",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "object-src 'none'",
-].join('; ')
+// Сборка для старого адреса tartaluga.github.io: только прощальная страница «Хаб переехал» (ADR-007, съезд).
+// Её service worker сам себя снимает и чистит кэши на уже установленных приложениях.
+const MOVED = process.env.VITE_MOVED === '1'
 
-function cspMeta(): Plugin {
-  return {
-    name: 'tartaluga-csp',
-    apply: 'build',
-    transformIndexHtml: () => [
-      { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: CSP }, injectTo: 'head-prepend' },
-    ],
-  }
-}
+// CSP и прочие заголовки безопасности ставит Cloudflare (public/_headers), а не <meta>.
 
 export default defineConfig({
   base: '/',
   plugins: [
     react(),
-    cspMeta(),
     VitePWA({
+      selfDestroying: MOVED,
       // Новая версия не подменяется молча: пользователь сам жмёт «Обновить» (ADR-006).
       registerType: 'prompt',
       // Регистрацию делает UpdateBanner (virtual:pwa-register/react), отдельный registerSW.js не нужен.
@@ -58,13 +37,13 @@ export default defineConfig({
         navigateFallback: 'index.html',
         // Вход через GitHub — это переход на /api/auth/...; service worker не должен подменять его на index.html.
         navigateFallbackDenylist: [/^\/api\//],
-        // Запросы к GitHub API service worker не кэширует никогда (ADR-002).
+        // Запросы к API service worker не кэширует никогда: данные — только через IndexedDB (ADR-004, ADR-007).
         runtimeCaching: [],
       },
     }),
   ],
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'worker/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'worker/**/*.test.ts'],
   },
 })

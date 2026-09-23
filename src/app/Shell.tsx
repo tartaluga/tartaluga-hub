@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
-import { NavLink, Outlet } from 'react-router'
-import { ChartBar, Lightbulb, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
+import { Link, NavLink, Outlet } from 'react-router'
+import { ChartBar, Lightbulb, ShieldCheck, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { Visor } from '../components/Visor'
 import { ThemeSwitch } from '../components/ThemeSwitch'
 import { SyncIndicator } from '../components/SyncIndicator'
+import { SecurityBanner } from '../components/SecurityBanner'
 import { Login } from '../screens/Login'
 import { useSession } from './session'
 import css from './Shell.module.css'
@@ -39,7 +40,7 @@ export function Shell() {
 
   if (phase === 'booting') return <div className={css.boot} aria-hidden><Visor size={72} /></div>
   if (phase === 'signedOut') return <Login />
-  if (sync === 'tokenInvalid') return <Login reason="Токен больше не работает: он истёк или отозван. Введи новый — данные на устройстве сохранятся." />
+  if (sync === 'sessionExpired') return <Login reason="Сессия закончилась. Войди снова — данные на устройстве сохранились." />
 
   return (
     <div className={css.shell}>
@@ -63,14 +64,23 @@ export function Shell() {
           <SyncIndicator />
           <div className={css.footRow}>
             <ThemeSwitch />
-            <button type="button" className={css.signOut} onClick={() => void signOut()} title="Выйти: стереть токен и данные с этого устройства" aria-label="Выйти">
-              <SignOut size={18} aria-hidden />
-            </button>
+            <div className={css.footActions}>
+              <Link to="/security" className={css.signOut} title="Ключи и входы" aria-label="Ключи и входы">
+                <ShieldCheck size={18} aria-hidden />
+              </Link>
+              <button type="button" className={css.signOut} onClick={() => void signOut()} title="Выйти: завершить сессию и стереть данные с этого устройства" aria-label="Выйти">
+                <SignOut size={18} aria-hidden />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
 
       <main className={css.main}>
+        <Link to="/security" className={css.mobileSecurity} aria-label="Ключи и входы">
+          <ShieldCheck size={22} aria-hidden />
+        </Link>
+        <SecurityBanner />
         <Outlet />
       </main>
 

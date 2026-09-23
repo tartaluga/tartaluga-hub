@@ -1,32 +1,61 @@
-import { useState, type FormEvent } from 'react'
-import { ArrowSquareOut, Eye, EyeSlash } from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { Fingerprint, GithubLogo } from '@phosphor-icons/react'
 import { Visor } from '../components/Visor'
 import { useSession } from '../app/session'
-import { TOKEN_HELP_URL } from '../config'
+import { GITHUB_LOGIN_URL } from '../lib/api'
+import { passkeyErrorText, passkeysSupported, signInWithPasskey } from '../lib/passkey'
 import css from './Login.module.css'
 
-const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent)
+/** Коды ошибок, с которыми сервер возвращает с github.com (worker/authGithub.ts). */
+const AUTH_ERRORS: Record<string, string> = {
+  not_owner: 'Этот аккаунт GitHub — не владелец хаба. Войди своим аккаунтом.',
+  expired: 'Вход занял слишком долго или начат в другой вкладке. Попробуй ещё раз.',
+  cancelled: 'Вход через GitHub отменён.',
+  github: 'GitHub не ответил как надо. Попробуй ещё раз.',
+}
+
+/** Ошибка входа через GitHub из адреса (?auth_error=…); адрес сразу чистим, чтобы она не всплывала снова. */
+function takeAuthError(): string | null {
+  const params = new URLSearchParams(window.location.search)
+  const code = params.get('auth_error')
+  if (!code) return null
+  window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+  return AUTH_ERRORS[code] ?? AUTH_ERRORS.github!
+}
 
 export function Login({ reason }: { reason?: string }) {
-  const signIn = useSession((s) => s.signIn)
-  const [token, setToken] = useState('')
-  const [show, setShow] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const signedIn = useSession((s) => s.signedIn)
+  const [busy, setBusy] = useState<'passkey' | 'github' | null>(null)
   const [error, setError] = useState<string | null>(reason ?? null)
+  const canPasskey = passkeysSupported()
 
-  async function submit(e: FormEvent) {
-    e.preventDefault()
+  useEffect(() => {
+    const e = takeAuthError()
+    if (e) setError(e)
+  }, [])
+
+  async function passkey() {
     if (busy) return
-    setBusy(true)
+    setBusy('passkey')
     setError(null)
-    const err = await signIn(token)
-    setBusy(false)
-    if (err) setError(err)
+    try {
+      await signInWithPasskey()
+      await signedIn()
+    } catch (e) {
+      setError(passkeyErrorText(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  function github() {
+    setBusy('github')
+    window.location.assign(GITHUB_LOGIN_URL)
   }
 
   return (
     <main className={css.page}>
-      <form className={css.card} onSubmit={submit}>
+      <div className={css.card}>
         <div className={css.head}>
           <Visor size={64} />
           <div>
@@ -36,54 +65,28 @@ export function Login({ reason }: { reason?: string }) {
         </div>
 
         <p className={css.lead}>
-          Хаб читает данные из приватного репозитория через твой токен GitHub. Токен сохраняется только на этом устройстве.
+          {canPasskey
+            ? 'Приложи палец, лицо или используй Windows Hello. Первый вход на новом устройстве — через GitHub, потом добавь ключ.'
+            : 'Этот браузер не умеет входить по ключу доступа. Войди через GitHub.'}
         </p>
 
-        <label className="label" htmlFor="token">
-          Токен
-        </label>
-        <div className={css.field}>
-          <input
-            id="token"
-            name="token"
-            type={show ? 'text' : 'password'}
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder="github_pat_…"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            className={css.input}
-            aria-invalid={error ? true : undefined}
-            aria-describedby={error ? 'token-error' : undefined}
-          />
-          <button type="button" className={css.eye} onClick={() => setShow((v) => !v)} aria-label={show ? 'Скрыть токен' : 'Показать токен'}>
-            {show ? <EyeSlash size={20} /> : <Eye size={20} />}
-          </button>
-        </div>
-
         {error && (
-          <p id="token-error" className={css.error} role="alert">
+          <p className={css.error} role="alert">
             {error}
           </p>
         )}
 
-        <button type="submit" className={css.submit} disabled={busy || token.trim() === ''}>
-          {busy ? 'Проверяю…' : 'Войти'}
+        {canPasskey && (
+          <button type="button" className={css.submit} onClick={() => void passkey()} disabled={busy !== null}>
+            <Fingerprint size={22} aria-hidden />
+            {busy === 'passkey' ? 'Жду подтверждения…' : 'Войти по ключу'}
+          </button>
+        )}
+        <button type="button" className={canPasskey ? css.secondary : css.submit} onClick={github} disabled={busy !== null}>
+          <GithubLogo size={20} aria-hidden />
+          {busy === 'github' ? 'Перехожу на GitHub…' : 'Войти через GitHub'}
         </button>
-
-        <div className={css.notes}>
-          <a href={TOKEN_HELP_URL} target="_blank" rel="noreferrer" className={css.link}>
-            Как создать токен <ArrowSquareOut size={14} aria-hidden />
-          </a>
-          {isIOS && (
-            <p className={css.hint}>
-              На iPhone установленное приложение хранит данные отдельно от Safari. Если ставишь хаб на экран «Домой», вводи токен уже в нём.
-            </p>
-          )}
-        </div>
-      </form>
+      </div>
     </main>
   )
 }

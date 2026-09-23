@@ -6,8 +6,9 @@ import { Project } from '../screens/Project'
 import { Ideas } from '../screens/Ideas'
 import { Stats } from '../screens/Stats'
 import { NotFound } from '../screens/NotFound'
+import { Security } from '../screens/Security'
 
-// Hash-роутинг (#/projects): GitHub Pages не умеет отдавать index.html на любой путь (ADR-006).
+// Hash-роутинг (#/projects): адреса не зависят от сервера статики (ADR-006).
 export const router = createHashRouter([
   {
     element: <Shell />,
@@ -17,6 +18,7 @@ export const router = createHashRouter([
       { path: 'projects/:slug', element: <Project /> },
       { path: 'ideas', element: <Ideas /> },
       { path: 'stats', element: <Stats /> },
+      { path: 'security', element: <Security /> },
       { path: '*', element: <NotFound /> },
     ],
   },
