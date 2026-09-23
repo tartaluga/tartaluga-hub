@@ -24,5 +24,5 @@ export function encodeText(text: string): string {
 }
 
 export function decodeText(b64: string): string {
-  return new TextDecoder('utf-8', { fatal: true }).decode(base64ToBytes(b64))
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(base64ToBytes(b64))
 }

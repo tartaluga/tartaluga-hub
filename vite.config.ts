@@ -56,6 +56,8 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,woff2,png,webp}'],
         navigateFallback: 'index.html',
+        // Вход через GitHub — это переход на /api/auth/...; service worker не должен подменять его на index.html.
+        navigateFallbackDenylist: [/^\/api\//],
         // Запросы к GitHub API service worker не кэширует никогда (ADR-002).
         runtimeCaching: [],
       },
@@ -63,6 +65,6 @@ export default defineConfig({
   ],
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'worker/**/*.test.ts'],
   },
 })

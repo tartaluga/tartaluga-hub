@@ -49,6 +49,8 @@ export interface ClientOptions {
   owner: string
   repo: string
   branch?: string
+  /** На сервере обязателен: без User-Agent GitHub API отвечает 403. Браузер ставит свой сам. */
+  userAgent?: string
   fetch?: typeof fetch
 }
 
@@ -59,11 +61,13 @@ export class GitHubClient {
   readonly repo: string
   readonly branch: string
   private readonly token: string
+  private readonly userAgent: string | undefined
   private readonly fetchImpl: typeof fetch
   private writeChain: Promise<unknown> = Promise.resolve()
 
   constructor(opts: ClientOptions) {
     this.token = opts.token
+    this.userAgent = opts.userAgent
     this.owner = opts.owner
     this.repo = opts.repo
     this.branch = opts.branch ?? 'main'
@@ -85,6 +89,7 @@ export class GitHubClient {
           Authorization: `Bearer ${this.token}`,
           Accept: accept ?? 'application/vnd.github+json',
           'X-GitHub-Api-Version': '2022-11-28',
+          ...(this.userAgent ? { 'User-Agent': this.userAgent } : {}),
           ...(rest.body ? { 'Content-Type': 'application/json' } : {}),
         },
       })
@@ -145,7 +150,7 @@ export class GitHubClient {
   }
 
   async readBlobText(sha: string): Promise<string> {
-    return new TextDecoder('utf-8', { fatal: true }).decode(await this.readBlob(sha))
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(await this.readBlob(sha))
   }
 
   /** Файл по пути; null, если его нет. */

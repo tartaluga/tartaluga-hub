@@ -1,0 +1,21 @@
+# Заголовки безопасности для статики на Cloudflare (ADR-007). На ответы Worker (/api/*) не действуют —
+# их ставит сам Worker (worker/http.ts). GitHub Pages этот файл игнорирует.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+  X-Frame-Options: DENY
+
+# Service worker и index.html всегда проверяются заново: иначе обновление хаба застрянет в кэше браузера.
+/sw.js
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/
+  Cache-Control: no-cache
+
+# Файлы сборки с хэшем в имени не меняются никогда.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

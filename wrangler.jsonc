@@ -1,0 +1,39 @@
+// Cloudflare Worker хаба (ADR-007): приложение и API на одном адресе https://hub.tartaluga.workers.dev.
+// Секреты (задаются в панели Cloudflare, не здесь): GITHUB_APP_PRIVATE_KEY, GITHUB_APP_CLIENT_SECRET, COOKIE_SECRET.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hub",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-21",
+  "workers_dev": true,
+  "send_metrics": false,
+  // Превью-адреса отключены: иначе старые сборки остаются доступны с теми же секретами.
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // Worker отвечает только на /api/*; всё остальное — статика с заголовками из public/_headers.
+    "run_worker_first": ["/api/*"],
+    "not_found_handling": "none"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hub",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Ежедневная уборка: истёкшие сессии, старый журнал безопасности.
+  "triggers": { "crons": ["17 3 * * *"] },
+  "vars": {
+    "APP_ORIGIN": "https://hub.tartaluga.workers.dev",
+    "GITHUB_APP_ID": "5040953",
+    "GITHUB_APP_CLIENT_ID": "Iv23lifEwYHJe6dvHSj8",
+    "GITHUB_INSTALLATION_ID": "163935709",
+    "OWNER_GITHUB_ID": "123869746",
+    "DATA_OWNER": "tartaluga",
+    "DATA_REPO": "tartaluga-hub-data"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}
