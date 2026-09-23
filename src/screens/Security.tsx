@@ -16,9 +16,10 @@ import {
   type SecurityEvent,
   type SessionInfo,
 } from '../lib/api'
-import { addPasskey, passkeyErrorText, passkeysSupported, signInWithPasskey } from '../lib/passkey'
+import { addPasskey, passkeysSupported } from '../lib/passkey'
+import { useFreshAction } from '../app/useFreshAction'
 import { wipeDevice } from '../lib/localdb'
-import css from './Security.module.css'
+import css from './Panel.module.css'
 
 const when = (ms: number) => new Date(ms).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const how = (method: string) => (method === 'passkey' ? 'по ключу' : method === 'github' ? 'через GitHub' : '')
@@ -42,20 +43,24 @@ interface Data {
 
 export function Security() {
   const me = useSession((s) => s.me)
-  const signedIn = useSession((s) => s.signedIn)
   const signOut = useSession((s) => s.signOut)
   const refreshMe = useSession((s) => s.refreshMe)
   const [data, setData] = useState<Data | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [needFresh, setNeedFresh] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const fresh = useFreshAction()
+  const { busy, needGithub: needFresh } = fresh
+  const error = loadError ?? fresh.error
+  const run = (action: () => Promise<void>) => fresh.run(async () => {
+    await action()
+    await load()
+  })
 
   const load = useCallback(async () => {
     try {
       const [p, s, l] = await Promise.all([listPasskeys(), listSessions(), securityLog()])
       setData({ passkeys: p.passkeys, sessions: s.sessions, events: l.events })
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Не удалось загрузить')
+      setLoadError(e instanceof ApiError ? e.message : 'Не удалось загрузить')
     }
   }, [])
 
@@ -67,34 +72,6 @@ export function Security() {
   useEffect(() => {
     if (me && me.unseenSecurityEvents > 0) void markSecuritySeen().then(refreshMe, () => undefined)
   }, [me, refreshMe])
-
-  /** Выполнить действие; если сервер просит свежий вход — подтвердить ключом и повторить. */
-  async function run(action: () => Promise<void>) {
-    if (busy) return
-    setBusy(true)
-    setError(null)
-    setNeedFresh(false)
-    try {
-      try {
-        await action()
-      } catch (e) {
-        if (!(e instanceof ApiError && e.code === 'fresh_login_required')) throw e
-        if (!data?.passkeys.length || !passkeysSupported()) {
-          setNeedFresh(true)
-          return
-        }
-        await signInWithPasskey()
-        await signedIn()
-        await action()
-      }
-      await load()
-    } catch (e) {
-      const text = passkeyErrorText(e)
-      if (text) setError(text)
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const add = () =>
     run(async () => {

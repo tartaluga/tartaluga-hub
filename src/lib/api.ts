@@ -63,6 +63,38 @@ export async function readBlobText(sha: string): Promise<string> {
   return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(base64ToBytes(base64))
 }
 
+// ---------- Ветки ----------
+
+export interface Branch {
+  name: string
+  head: string
+  /** main */
+  main: boolean
+  /** status — её пишет только Action виджетов, хаб её не показывает для работы. */
+  service: boolean
+}
+
+/** Имя ветки — как на сервере (worker/rules.ts): строчные латинские буквы, цифры, дефис, до 40 символов. */
+export const BRANCH_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
+
+export type MergeResult = { merged: true; head: string } | { merged: false; reason?: 'nothing_to_merge' }
+
+export const listBranches = () => api<{ branches: Branch[] }>('/api/branches')
+export const createBranch = (name: string) => api<{ name: string; head: string }>('/api/branches', { method: 'POST', body: { name } })
+export const deleteBranch = (name: string) => api<{ ok: true }>(`/api/branches/${encodeURIComponent(name)}`, { method: 'DELETE' })
+export const mergeBranch = (name: string) => api<MergeResult>(`/api/branches/${encodeURIComponent(name)}/merge`, { method: 'POST' })
+
+/** Список файлов из ответа 409/422 слияния: { files: [{path, error?}] } или { files: string[] }. */
+export function problemFiles(e: ApiError): { path: string; error?: string }[] {
+  const files = (e.details as { files?: unknown } | undefined)?.files
+  if (!Array.isArray(files)) return []
+  return files.flatMap((f: unknown) => {
+    if (typeof f === 'string') return [{ path: f }]
+    const o = f as { path?: unknown; error?: unknown } | null
+    return typeof o?.path === 'string' ? [{ path: o.path, ...(typeof o.error === 'string' ? { error: o.error } : {}) }] : []
+  })
+}
+
 // ---------- Сессия и «Ключи и входы» ----------
 
 export interface Me {

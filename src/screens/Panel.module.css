@@ -53,6 +53,7 @@
 
 .row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -166,4 +167,8 @@
 
 .notice p {
   margin: 0;
+}
+
+.notice[data-tone='ok'] {
+  background: var(--accent-soft);
 }
