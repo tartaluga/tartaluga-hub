@@ -61,6 +61,31 @@
   background: var(--accent-soft);
 }
 
+/* Справа в пункте меню: счётчик, а у открытого раздела вместо него — светящаяся точка (макет). */
+.navCount {
+  margin-left: auto;
+  font: 400 13px/1 var(--font-mono);
+  color: var(--text-muted);
+}
+
+.navDot {
+  display: none;
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.link.active .navCount {
+  display: none;
+}
+
+.link.active .navDot {
+  display: block;
+}
+
 .sideFoot {
   margin-top: auto;
   display: grid;

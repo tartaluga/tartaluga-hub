@@ -1,7 +1,11 @@
 .page {
   display: grid;
+  /* minmax(0, …): иначе прокручиваемая строка статусов распирает колонку и страница уезжает вбок. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
+
+/* ---------- Шапка: надзаголовок, заголовок, поиск ---------- */
 
 .head {
   display: flex;
@@ -12,40 +16,51 @@
 
 .title {
   margin: var(--space-2) 0 0;
-  font-size: clamp(32px, 5vw, 44px);
+  font-size: clamp(32px, 5vw, 48px);
   font-weight: 600;
   line-height: 1.05;
   letter-spacing: -0.02em;
 }
 
-/* ---------- Панель фильтров ---------- */
-
-.toolbar {
+.headActions {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.iconButton {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  border-color: var(--accent);
 }
 
 .search {
-  flex: 1 1 140px;
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: min(340px, 100%);
   min-height: 44px;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--line);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--accent);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text-muted);
 }
 
-.search:focus-within {
-  border-color: var(--accent);
-}
-
 .search input {
   flex: 1;
-  /* Без width: 0 поле держит свою ширину по умолчанию, и сортировка уезжает на новую строку. */
+  /* Без width: 0 поле держит свою ширину по умолчанию и распирает шапку. */
   width: 0;
   min-width: 0;
   border: 0;
@@ -55,86 +70,151 @@
   outline: none;
 }
 
-.sort {
-  min-height: 44px;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
+.searchClose {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
 }
 
-.chips {
+/* ---------- Переключатель статусов и сортировка ---------- */
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 34px;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--surface-2);
+}
+
+.tab[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.count {
+  font: 400 13px/1 var(--font-mono);
+  color: var(--text-muted);
+}
+
+.tab[aria-pressed='true'] .count {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.sort select {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.sort:hover,
+.sort:hover select {
+  color: var(--text);
+}
+
+.tags {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-.chip {
+.tag {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
+  min-height: 30px;
   padding: 0 var(--space-3);
   border: 1px solid var(--line);
   border-radius: 999px;
   background: none;
   color: var(--text-muted);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
 }
 
-.chip:hover {
+.tag:hover {
   color: var(--text);
 }
 
-.chip[aria-pressed='true'] {
+.tag[aria-pressed='true'] {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--text);
 }
 
+.tagDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
 .reset {
-  justify-self: start;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 0;
+  gap: 4px;
+  padding: 0 var(--space-2);
   border: 0;
   background: none;
   color: var(--accent);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
-}
-
-/* Точка статуса: цвет берётся из data-status ближайшего предка. */
-.dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--dot, var(--text-faint));
-}
-
-[data-status='idea'] {
-  --dot: var(--status-idea);
-}
-[data-status='active'] {
-  --dot: var(--status-active);
-}
-[data-status='paused'] {
-  --dot: var(--status-paused);
-}
-[data-status='done'] {
-  --dot: var(--status-done);
-}
-[data-status='archived'] {
-  --dot: var(--status-archived);
 }
 
 .empty {
@@ -149,8 +229,8 @@
   margin: var(--space-2) 0 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-5);
 }
 
 .tile {
@@ -177,32 +257,72 @@
   }
 }
 
-.tile[data-status='archived'] .coverWrap {
-  filter: grayscale(0.85) brightness(0.8);
-}
-
 .coverWrap {
   position: relative;
-  aspect-ratio: 16 / 7;
+  aspect-ratio: 16 / 6.4;
   border-bottom: 1px solid var(--line);
 }
 
-.deadline {
+.tile[data-status='archived'] .coverWrap {
+  filter: grayscale(0.8);
+}
+
+/* Подписи поверх обложки: обложка всегда тёмная, поэтому цвета фиксированные, без токенов темы. */
+.pill,
+.badge {
   position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  padding: 3px 8px;
+  top: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
   border-radius: var(--radius-sm);
-  background: rgb(10 11 20 / 0.72);
-  color: #e9e9ed;
+  background: rgb(14 15 24 / 0.72);
+  color: #c9cad6;
   font: 500 12px/1.3 var(--font-mono);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   backdrop-filter: blur(6px);
 }
 
-.deadline[data-hot] {
+.pill {
+  left: var(--space-3);
+}
+
+.badge {
+  right: var(--space-3);
+}
+
+.badge[data-tone='quiet'] {
+  color: #e2c27d;
+}
+
+.badge[data-tone='hot'] {
   color: #ff9fd8;
   box-shadow: inset 0 0 0 1px rgb(212 114 178 / 0.6);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dot, #8a8fa6);
+}
+
+[data-status='idea'] {
+  --dot: var(--status-idea);
+}
+[data-status='active'] {
+  --dot: var(--status-active);
+}
+[data-status='paused'] {
+  --dot: var(--status-paused);
+}
+[data-status='done'] {
+  --dot: var(--status-done);
+}
+[data-status='archived'] {
+  --dot: var(--status-archived);
 }
 
 .body {
@@ -210,39 +330,41 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  padding: var(--space-4);
 }
 
-.status {
+.titleRow {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font: 500 11px/1.3 var(--font-mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.ro {
-  color: var(--status-paused);
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 .name {
   margin: 0;
-  font-size: 18px;
+  min-width: 0;
+  font-size: 19px;
   font-weight: 600;
   line-height: 1.25;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.when {
+  flex: none;
+  font: 400 13px/1 var(--font-mono);
+  color: var(--text-muted);
 }
 
 .next {
   margin: 0;
   color: var(--text-muted);
-  font-size: 14px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  font-size: 15px;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .next[data-empty] {
@@ -250,25 +372,9 @@
   font-style: italic;
 }
 
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px var(--space-3);
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.tag .dot {
-  width: 6px;
-  height: 6px;
-  /* Незнакомый id тега — серая точка, а не цвет статуса плитки. */
-  background: var(--text-faint);
+.ro {
+  color: var(--status-paused);
+  font-style: normal;
 }
 
 .progress {
@@ -281,9 +387,9 @@
   color: var(--text-muted);
 }
 
-.bar {
+.track {
   flex: 1;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
   background: var(--surface-2);
   overflow: hidden;
@@ -293,7 +399,10 @@
   height: 100%;
   border-radius: 2px;
   background: var(--accent);
-  box-shadow: var(--glow);
+}
+
+.tile[data-status='done'] .fill {
+  background: var(--status-done);
 }
 
 /* ---------- Нечитаемые файлы ---------- */
@@ -321,12 +430,32 @@
 }
 
 @media (max-width: 767px) {
+  /* Справа вверху — значки «Ветки» и «Ключи и входы»: шапка их не перекрывает. */
   .head {
+    flex-wrap: wrap;
     margin-right: 104px;
   }
 
-  /* Чипы на телефоне — одна прокручиваемая строка, чтобы плитки начинались на первом экране. */
-  .chips {
+  /* Открытый поиск занимает свою строку; закрытый — только значок рядом с заголовком. */
+  .headActions:has(.search) {
+    flex: 1 1 100%;
+  }
+
+  .search {
+    width: 100%;
+  }
+
+  .tabs {
+    flex: 1 1 100%;
+    min-width: 0;
+    margin: 0 calc(-1 * var(--space-4));
+    padding: 4px var(--space-4);
+    border: 0;
+    border-radius: 0;
+    max-width: none;
+  }
+
+  .tags {
     flex-wrap: nowrap;
     overflow-x: auto;
     margin: 0 calc(-1 * var(--space-4));
@@ -334,11 +463,12 @@
     scrollbar-width: none;
   }
 
-  .chips::-webkit-scrollbar {
+  .tags::-webkit-scrollbar {
     display: none;
   }
 
-  .chip {
+  .tag,
+  .reset {
     flex: none;
   }
 

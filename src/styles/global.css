@@ -52,6 +52,14 @@ select {
   color: var(--text-muted);
 }
 
+/* Надзаголовок экрана: «12 ПРОЕКТОВ · 6 В РАБОТЕ» — та же подпись, но акцентом, как в макетах. */
+.eyebrow {
+  font: 500 12px/1.4 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
 .mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

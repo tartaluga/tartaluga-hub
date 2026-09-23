@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Link, NavLink, Outlet } from 'react-router'
 import { ChartBar, GitBranch, Lightbulb, ShieldCheck, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -9,12 +9,15 @@ import { SecurityBanner } from '../components/SecurityBanner'
 import { BranchBanner } from '../components/BranchBanner'
 import { Login } from '../screens/Login'
 import { MAIN, useSession } from './session'
+import { buildLibrary } from '../data/projects'
 import css from './Shell.module.css'
 
-const NAV: { to: string; label: string; icon: Icon }[] = [
+type Counts = { projects: number; ideas: number }
+
+const NAV: { to: string; label: string; icon: Icon; count?: keyof Counts }[] = [
   { to: '/', label: 'Сегодня', icon: SunHorizon },
-  { to: '/projects', label: 'Проекты', icon: SquaresFour },
-  { to: '/ideas', label: 'Идеи', icon: Lightbulb },
+  { to: '/projects', label: 'Проекты', icon: SquaresFour, count: 'projects' },
+  { to: '/ideas', label: 'Идеи', icon: Lightbulb, count: 'ideas' },
   { to: '/stats', label: 'Статистика', icon: ChartBar },
 ]
 
@@ -24,6 +27,15 @@ export function Shell() {
   const boot = useSession((s) => s.boot)
   const signOut = useSession((s) => s.signOut)
   const branch = useSession((s) => s.branch)
+  const files = useSession((s) => s.files)
+  // Счётчики в боковой панели, как в макете: проекты без архива и идеи.
+  const counts = useMemo<Counts>(
+    () => ({
+      projects: buildLibrary(files, new Date()).projects.filter((p) => p.data.status !== 'archived').length,
+      ideas: files.filter((f) => f.path.startsWith('ideas/')).length,
+    }),
+    [files],
+  )
 
   useEffect(() => {
     void boot()
@@ -55,10 +67,12 @@ export function Shell() {
           </div>
         </div>
         <nav className={css.nav} aria-label="Разделы">
-          {NAV.map(({ to, label, icon: IconCmp }) => (
+          {NAV.map(({ to, label, icon: IconCmp, count }) => (
             <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => (isActive ? `${css.link} ${css.active}` : css.link)}>
               <IconCmp size={20} aria-hidden />
               <span>{label}</span>
+              {count && counts[count] > 0 && <span className={css.navCount}>{counts[count]}</span>}
+              <span className={css.navDot} aria-hidden />
             </NavLink>
           ))}
         </nav>

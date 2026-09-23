@@ -26,6 +26,12 @@ export interface ProjectView {
   tasksTotal: number
   /** Ближайший срок среди открытых задач и незакрытых вех. */
   deadline: { due: string; days: number; title: string } | null
+  /** Последняя активность: последняя запись лога, без лога — последняя правка файла. */
+  activityAt: number
+  /** Сколько календарных дней назад была активность (0 — сегодня). */
+  activityDays: number
+  /** «N дн тишины»: проект в работе, а в логе нет записей дольше порога из settings.json. Иначе null. */
+  silentDays: number | null
 }
 
 export interface BrokenFile {
@@ -39,6 +45,8 @@ export interface Library {
   tags: Tag[]
   /** settings.json отсутствует или не читается — теги недоступны. */
   settingsProblem: string | null
+  /** Порог «заброшенности» в днях (settings.abandonedAfterDays, по умолчанию 14). */
+  abandonedAfterDays: number
 }
 
 const DAY = 24 * 60 * 60 * 1000
@@ -47,6 +55,38 @@ const DAY = 24 * 60 * 60 * 1000
 export function daysUntil(due: string, today: Date): number {
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
   return Math.round((parseLocalDate(due).getTime() - start.getTime()) / DAY)
+}
+
+/** Сколько календарных дней прошло от момента at (мс) до today: 0 — сегодня, 1 — вчера. */
+export function daysSince(at: number, today: Date): number {
+  const d = new Date(at)
+  const a = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const b = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  return Math.round((b - a) / DAY)
+}
+
+/** Подпись активности на плитке: «сегодня», «вчера», «4 дн». */
+export function activityText(days: number): string {
+  if (days <= 0) return 'сегодня'
+  if (days === 1) return 'вчера'
+  return `${days} дн`
+}
+
+export const DEFAULT_ABANDONED_DAYS = 14
+
+function activityOf(p: Project, today: Date, abandonedAfter: number) {
+  const logTimes = (p.log ?? []).map((e) => Date.parse(e.at)).filter((t) => !Number.isNaN(t))
+  const lastLog = logTimes.length ? Math.max(...logTimes) : null
+  const updated = Date.parse(p.updatedAt)
+  const activityAt = lastLog ?? (Number.isNaN(updated) ? 0 : updated)
+  // Тишина считается по логу, как «заброшенные» на экране «Сегодня»; проект без лога — от даты создания.
+  const since = lastLog ?? Date.parse(p.createdAt)
+  const quiet = Number.isNaN(since) ? 0 : daysSince(since, today)
+  return {
+    activityAt,
+    activityDays: Math.max(0, daysSince(activityAt, today)),
+    silentDays: p.status === 'active' && quiet > abandonedAfter ? quiet : null,
+  }
 }
 
 function deadlineOf(p: Project, today: Date): ProjectView['deadline'] {
@@ -69,6 +109,8 @@ export function buildLibrary(files: CachedFile[], today: Date): Library {
   const broken: BrokenFile[] = []
   let tags: Tag[] = []
   let settingsProblem: string | null = 'Нет файла settings.json — теги не заданы'
+  let abandonedAfterDays = DEFAULT_ABANDONED_DAYS
+  const parsedProjects: { path: string; data: WithUnknown<Project>; readOnly: boolean }[] = []
 
   for (const f of files) {
     const parsed = parseFile(f.path, f.sha, f.text)
@@ -78,32 +120,38 @@ export function buildLibrary(files: CachedFile[], today: Date): Library {
       continue
     }
     if (parsed.kind === 'settings') {
-      tags = (parsed.data as Settings).tags
+      const settings = parsed.data as Settings
+      tags = settings.tags
+      abandonedAfterDays = settings.abandonedAfterDays ?? DEFAULT_ABANDONED_DAYS
       settingsProblem = null
     } else if (parsed.kind === 'project') {
-      const data = parsed.data as WithUnknown<Project>
-      const tasks = data.tasks ?? []
-      const done = tasks.filter((t) => t.done).length
-      projects.push({
-        path: f.path,
-        data,
-        readOnly: parsed.readOnly,
-        progress: tasks.length ? done / tasks.length : null,
-        tasksDone: done,
-        tasksTotal: tasks.length,
-        deadline: deadlineOf(data, today),
-      })
+      parsedProjects.push({ path: f.path, data: parsed.data as WithUnknown<Project>, readOnly: parsed.readOnly })
     }
   }
-  return { projects, broken: broken.sort((a, b) => a.path.localeCompare(b.path)), tags, settingsProblem }
+  // Проекты считаем после settings.json: порог тишины берётся оттуда, а порядок файлов в кэше любой.
+  for (const { path, data, readOnly } of parsedProjects) {
+    const tasks = data.tasks ?? []
+    const done = tasks.filter((t) => t.done).length
+    projects.push({
+      path,
+      data,
+      readOnly,
+      progress: tasks.length ? done / tasks.length : null,
+      tasksDone: done,
+      tasksTotal: tasks.length,
+      deadline: deadlineOf(data, today),
+      ...activityOf(data, today, abandonedAfterDays),
+    })
+  }
+  return { projects, broken: broken.sort((a, b) => a.path.localeCompare(b.path)), tags, settingsProblem, abandonedAfterDays }
 }
 
 // ---------- Фильтры ----------
 
-export type SortKey = 'updated' | 'title' | 'deadline' | 'progress'
+export type SortKey = 'activity' | 'title' | 'deadline' | 'progress'
 
 export const SORT_LABEL: Record<SortKey, string> = {
-  updated: 'по изменению',
+  activity: 'по последней активности',
   title: 'по названию',
   deadline: 'по сроку',
   progress: 'по прогрессу',
@@ -111,14 +159,14 @@ export const SORT_LABEL: Record<SortKey, string> = {
 
 export interface Filter {
   query: string
-  /** Пусто — все статусы, кроме архива. */
+  /** Пусто — все статусы, кроме архива. На экране выбирается один статус, но формат допускает несколько. */
   statuses: Status[]
   /** Проект подходит, если у него есть хотя бы один из выбранных тегов. */
   tags: string[]
   sort: SortKey
 }
 
-export const EMPTY_FILTER: Filter = { query: '', statuses: [], tags: [], sort: 'updated' }
+export const EMPTY_FILTER: Filter = { query: '', statuses: [], tags: [], sort: 'activity' }
 
 const norm = (s: string) => s.toLocaleLowerCase('ru').replace(/ё/g, 'е')
 
@@ -146,8 +194,8 @@ function compare(sort: SortKey, a: ProjectView, b: ProjectView): number {
     case 'progress':
       // Без задач — в конец; дальше по убыванию прогресса.
       return (b.progress ?? -1) - (a.progress ?? -1)
-    case 'updated':
-      return Date.parse(b.data.updatedAt) - Date.parse(a.data.updatedAt)
+    case 'activity':
+      return b.activityAt - a.activityAt
   }
 }
 
@@ -169,7 +217,7 @@ export function filterFromParams(params: URLSearchParams): Filter {
     query: params.get('q') ?? '',
     statuses: params.getAll('status').filter((s): s is Status => (STATUSES as string[]).includes(s)),
     tags: params.getAll('tag'),
-    sort: sort && sort in SORT_LABEL ? (sort as SortKey) : 'updated',
+    sort: sort && sort in SORT_LABEL ? (sort as SortKey) : 'activity',
   }
 }
 
@@ -178,7 +226,7 @@ export function filterToParams(f: Filter): URLSearchParams {
   if (f.query) p.set('q', f.query)
   for (const s of f.statuses) p.append('status', s)
   for (const t of f.tags) p.append('tag', t)
-  if (f.sort !== 'updated') p.set('sort', f.sort)
+  if (f.sort !== 'activity') p.set('sort', f.sort)
   return p
 }
 
@@ -193,3 +241,10 @@ export function deadlineText(d: { due: string; days: number }): string {
 
 /** Горит: просрочено или срок в ближайшие 3 дня (как на экране «Сегодня»). */
 export const isHot = (d: { days: number }) => d.days <= 3
+
+/** Сколько проектов в каждом статусе — для переключателя «Все · В работе · …». */
+export function countByStatus(projects: ProjectView[]): Record<Status, number> {
+  const counts = { idea: 0, active: 0, paused: 0, done: 0, archived: 0 }
+  for (const p of projects) counts[p.data.status]++
+  return counts
+}
