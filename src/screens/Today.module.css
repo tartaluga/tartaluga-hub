@@ -94,6 +94,29 @@
   color: var(--text-muted);
 }
 
+.labelRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.order {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: 400 12px/1.4 var(--font-mono);
+  cursor: pointer;
+}
+
+.order:hover {
+  color: var(--accent);
+}
+
 .hotLabel {
   color: var(--magenta);
 }

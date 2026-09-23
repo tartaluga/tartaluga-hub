@@ -2,7 +2,7 @@
 // Экран только читает: быстрая заметка из макета появится вместе с записью идей и лога (C5/D4).
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { Plus } from '@phosphor-icons/react'
+import { ArrowsDownUp, Plus } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { NewProjectDialog } from '../components/NewProjectDialog'
@@ -25,11 +25,23 @@ function useNow(): Date {
   return now
 }
 
+// Порядок заброшенных — удобство одного устройства, поэтому в localStorage; без него — по умолчанию.
+const QUIET_ORDER_KEY = 'today.quietestFirst'
+
+function readQuietOrder(): boolean {
+  try {
+    return localStorage.getItem(QUIET_ORDER_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
+
 export function Today() {
   const files = useSession((s) => s.files)
   const branch = useSession((s) => s.branch)
   const now = useNow()
   const [creating, setCreating] = useState(false)
+  const [quietestFirst, setQuietestFirst] = useState(readQuietOrder)
   // Пересчитываем только при смене файлов или дня, а не на каждый тик часов.
   const day = localKey(now)
   const view = useMemo(() => {
@@ -41,12 +53,12 @@ export function Today() {
       today,
       hot: hotItems(lib.projects, today),
       next: nextSteps(lib.projects),
-      quiet: abandoned(lib.projects),
+      quiet: abandoned(lib.projects, quietestFirst),
       pulse: pulse(lib.projects, today),
       shares: statusShares(lib.projects),
       active: lib.projects.filter((p) => p.data.status === 'active').length,
     }
-  }, [files, day])
+  }, [files, day, quietestFirst])
   const { lib, hot, next, quiet, active } = view
   const total = lib.projects.length
 
@@ -137,9 +149,29 @@ export function Today() {
 
           <aside className={css.side} aria-label="Обзор">
             <section aria-labelledby="t-quiet">
-              <h2 id="t-quiet" className={css.label}>
-                Заброшенные · &gt;{lib.abandonedAfterDays} дн
-              </h2>
+              <div className={css.labelRow}>
+                <h2 id="t-quiet" className={css.label}>
+                  Заброшенные · &gt;{lib.abandonedAfterDays} дн
+                </h2>
+                {quiet.length > 1 && (
+                  <button
+                    type="button"
+                    className={css.order}
+                    onClick={() => {
+                      const next = !quietestFirst
+                      setQuietestFirst(next)
+                      try {
+                        localStorage.setItem(QUIET_ORDER_KEY, String(next))
+                      } catch {
+                        /* без хранилища порядок просто не запомнится */
+                      }
+                    }}
+                    title="Поменять порядок"
+                  >
+                    <ArrowsDownUp size={14} aria-hidden /> {quietestFirst ? 'сначала тихие' : 'сначала недавние'}
+                  </button>
+                )}
+              </div>
               {quiet.length === 0 ? (
                 <p className={css.none}>{active === 0 ? 'Нет проектов в работе.' : 'Все проекты в работе живые.'}</p>
               ) : (
