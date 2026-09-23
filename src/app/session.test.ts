@@ -11,9 +11,15 @@ const ME: Me = {
 
 type Entry = { path: string; sha: string }
 
-/** tree — дерево main или деревья по веткам; ветки, которой нет в словаре, на сервере нет (404). */
+/**
+ * tree — дерево main или деревья по веткам; ветки, которой нет в словаре, на сервере нет (404).
+ * Записи меняют эти деревья, как настоящий репо: следующая сверка видит записанное.
+ */
 function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<string, string>, fail?: ApiError, meFail?: ApiError) {
   const reads: string[] = []
+  const writes: string[] = []
+  const trees: Record<string, Entry[]> = Array.isArray(tree) ? { main: [...tree] } : Object.fromEntries(Object.entries(tree).map(([k, v]) => [k, [...v]]))
+  let n = 0
   const remote: Remote = {
     async me() {
       if (meFail) throw meFail
@@ -21,16 +27,30 @@ function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<strin
     },
     async listFiles(branch) {
       if (fail) throw fail
-      const files = Array.isArray(tree) ? (branch === 'main' ? tree : undefined) : tree[branch]
+      const files = trees[branch]
       if (!files) throw new ApiError(404, 'not_found', 'Не найдено в репо данных')
-      return { files }
+      return { head: `head-${branch}-${n}`, files: [...files] }
     },
     async readBlobText(sha) {
       reads.push(sha)
       return blobs[sha]!
     },
+    async putFile(branch, path, text) {
+      writes.push(`put ${branch} ${path}`)
+      const sha = `w${++n}`
+      blobs[sha] = text
+      trees[branch] = [...(trees[branch] ?? []).filter((f) => f.path !== path), { path, sha }]
+      return { sha }
+    },
+    async commit(branch, changes, expectedHead) {
+      writes.push(`commit ${branch} ${expectedHead} ${changes.map((c) => c.path).join(',')}`)
+      const gone = new Set(changes.map((c) => c.path))
+      trees[branch] = (trees[branch] ?? []).filter((f) => !gone.has(f.path))
+      n++
+      return { head: `head-${branch}-${n}`, shas: {} }
+    },
   }
-  return { remote, reads }
+  return { remote, reads, writes }
 }
 
 const offline = new ApiError(0, 'network', 'нет сети')
@@ -224,5 +244,100 @@ describe('ветки (ADR-007): кэш у каждой ветки свой', () 
     await useSession.getState().signOut()
     expect(useSession.getState().branch).toBe('main')
     expect(await getCurrentBranch()).toBe('main')
+  })
+})
+
+describe('запись: создание и удаление файлов', () => {
+  const blobs = { a1: '{"a":1}', c1: 'img' }
+  const tree = [
+    { path: 'projects/a.json', sha: 'a1' },
+    { path: 'covers/a.webp', sha: 'c1' },
+  ]
+
+  it('новый файл сразу виден на экране и в кэше ветки, запись идёт в открытую ветку', async () => {
+    const r = fakeRemote({ main: [], feat: [] }, blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().switchBranch('feat')
+    await useSession.getState().createFile('projects/b.json', '{"b":1}')
+    expect(r.writes).toEqual(['put feat projects/b.json'])
+    expect(useSession.getState().files.map((f) => f.path)).toContain('projects/b.json')
+    expect((await getCachedFiles('feat')).map((f) => f.path)).toContain('projects/b.json')
+    expect(await getCachedFiles('main')).toEqual([])
+  })
+
+  it('удаление — один коммит от известного head, только существующие пути', async () => {
+    const r = fakeRemote(tree, blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    await useSession.getState().deleteFiles(() => ['projects/a.json', 'covers/a.webp', 'covers/a.jpg'], 'm')
+    expect(r.writes).toEqual(['commit main head-main-0 projects/a.json,covers/a.webp'])
+    expect(useSession.getState().files).toEqual([])
+    expect(useSession.getState().tree?.head).toBe('head-main-1')
+  })
+
+  it('ветку сдвинули — сверка и одна повторная попытка от нового head', async () => {
+    const r = fakeRemote(tree, blobs)
+    let calls = 0
+    useSession.setState({
+      remote: {
+        ...r.remote,
+        async commit(branch, changes, expectedHead, message) {
+          if (calls++ === 0) throw new ApiError(409, 'conflict', 'Данные уже изменили')
+          return r.remote.commit(branch, changes, expectedHead, message)
+        },
+      },
+    })
+    await useSession.getState().refresh()
+    useSession.setState({ tree: { head: 'stale', paths: ['projects/a.json'] } })
+    await useSession.getState().deleteFiles(() => ['projects/a.json'], 'm')
+    expect(calls).toBe(2)
+    expect(r.writes).toEqual(['commit main head-main-0 projects/a.json'])
+  })
+
+  it('два конфликта подряд — ошибка, а не бесконечные повторы', async () => {
+    const r = fakeRemote(tree, blobs)
+    let calls = 0
+    useSession.setState({
+      remote: {
+        ...r.remote,
+        async commit() {
+          calls++
+          throw new ApiError(409, 'conflict', 'Данные уже изменили')
+        },
+      },
+    })
+    await useSession.getState().refresh()
+    await expect(useSession.getState().deleteFiles(() => ['projects/a.json'], 'm')).rejects.toMatchObject({ status: 409 })
+    expect(calls).toBe(2)
+  })
+
+  it('другая ошибка не повторяется', async () => {
+    const r = fakeRemote(tree, blobs)
+    let calls = 0
+    useSession.setState({
+      remote: {
+        ...r.remote,
+        async commit() {
+          calls++
+          throw new ApiError(422, 'validation', 'нет')
+        },
+      },
+    })
+    await useSession.getState().refresh()
+    await expect(useSession.getState().deleteFiles(() => ['projects/a.json'], 'm')).rejects.toMatchObject({ status: 422 })
+    expect(calls).toBe(1)
+  })
+
+  it('без сети удаление не уходит и сообщает об этом', async () => {
+    useSession.setState({ remote: fakeRemote([], {}, offline).remote, tree: null })
+    await expect(useSession.getState().deleteFiles(() => ['projects/a.json'], 'm')).rejects.toMatchObject({ status: 0 })
+  })
+
+  it('удалять нечего (уже удалили в другом месте) — успех без коммита', async () => {
+    const r = fakeRemote([], blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    await useSession.getState().deleteFiles(() => ['projects/a.json'], 'm')
+    expect(r.writes).toEqual([])
   })
 })
