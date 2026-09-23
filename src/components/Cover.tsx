@@ -37,17 +37,18 @@ export function coverSpec(slug: string): CoverSpec {
   }
 }
 
-export function Cover({ slug, className }: { slug: string; className?: string }) {
+/** muted — приглушённая обложка (пауза, готово, архив), как в макете: свечение почти гаснет. */
+export function Cover({ slug, className, muted = false }: { slug: string; className?: string; muted?: boolean }) {
   const s = coverSpec(slug)
   const id = useId().replace(/:/g, '')
-  const glow = `hsl(${s.hue} 70% 62%)`
-  const line = `hsl(${s.hue} 60% 70% / 0.22)`
+  const glow = muted ? `hsl(${s.hue} 25% 45%)` : `hsl(${s.hue} 70% 62%)`
+  const line = muted ? `hsl(${s.hue} 20% 60% / 0.14)` : `hsl(${s.hue} 60% 70% / 0.22)`
 
   return (
     <svg className={`${css.cover} ${className ?? ''}`} viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice" aria-hidden>
       <defs>
         <radialGradient id={`g${id}`} cx={s.gx} cy={s.gy} r="0.7">
-          <stop offset="0" stopColor={glow} stopOpacity="0.75" />
+          <stop offset="0" stopColor={glow} stopOpacity={muted ? 0.35 : 0.75} />
           <stop offset="0.45" stopColor={glow} stopOpacity="0.18" />
           <stop offset="1" stopColor={glow} stopOpacity="0" />
         </radialGradient>
@@ -58,7 +59,7 @@ export function Cover({ slug, className }: { slug: string; className?: string })
           {s.pattern === 'rings' && <path d="M0 14 A14 14 0 0 1 14 0" fill="none" stroke={line} strokeWidth="1" />}
         </pattern>
       </defs>
-      <rect width="320" height="180" fill={`hsl(${s.hue} 30% 9%)`} />
+      <rect width="320" height="180" fill={muted ? `hsl(${s.hue} 12% 9%)` : `hsl(${s.hue} 30% 9%)`} />
       <rect width="320" height="180" fill={`url(#g${id})`} />
       <rect width="320" height="180" fill={`url(#p${id})`} />
     </svg>

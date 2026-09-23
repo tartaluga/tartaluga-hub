@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  activityText,
   applyFilter,
   buildLibrary,
+  countByStatus,
   daysUntil,
   deadlineText,
   EMPTY_FILTER,
@@ -135,6 +137,60 @@ describe('applyFilter', () => {
 
   it('сортировка по названию — по-русски', () => {
     expect(slugs(f({ sort: 'title' }))).toEqual(['alpha', 'delta', 'beta'])
+  })
+})
+
+describe('активность и тишина (макет 2a)', () => {
+  const log = (at: string, c: string) => ({ id: id(c), at, kind: 'done', text: 'x' })
+
+  it('активность — последняя запись лога, без лога — последняя правка файла', () => {
+    const lib = buildLibrary(
+      [
+        project('a', { log: [log('2026-09-20T10:00:00+03:00', 'A'), log('2026-09-22T23:00:00+03:00', 'B')], updatedAt: '2026-09-23T09:00:00+03:00' }),
+        project('b', { updatedAt: '2026-09-23T09:00:00+03:00' }),
+      ],
+      TODAY,
+    )
+    const by = Object.fromEntries(lib.projects.map((p) => [p.data.slug, p]))
+    expect(by.a!.activityDays).toBe(1)
+    expect(by.b!.activityDays).toBe(0)
+    expect([activityText(0), activityText(1), activityText(4)]).toEqual(['сегодня', 'вчера', '4 дн'])
+  })
+
+  it('«N дн тишины» — только у проекта в работе, дольше порога из settings.json', () => {
+    const files = [
+      project('quiet', { log: [log('2026-09-01T10:00:00+03:00', 'A')] }),
+      project('paused', { status: 'paused', log: [log('2026-09-01T10:00:00+03:00', 'B')] }),
+      project('fresh', { log: [log('2026-09-15T10:00:00+03:00', 'C')] }),
+      project('nolog', { createdAt: '2026-08-01T10:00:00+03:00' }),
+    ]
+    const by = (lib: ReturnType<typeof buildLibrary>) => Object.fromEntries(lib.projects.map((p) => [p.data.slug, p.silentDays]))
+    expect(by(buildLibrary(files, TODAY))).toEqual({ quiet: 22, paused: null, fresh: null, nolog: 53 })
+    // settings.json может лежать в кэше после проектов — порог всё равно берётся из него.
+    expect(by(buildLibrary([...files, settings([])].reverse(), TODAY)).fresh).toBeNull()
+    const strict = { path: 'settings.json', sha: 's', text: JSON.stringify({ schemaVersion: 1, tags: [], abandonedAfterDays: 7 }) }
+    expect(by(buildLibrary([...files, strict], TODAY)).fresh).toBe(8)
+  })
+
+  it('ровно порог — ещё не тишина («дольше N дней»)', () => {
+    const lib = buildLibrary([project('edge', { log: [log('2026-09-09T10:00:00+03:00', 'A')] }), project('over', { log: [log('2026-09-08T10:00:00+03:00', 'B')] })], TODAY)
+    expect(lib.projects.map((p) => p.silentDays)).toEqual([null, 15])
+  })
+
+  it('сортировка по активности учитывает лог, а не только правку файла', () => {
+    const lib = buildLibrary(
+      [
+        project('edited', { updatedAt: '2026-09-22T10:00:00+03:00' }),
+        project('logged', { updatedAt: '2026-09-01T10:00:00+03:00', log: [log('2026-09-23T08:00:00+03:00', 'A')] }),
+      ],
+      TODAY,
+    )
+    expect(applyFilter(lib.projects, EMPTY_FILTER).map((p) => p.data.slug)).toEqual(['logged', 'edited'])
+  })
+
+  it('счётчики по статусам', () => {
+    const lib = buildLibrary([project('a'), project('b', { status: 'idea' }), project('c', { status: 'archived' }), project('d')], TODAY)
+    expect(countByStatus(lib.projects)).toEqual({ idea: 1, active: 2, paused: 0, done: 0, archived: 1 })
   })
 })
 
