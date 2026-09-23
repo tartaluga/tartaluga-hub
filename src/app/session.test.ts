@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useSession, type Remote } from './session'
 import { ApiError, type Me } from '../lib/api'
+import { EditConflict } from '../data/editProject'
 import { getCachedFiles, getCurrentBranch, putCachedFiles, wipeDevice } from '../lib/localdb'
 
 const ME: Me = {
@@ -35,8 +36,10 @@ function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<strin
       reads.push(sha)
       return blobs[sha]!
     },
-    async putFile(branch, path, text) {
+    async putFile(branch, path, text, expected) {
       writes.push(`put ${branch} ${path}`)
+      // Обновление с устаревшим sha отклоняется, как у GitHub.
+      if (expected !== undefined && trees[branch]?.find((f) => f.path === path)?.sha !== expected) throw new ApiError(409, 'conflict', 'Файл изменился')
       const sha = `w${++n}`
       blobs[sha] = text
       trees[branch] = [...(trees[branch] ?? []).filter((f) => f.path !== path), { path, sha }]
@@ -50,7 +53,7 @@ function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<strin
       return { head: `head-${branch}-${n}`, shas: {} }
     },
   }
-  return { remote, reads, writes }
+  return { remote, reads, writes, trees }
 }
 
 const offline = new ApiError(0, 'network', 'нет сети')
@@ -339,5 +342,120 @@ describe('запись: создание и удаление файлов', () =
     await useSession.getState().refresh()
     await useSession.getState().deleteFiles(() => ['projects/a.json'], 'm')
     expect(r.writes).toEqual([])
+  })
+})
+
+describe('правка проекта (saveProject)', () => {
+  const file = (over: object = {}) =>
+    JSON.stringify({
+      schemaVersion: 1,
+      slug: 'a',
+      title: 'А',
+      status: 'active',
+      nextStep: 'шаг',
+      future: 1,
+      createdAt: '2026-09-01T10:00:00+03:00',
+      updatedAt: '2026-09-01T10:00:00+03:00',
+      ...over,
+    })
+  const setup = () => {
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], { a1: file() })
+    useSession.setState({ remote: r.remote })
+    return r
+  }
+  const data = () => JSON.parse(useSession.getState().files.find((f) => f.path === 'projects/a.json')!.text)
+
+  it('пишет от известного sha, незнакомые поля остаются, экран и кэш обновляются', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    await useSession.getState().saveProject('a', { title: 'Б' })
+    expect(r.writes).toEqual(['put main projects/a.json'])
+    expect(data()).toMatchObject({ title: 'Б', future: 1, nextStep: 'шаг' })
+    expect(data().updatedAt).not.toBe('2026-09-01T10:00:00+03:00')
+    expect((await getCachedFiles('main')).find((f) => f.path === 'projects/a.json')!.text).toContain('"Б"')
+  })
+
+  it('правки, пришедшие во время записи, уходят следующим одним коммитом', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    const put = r.remote.putFile
+    r.remote.putFile = async (...a) => {
+      await gate
+      return put(...a)
+    }
+    const s = useSession.getState()
+    const first = s.saveProject('a', { title: 'Б' })
+    await Promise.resolve()
+    await Promise.resolve()
+    const second = s.saveProject('a', { title: 'В' })
+    const third = s.saveProject('a', { nextStep: 'новый' })
+    release()
+    await Promise.all([first, second, third])
+    expect(r.writes).toEqual(['put main projects/a.json', 'put main projects/a.json'])
+    expect(data()).toMatchObject({ title: 'В', nextStep: 'новый' })
+  })
+
+  it('файл изменили в другом месте, другое поле — правка накладывается на свежую версию', async () => {
+    const blobs: Record<string, string> = { a1: file() }
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    blobs.ext = file({ nextStep: 'с телефона' })
+    r.trees.main = [{ path: 'projects/a.json', sha: 'ext' }]
+    await useSession.getState().saveProject('a', { title: 'Б' })
+    expect(r.writes).toEqual(['put main projects/a.json', 'put main projects/a.json'])
+    expect(data()).toMatchObject({ title: 'Б', nextStep: 'с телефона' })
+  })
+
+  it('то же поле поменяли по-другому — EditConflict, второй записи нет, на экране свежая версия', async () => {
+    const blobs: Record<string, string> = { a1: file() }
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    blobs.ext = file({ title: 'С телефона' })
+    r.trees.main = [{ path: 'projects/a.json', sha: 'ext' }]
+    const err = await useSession.getState().saveProject('a', { title: 'Б' }).catch((e) => e)
+    expect(err).toBeInstanceOf(EditConflict)
+    expect(err.fields).toEqual(['title'])
+    expect(r.writes).toEqual(['put main projects/a.json'])
+    expect(data().title).toBe('С телефона')
+  })
+
+  it('в свежей версии уже наша правка (ответ прошлой попытки потерялся) — второй записи нет', async () => {
+    const blobs: Record<string, string> = { a1: file() }
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    blobs.ext = file({ title: 'Б' })
+    r.trees.main = [{ path: 'projects/a.json', sha: 'ext' }]
+    await useSession.getState().saveProject('a', { title: 'Б' })
+    expect(r.writes).toEqual(['put main projects/a.json'])
+  })
+
+  it('файл с версией формата выше нашей не правится', async () => {
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], { a1: file({ schemaVersion: 2 }) })
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    await expect(useSession.getState().saveProject('a', { title: 'Б' })).rejects.toThrow(/v2/)
+    expect(r.writes).toEqual([])
+  })
+
+  it('ошибка одной записи не блокирует следующие', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    const put = r.remote.putFile
+    let fail = true
+    r.remote.putFile = async (...a) => {
+      if (fail) {
+        fail = false
+        throw offline
+      }
+      return put(...a)
+    }
+    await expect(useSession.getState().saveProject('a', { title: 'Б' })).rejects.toBe(offline)
+    await useSession.getState().saveProject('a', { title: 'В' })
+    expect(data().title).toBe('В')
   })
 })
