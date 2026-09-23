@@ -1,0 +1,522 @@
+.page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+}
+
+/* ---------- Шапка ---------- */
+
+.head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.title {
+  margin: var(--space-2) 0 0;
+  font-size: clamp(32px, 5vw, 48px);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.summary {
+  margin: var(--space-3) 0 0;
+  max-width: 48ch;
+  color: var(--text-muted);
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+/* Как «+ Новый проект» на экране «Проекты». */
+.create {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.create:hover {
+  background: var(--accent-soft);
+}
+
+.empty {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--text-muted);
+}
+
+.broken {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--magenta) 40%, var(--line));
+  border-radius: var(--radius-md);
+  background: var(--magenta-soft);
+  font-size: 14px;
+}
+
+.broken a {
+  color: inherit;
+}
+
+/* ---------- Две колонки: дела слева, обзор справа ---------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--space-7);
+  align-items: start;
+}
+
+.main,
+.side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+  align-content: start;
+}
+
+.label {
+  margin: 0 0 var(--space-3);
+  font: 500 14px/1.4 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hotLabel {
+  color: var(--magenta);
+}
+
+.none {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 15px;
+}
+
+.thumb {
+  flex: none;
+  display: block;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+
+/* ---------- Горит ---------- */
+
+.hotList,
+.nextList,
+.quietList,
+.legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.hotRow {
+  display: grid;
+  /* Колонка срока фиксированная: строки — отдельные сетки, иначе названия не встанут в одну линию. */
+  grid-template-columns: 10rem minmax(0, 1fr) minmax(0, max-content);
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.hotRow:hover .hotTitle {
+  color: var(--accent);
+}
+
+.when {
+  font: 400 14px/1.4 var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.hotRow[data-today] .when {
+  color: var(--accent);
+}
+
+.hotRow[data-overdue] .when {
+  color: var(--magenta);
+}
+
+.hotTitle {
+  min-width: 0;
+  font-size: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+
+.kind {
+  margin-right: var(--space-2);
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.hotProject {
+  max-width: 22ch;
+  color: var(--text-muted);
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Следующие шаги ---------- */
+
+.nextList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.nextRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nextRow .thumb {
+  width: 64px;
+  height: 48px;
+}
+
+.nextRow:hover .nextStep {
+  color: var(--accent);
+}
+
+.nextText {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.nextStep,
+.nextProject,
+.quietName,
+.quietStep {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nextStep {
+  font-size: 17px;
+  transition: color 0.15s;
+}
+
+.nextProject {
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.nextProgress {
+  flex: none;
+  width: clamp(72px, 14vw, 172px);
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.pct {
+  font: 400 13px/1 var(--font-mono);
+  color: var(--text-muted);
+}
+
+.track {
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.more {
+  display: inline-block;
+  margin-top: var(--space-3);
+  color: var(--accent);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.more:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Заброшенные ---------- */
+
+.quietList {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.quietCard {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.2s;
+}
+
+.quietCard:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.quietCard .thumb {
+  width: 80px;
+  height: 60px;
+}
+
+.quietText {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.quietName {
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.quietStep {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.quietStep[data-empty] {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.quietDays {
+  flex: none;
+  font: 500 14px/1 var(--font-mono);
+  color: var(--status-paused);
+  white-space: nowrap;
+}
+
+/* ---------- Пульс ---------- */
+
+/* 12 столбцов-недель по 7 дней, сверху понедельник: дни идут по столбцам. */
+.heat {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 20px));
+  grid-template-rows: repeat(7, auto);
+  grid-auto-flow: column;
+  gap: 4px;
+}
+
+.cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+
+.cell[data-level='1'] {
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface-2));
+}
+
+.cell[data-level='2'] {
+  background: color-mix(in srgb, var(--accent) 52%, var(--surface-2));
+}
+
+.cell[data-level='3'] {
+  background: color-mix(in srgb, var(--accent) 76%, var(--surface-2));
+}
+
+.cell[data-level='4'] {
+  background: var(--accent);
+  box-shadow: var(--glow);
+}
+
+/* Хвост текущей недели: место под днём есть, но он ещё не наступил. */
+.cell[data-future] {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--line);
+  opacity: 0.5;
+}
+
+.caption {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+/* ---------- Статусы ---------- */
+
+.bar {
+  display: flex;
+  gap: 3px;
+  height: 6px;
+  margin-bottom: var(--space-4);
+}
+
+.bar span {
+  flex-basis: 0;
+  min-width: 6px;
+  border-radius: 3px;
+  background: var(--dot);
+}
+
+.legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  font-size: 15px;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--dot);
+}
+
+.legendCount {
+  font: 400 14px/1 var(--font-mono);
+  color: var(--text-muted);
+}
+
+[data-status='idea'] {
+  --dot: var(--status-idea);
+}
+[data-status='active'] {
+  --dot: var(--status-active);
+}
+[data-status='paused'] {
+  --dot: var(--status-paused);
+}
+[data-status='done'] {
+  --dot: var(--status-done);
+}
+[data-status='archived'] {
+  --dot: var(--status-archived);
+}
+
+/* ---------- Узкие экраны ---------- */
+
+@media (max-width: 1099px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+  }
+}
+
+@media (max-width: 767px) {
+  .page {
+    gap: var(--space-5);
+  }
+
+  /* Справа вверху — значки «Ветки» и «Ключи и входы», как на «Проектах». */
+  .head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    margin-right: 104px;
+  }
+
+  .summary {
+    font-size: 15px;
+  }
+
+  /* Срок и проект — строкой над названием: на 375 px три колонки не помещаются. */
+  .hotRow {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'when project'
+      'title title';
+    gap: 4px var(--space-3);
+    padding: var(--space-3) 0;
+  }
+
+  .when {
+    grid-area: when;
+    font-size: 13px;
+  }
+
+  .hotProject {
+    grid-area: project;
+    justify-self: end;
+    max-width: 100%;
+    font-size: 13px;
+  }
+
+  .hotTitle {
+    grid-area: title;
+    font-size: 16px;
+  }
+
+  .nextRow .thumb {
+    width: 48px;
+    height: 40px;
+  }
+
+  .nextStep {
+    font-size: 15px;
+  }
+
+  .nextProject {
+    font-size: 13px;
+  }
+
+  .nextProgress {
+    width: 56px;
+  }
+
+  .quietCard .thumb {
+    width: 56px;
+    height: 44px;
+  }
+
+  .quietName {
+    font-size: 15px;
+  }
+
+  .quietStep {
+    font-size: 13px;
+  }
+
+  .heat {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    max-width: 320px;
+  }
+}
