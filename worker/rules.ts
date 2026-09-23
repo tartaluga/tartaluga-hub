@@ -17,6 +17,7 @@ export function assertDataPath(path: unknown): string {
 }
 
 const BRANCH = /^[a-z0-9][a-z0-9-]{0,39}$/
+export const isBranchName = (name: string) => BRANCH.test(name)
 export const MAIN = 'main'
 export const STATUS = 'status'
 

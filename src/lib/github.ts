@@ -245,8 +245,78 @@ export class GitHubClient {
   }
 
   private async headCommit(): Promise<string> {
-    const { body } = await this.request<{ object: { sha: string } }>(`/git/ref/heads/${encodeURIComponent(this.branch)}`)
+    return this.branchHead(this.branch)
+  }
+
+  // ---------- Ветки (ADR-007). Имена веток проверяет вызывающий код. ----------
+
+  /** Последний коммит ветки. */
+  async branchHead(name: string): Promise<string> {
+    const { body } = await this.request<{ object: { sha: string } }>(`/git/ref/heads/${encodeURIComponent(name)}`)
     return body.object.sha
+  }
+
+  /** Все ветки репо: имя и последний коммит. */
+  async listBranches(): Promise<{ name: string; sha: string }[]> {
+    const out: { name: string; sha: string }[] = []
+    for (let page = 1; page <= 10; page++) {
+      const { body } = await this.request<{ name: string; commit: { sha: string } }[]>(`/branches?per_page=100&page=${page}`)
+      out.push(...body.map((b) => ({ name: b.name, sha: b.commit.sha })))
+      if (body.length < 100) break
+    }
+    return out
+  }
+
+  /** Новая ветка от коммита. Уже есть — 'already_exists'. */
+  createBranch(name: string, fromSha: string): Promise<void> {
+    return this.serialWrite(async () => {
+      await this.request(`/git/refs`, { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${name}`, sha: fromSha }) })
+    })
+  }
+
+  deleteBranch(name: string): Promise<void> {
+    return this.serialWrite(async () => {
+      await this.request(`/git/refs/heads/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    })
+  }
+
+  /** Что изменилось в head относительно base: файлы с их новым sha. */
+  async compare(
+    base: string,
+    head: string,
+  ): Promise<{ aheadBy: number; files: { path: string; previousPath?: string; status: string; sha: string }[] }> {
+    const { body } = await this.request<{
+      ahead_by: number
+      files?: { filename: string; previous_filename?: string; status: string; sha: string }[]
+    }>(`/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`)
+    return {
+      aheadBy: body.ahead_by,
+      files: (body.files ?? []).map((f) => ({
+        path: f.filename,
+        ...(f.previous_filename ? { previousPath: f.previous_filename } : {}),
+        status: f.status,
+        sha: f.sha,
+      })),
+    }
+  }
+
+  /**
+   * Влить head в base через merge API GitHub. Конфликт — 'conflict', ничего не меняется.
+   * null — вливать нечего (head уже в base).
+   */
+  merge(base: string, head: string, message: string): Promise<string | null> {
+    return this.serialWrite(async () => {
+      const { status, body } = await this.request<{ sha: string } | undefined>(`/merges`, {
+        method: 'POST',
+        body: JSON.stringify({ base, head, commit_message: message }),
+      })
+      return status === 204 || !body ? null : body.sha
+    })
+  }
+
+  /** Запустить workflow (workflow_dispatch) на ветке, без входных параметров. */
+  async dispatchWorkflow(file: string, ref: string): Promise<void> {
+    await this.request(`/actions/workflows/${encodeURIComponent(file)}/dispatches`, { method: 'POST', body: JSON.stringify({ ref }) })
   }
 }
 
@@ -259,7 +329,10 @@ function kindOf(res: Response, message: string): GitHubErrorKind {
   if (s === 409) return 'conflict'
   if (s === 422) {
     // GitHub отвечает 422 и на «sha не совпал», и на «ветка ушла вперёд» при обновлении ref.
-    return /sha|fast forward|does not match|update is not a fast forward/i.test(message) ? 'conflict' : 'validation'
+    if (/sha|fast forward|does not match/i.test(message)) return 'conflict'
+    if (/already exists/i.test(message)) return 'already_exists'
+    if (/does not exist/i.test(message)) return 'not_found'
+    return 'validation'
   }
   if (s >= 500) return 'server'
   return 'validation'
