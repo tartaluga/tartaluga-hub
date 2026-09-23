@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { generateKeyPairSync } from 'node:crypto'
 import type { Env } from '../env'
+import { OAUTH_COOKIE } from '../authGithub'
+import { handle, type Deps } from '../index'
+import { SESSION_COOKIE } from '../sessions'
 
 class Stmt {
   constructor(
@@ -106,3 +109,65 @@ export function cookieFrom(res: Response, name: string): string | undefined {
   }
   return undefined
 }
+
+// ---------- Сценарии запросов к серверу ----------
+
+export type Call = { method: string; url: string; body: any }
+export type Handler = (c: Call) => Response | undefined | Promise<Response | undefined>
+
+/** GitHub: вход и токен установки отвечают всегда, остальное — обработчики теста. Необработанный запрос — ошибка теста. */
+export function github(...handlers: Handler[]) {
+  const calls: Call[] = []
+  const fn = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const c: Call = { method: init.method ?? 'GET', url: String(input), body: init.body ? JSON.parse(String(init.body)) : undefined }
+    calls.push(c)
+    if (c.url === 'https://github.com/login/oauth/access_token') return jsonResponse({ access_token: 'user-token' })
+    if (c.url === 'https://api.github.com/user') return jsonResponse({ id: OWNER_ID })
+    if (c.url.includes('/applications/')) return new Response(null, { status: 204 })
+    if (c.url.endsWith('/access_tokens'))
+      return jsonResponse({ token: 'inst', expires_at: new Date(Date.now() + 3600_000).toISOString(), repositories: [{ name: 'tartaluga-hub-data' }] }, 201)
+    for (const h of handlers) {
+      const r = await h(c)
+      if (r) return r
+    }
+    throw new Error(`unexpected ${c.method} ${c.url}`)
+  }) as typeof fetch
+  const repoCalls = () => calls.filter((c) => c.url.includes('/repos/'))
+  return { fn, calls, repoCalls }
+}
+
+export const on =
+  (method: string, part: string, res: (c: Call) => Response): Handler =>
+  (c) =>
+    c.method === method && c.url.includes(part) ? res(c) : undefined
+
+export async function session(env: ReturnType<typeof testEnv>['env'], fn: typeof fetch, now = Date.now()) {
+  const deps: Deps = { fetch: fn, now: () => now }
+  const start = await handle(new Request(`${ORIGIN}/api/auth/github/start`), env, deps)
+  const state = new URL(start.headers.get('Location')!).searchParams.get('state')!
+  const cb = await handle(
+    new Request(`${ORIGIN}/api/auth/github/callback?code=x&state=${state}`, { headers: { Cookie: `${OAUTH_COOKIE}=${cookieFrom(start, OAUTH_COOKIE)}` } }),
+    env,
+    deps,
+  )
+  return `${SESSION_COOKIE}=${cookieFrom(cb, SESSION_COOKIE)}`
+}
+
+/** Изменяющий запрос как из хаба: наш Origin, X-Hub, JSON. */
+export function mutation(method: string, path: string, cookie: string, body?: unknown, extra: Record<string, string> = {}) {
+  return new Request(ORIGIN + path, {
+    method,
+    headers: { Cookie: cookie, Origin: ORIGIN, 'X-Hub': '1', 'Content-Type': 'application/json', ...extra },
+    ...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
+  })
+}
+
+export async function setup(...handlers: Handler[]) {
+  const { env, sql } = testEnv()
+  const gh = github(...handlers)
+  const cookie = await session(env, gh.fn)
+  gh.calls.length = 0
+  const send = (r: Request, now?: number) => handle(r, env, { fetch: gh.fn, now: () => now ?? Date.now() })
+  return { env, sql, gh, cookie, send }
+}
+
