@@ -4,6 +4,8 @@ import { GitHubError } from '../src/lib/github'
 import { listFiles, readBlob, readStatus } from './api'
 import { CALLBACK_PATH, githubCallback, githubStart } from './authGithub'
 import type { Env } from './env'
+import { listSessions, logoutAll, markSeen, securityLog, unseenCount } from './account'
+import { authenticate, authenticationOptions, deletePasskey, listPasskeys, register, registrationOptions } from './passkeys'
 import { commit, createBranch, deleteBranch, listBranches, mergeBranch, putFile, refreshStatus } from './write'
 import { assertSameOriginMutation, errorResponse, HttpError, json } from './http'
 import { cleanup, clearSessionCookie, deleteSession, isFresh, logEvent, readSession, type Session } from './sessions'
@@ -42,6 +44,16 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
     allow(method, 'GET')
     return githubCallback(request, env, deps.fetch)
   }
+  if (pathname === '/api/auth/passkey/options') {
+    allow(method, 'POST')
+    assertSameOriginMutation(request, env.APP_ORIGIN)
+    return authenticationOptions(env)
+  }
+  if (pathname === '/api/auth/passkey') {
+    allow(method, 'POST')
+    assertSameOriginMutation(request, env.APP_ORIGIN)
+    return authenticate(request, env, deps.now())
+  }
 
   // Всё остальное — только с действующей сессией (запрет по умолчанию).
   if (method !== 'GET') assertSameOriginMutation(request, env.APP_ORIGIN)
@@ -50,13 +62,47 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
   if (found.setCookie) onRefresh(found.setCookie)
   const session = found.session
 
+  const now = deps.now()
   if (pathname === '/api/me') {
     allow(method, 'GET')
-    return me(session, deps.now())
+    return me(session, now, await unseenCount(env, session))
   }
   if (pathname === '/api/auth/logout') {
     allow(method, 'POST')
     return logout(env, session)
+  }
+  if (pathname === '/api/auth/logout-all') {
+    allow(method, 'POST')
+    return logoutAll(env, session, now)
+  }
+  if (pathname === '/api/sessions') {
+    allow(method, 'GET')
+    return listSessions(env, session, now)
+  }
+  if (pathname === '/api/security') {
+    allow(method, 'GET')
+    return securityLog(env)
+  }
+  if (pathname === '/api/security/seen') {
+    allow(method, 'POST')
+    return markSeen(env, session)
+  }
+  if (pathname === '/api/passkeys') {
+    allow(method, 'GET')
+    return listPasskeys(env)
+  }
+  if (pathname === '/api/passkeys/register/options') {
+    allow(method, 'POST')
+    return registrationOptions(env, session, now)
+  }
+  if (pathname === '/api/passkeys/register') {
+    allow(method, 'POST')
+    return register(request, env, session, now)
+  }
+  const passkeyRoute = /^\/api\/passkeys\/([^/]+)$/.exec(pathname)
+  if (passkeyRoute) {
+    allow(method, 'DELETE')
+    return deletePasskey(passkeyRoute[1]!, env, session, now)
   }
   if (pathname === '/api/files') {
     allow(method, 'GET')
@@ -96,7 +142,7 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
       return mergeBranch(name, env, deps.fetch)
     }
     allow(method, 'DELETE')
-    return deleteBranch(name, session, deps.now(), env, deps.fetch)
+    return deleteBranch(name, session, now, env, deps.fetch)
   }
   throw new HttpError(404, 'not_found', 'Нет такой команды')
 }
@@ -105,8 +151,9 @@ function allow(method: string, expected: string): void {
   if (method !== expected) throw new HttpError(405, 'method_not_allowed', 'Метод не поддерживается')
 }
 
-function me(session: Session, now: number): Response {
+function me(session: Session, now: number, unseenSecurityEvents: number): Response {
   return json({
+    unseenSecurityEvents,
     session: {
       authMethod: session.authMethod,
       authAt: session.authAt,

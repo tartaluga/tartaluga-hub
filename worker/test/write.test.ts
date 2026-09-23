@@ -1,75 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { OAUTH_COOKIE } from '../authGithub'
 import { resetGitHubAppCaches } from '../githubApp'
-import { handle, type Deps } from '../index'
-import { SESSION_COOKIE } from '../sessions'
-import { cookieFrom, jsonResponse, ORIGIN, OWNER_ID, testEnv } from './helpers'
+import { jsonResponse, mutation, on, ORIGIN, setup, type Handler } from './helpers'
 
 const example = (name: string) => readFileSync(new URL(`../../schema/examples/valid/${name}`, import.meta.url), 'utf8')
 const PROJECT = example('project-full.json') // slug tartaluga-hub
 const HEAD = 'c'.repeat(40)
 const BRANCH_HEAD = 'b'.repeat(40)
 const SHA = 'a'.repeat(40)
-
-type Call = { method: string; url: string; body: any }
-type Handler = (c: Call) => Response | undefined | Promise<Response | undefined>
-
-/** GitHub: вход и токен установки отвечают всегда, остальное — обработчики теста. Необработанный запрос — ошибка теста. */
-function github(...handlers: Handler[]) {
-  const calls: Call[] = []
-  const fn = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const c: Call = { method: init.method ?? 'GET', url: String(input), body: init.body ? JSON.parse(String(init.body)) : undefined }
-    calls.push(c)
-    if (c.url === 'https://github.com/login/oauth/access_token') return jsonResponse({ access_token: 'user-token' })
-    if (c.url === 'https://api.github.com/user') return jsonResponse({ id: OWNER_ID })
-    if (c.url.includes('/applications/')) return new Response(null, { status: 204 })
-    if (c.url.endsWith('/access_tokens'))
-      return jsonResponse({ token: 'inst', expires_at: new Date(Date.now() + 3600_000).toISOString(), repositories: [{ name: 'tartaluga-hub-data' }] }, 201)
-    for (const h of handlers) {
-      const r = await h(c)
-      if (r) return r
-    }
-    throw new Error(`unexpected ${c.method} ${c.url}`)
-  }) as typeof fetch
-  const repoCalls = () => calls.filter((c) => c.url.includes('/repos/'))
-  return { fn, calls, repoCalls }
-}
-
-const on =
-  (method: string, part: string, res: (c: Call) => Response): Handler =>
-  (c) =>
-    c.method === method && c.url.includes(part) ? res(c) : undefined
-
-async function session(env: ReturnType<typeof testEnv>['env'], fn: typeof fetch, now = Date.now()) {
-  const deps: Deps = { fetch: fn, now: () => now }
-  const start = await handle(new Request(`${ORIGIN}/api/auth/github/start`), env, deps)
-  const state = new URL(start.headers.get('Location')!).searchParams.get('state')!
-  const cb = await handle(
-    new Request(`${ORIGIN}/api/auth/github/callback?code=x&state=${state}`, { headers: { Cookie: `${OAUTH_COOKIE}=${cookieFrom(start, OAUTH_COOKIE)}` } }),
-    env,
-    deps,
-  )
-  return `${SESSION_COOKIE}=${cookieFrom(cb, SESSION_COOKIE)}`
-}
-
-/** Изменяющий запрос как из хаба: наш Origin, X-Hub, JSON. */
-function mutation(method: string, path: string, cookie: string, body?: unknown, extra: Record<string, string> = {}) {
-  return new Request(ORIGIN + path, {
-    method,
-    headers: { Cookie: cookie, Origin: ORIGIN, 'X-Hub': '1', 'Content-Type': 'application/json', ...extra },
-    ...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
-  })
-}
-
-async function setup(...handlers: Handler[]) {
-  const { env } = testEnv()
-  const gh = github(...handlers)
-  const cookie = await session(env, gh.fn)
-  gh.calls.length = 0
-  const send = (r: Request, now?: number) => handle(r, env, { fetch: gh.fn, now: () => now ?? Date.now() })
-  return { env, gh, cookie, send }
-}
 
 beforeEach(() => resetGitHubAppCaches())
 
