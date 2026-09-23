@@ -22,3 +22,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Секреты — никогда не коммитить (репо публичный)
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+*.p8
+.wrangler
