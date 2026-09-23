@@ -210,8 +210,8 @@
   - перенос cron-виджетов в Cron Triggers.
 
 ## Действия
-1. [ ] Владелец: аккаунт Cloudflare (Free), поддомен workers.dev.
-2. [ ] Владелец: GitHub App в `tartaluga` по инструкции, установка на `tartaluga-hub-data`, секреты Worker.
+1. [x] Владелец: аккаунт Cloudflare (Free), поддомен workers.dev.
+2. [x] Владелец: GitHub App в `tartaluga` по инструкции, установка на `tartaluga-hub-data`, секреты Worker.
 3. [ ] Worker: статика и `_headers`, смысловой API, JWT и токен установки, D1 и миграции.
 4. [ ] Вход через GitHub, сессии, выход, журнал безопасности.
 5. [ ] Ключи доступа: регистрация при свежем входе, вход, экран «Ключи и входы».
