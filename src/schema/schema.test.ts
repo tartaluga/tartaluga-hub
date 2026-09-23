@@ -80,3 +80,20 @@ describe('JSON Schema v1: совместимость (ADR-003)', () => {
     expect(validateProject({ ...base, status: 'blocked' })).toBe(false)
   })
 })
+
+// Импорт CommonJS-хелперов Ajv «по умолчанию» Vitest понимает, а продакшен-сборка Rollup — нет:
+// в браузере разбор любого проекта падал с «func1 is not a function». Хелперы встраиваются в файл.
+describe('validators.js самодостаточен', () => {
+  const source = import.meta.glob<string>('./validators.js', { eager: true, query: '?raw', import: 'default' })['./validators.js']!
+
+  it('без импортов и require', () => {
+    expect(source).not.toMatch(/^\s*import\s/m)
+    expect(source).not.toMatch(/require\(/)
+  })
+
+  it('проверка длины строк (ucs2length) работает', () => {
+    const p = { schemaVersion: 1, slug: 'x', title: '', status: 'idea', createdAt: '2026-09-23T01:00:00+03:00', updatedAt: '2026-09-23T01:00:00+03:00' }
+    expect(validateProject(p)).toBe(false)
+    expect(validateProject({ ...p, title: 'Икс' })).toBe(true)
+  })
+})
