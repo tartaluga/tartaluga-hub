@@ -38,6 +38,8 @@ export default defineConfig({
     VitePWA({
       // Новая версия не подменяется молча: пользователь сам жмёт «Обновить» (ADR-006).
       registerType: 'prompt',
+      // Регистрацию делает UpdateBanner (virtual:pwa-register/react), отдельный registerSW.js не нужен.
+      injectRegister: false,
       includeAssets: ['favicon.svg'],
       manifest: {
         name: 'Tartaluga Hub',

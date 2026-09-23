@@ -40,6 +40,7 @@
   --text-faint: #8e91a6;
   --accent: #6b5cc7;
   --accent-soft: #e6e2fb;
+  --on-accent: #ffffff;
   --magenta: #b8438f;
   --magenta-soft: #f7e2ef;
   --glow: none;
@@ -58,6 +59,7 @@
     --text-faint: #595d6c;
     --accent: #9184d9;
     --accent-soft: #2b2741;
+    --on-accent: #161826;
     --magenta: #d472b2;
     --magenta-soft: #3a2436;
     --glow: 0 0 14px rgb(145 132 217 / 0.45);
@@ -76,6 +78,7 @@
   --text-faint: #595d6c;
   --accent: #9184d9;
   --accent-soft: #2b2741;
+  --on-accent: #161826;
   --magenta: #d472b2;
   --magenta-soft: #3a2436;
   --glow: 0 0 14px rgb(145 132 217 / 0.45);

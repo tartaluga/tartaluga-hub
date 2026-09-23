@@ -67,20 +67,34 @@
   gap: var(--space-3);
 }
 
-.sync {
+.footRow {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
-  padding: 0 var(--space-2);
-  font-size: 12px;
-  color: var(--text-muted);
 }
 
-.syncDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-faint);
+.signOut {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.signOut:hover {
+  color: var(--magenta);
+  border-color: var(--magenta);
+}
+
+.boot {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
 }
 
 .main {
