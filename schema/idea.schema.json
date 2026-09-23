@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tartaluga.github.io/schema/idea.schema.json",
+  "title": "Idea",
+  "description": "Одна идея из инбокса. Файл ideas/<id>.json, где id совпадает с именем файла. «Сделать проектом» создаёт проект и удаляет файл идеи одним коммитом.",
+  "type": "object",
+  "required": ["schemaVersion", "id", "text", "createdAt"],
+  "properties": {
+    "schemaVersion": { "$ref": "defs.schema.json#/$defs/schemaVersion" },
+    "id": { "$ref": "defs.schema.json#/$defs/ulid" },
+    "text": {
+      "description": "Текст идеи. Первая строка служит заголовком.",
+      "$ref": "defs.schema.json#/$defs/nonEmptyText"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "createdAt": { "$ref": "defs.schema.json#/$defs/dateTime" },
+    "updatedAt": { "$ref": "defs.schema.json#/$defs/dateTime" }
+  }
+}

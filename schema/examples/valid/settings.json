@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "abandonedAfterDays": 14,
+  "tags": [
+    { "id": "study", "name": "учёба", "color": "#9184d9" },
+    { "id": "freelance", "name": "фриланс", "color": "#6fc2b4" },
+    { "id": "dnd", "name": "ДнД", "color": "#d472b2" },
+    { "id": "code", "name": "код", "color": "#a7a1db" },
+    { "id": "personal", "name": "личное", "color": "#d9b36a" }
+  ]
+}

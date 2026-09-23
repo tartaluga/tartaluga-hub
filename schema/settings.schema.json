@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tartaluga.github.io/schema/settings.schema.json",
+  "title": "Settings",
+  "description": "Общие настройки хаба. Файл settings.json в корне репо данных.",
+  "type": "object",
+  "required": ["schemaVersion", "tags"],
+  "properties": {
+    "schemaVersion": { "$ref": "defs.schema.json#/$defs/schemaVersion" },
+    "abandonedAfterDays": {
+      "description": "Проект «в работе» считается заброшенным, если в логе нет записей дольше этого числа дней. По умолчанию 14.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 365
+    },
+    "tags": {
+      "description": "Теги в порядке показа.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/tag" }
+    }
+  },
+  "$defs": {
+    "tag": {
+      "type": "object",
+      "required": ["id", "name", "color"],
+      "properties": {
+        "id": {
+          "description": "Постоянный id. Переименование тега меняет name, id остаётся, поэтому проекты не надо править.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "name": { "type": "string", "$ref": "defs.schema.json#/$defs/nonEmptyText", "maxLength": 32 },
+        "color": { "$ref": "defs.schema.json#/$defs/color" }
+      }
+    }
+  }
+}

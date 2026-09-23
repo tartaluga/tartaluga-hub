@@ -9,7 +9,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "schema": "node scripts/schema.mjs",
+    "schema:check": "node scripts/schema.mjs --check"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

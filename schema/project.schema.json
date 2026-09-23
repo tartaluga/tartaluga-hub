@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tartaluga.github.io/schema/project.schema.json",
+  "title": "Project",
+  "description": "Один проект хаба. Файл projects/<slug>.json. Незнакомые поля разрешены и должны сохраняться всеми, кто пишет файл (ADR-003).",
+  "type": "object",
+  "required": ["schemaVersion", "slug", "title", "status", "createdAt", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "$ref": "defs.schema.json#/$defs/schemaVersion" },
+    "slug": { "$ref": "defs.schema.json#/$defs/slug" },
+    "title": { "type": "string", "$ref": "defs.schema.json#/$defs/nonEmptyText", "maxLength": 120 },
+    "description": {
+      "description": "Описание проекта. Можно Markdown.",
+      "type": "string"
+    },
+    "stack": {
+      "description": "Технологии и инструменты, по порядку важности.",
+      "type": "array",
+      "items": { "$ref": "defs.schema.json#/$defs/nonEmptyText" }
+    },
+    "tags": {
+      "description": "Id тегов из settings.json. Незнакомый id показывается серым тегом, а не считается ошибкой.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "status": {
+      "description": "idea — идея, active — в работе, paused — пауза, done — готово, archived — архив. Список закрытый: от статуса зависит логика экранов, поэтому новый статус — это новая schemaVersion.",
+      "enum": ["idea", "active", "paused", "done", "archived"]
+    },
+    "nextStep": {
+      "description": "Следующий шаг одной строкой. Пустая строка или отсутствие поля — шаг не задан.",
+      "type": "string",
+      "maxLength": 200
+    },
+    "cover": {
+      "description": "Путь к обложке в репо данных (covers/<slug>.webp или .jpg). null или отсутствие — генеративная заглушка.",
+      "type": ["string", "null"],
+      "pattern": "^covers/[a-z0-9-]+\\.(webp|jpg)$"
+    },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/link" }
+    },
+    "milestones": {
+      "description": "Вехи по порядку. Прогресс вехи считается по задачам с её milestoneId.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/milestone" }
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/task" }
+    },
+    "log": {
+      "description": "Лента записей. Пишущие добавляют новые записи в конец; читающие не полагаются на порядок в файле и сортируют по at сами.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/logEntry" }
+    },
+    "createdAt": { "$ref": "defs.schema.json#/$defs/dateTime" },
+    "updatedAt": {
+      "description": "Время последней правки. Любой пишущий (приложение, скилл) обновляет его.",
+      "$ref": "defs.schema.json#/$defs/dateTime"
+    }
+  },
+  "$defs": {
+    "link": {
+      "type": "object",
+      "required": ["id", "kind", "value"],
+      "properties": {
+        "id": { "$ref": "defs.schema.json#/$defs/ulid" },
+        "kind": {
+          "description": "Известные виды: folder — путь к папке на ПК; repo — GitHub-репо в виде owner/name; site — опубликованный сайт; local — локальный URL (localhost); doc — документ; other — прочее. Список открытый: незнакомый вид показывается как обычная ссылка, чтобы новые виды не ломали старые версии приложения.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "value": {
+          "description": "folder: путь (C:\\\\Users\\\\...); repo: owner/name; остальные: URL.",
+          "$ref": "defs.schema.json#/$defs/nonEmptyText"
+        },
+        "label": { "type": "string", "maxLength": 80 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "repo" } } },
+          "then": { "properties": { "value": { "type": "string", "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["site", "local", "doc"] } } },
+          "then": { "properties": { "value": { "type": "string", "pattern": "^https?://" } } }
+        }
+      ]
+    },
+    "milestone": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "$ref": "defs.schema.json#/$defs/ulid" },
+        "title": { "type": "string", "$ref": "defs.schema.json#/$defs/nonEmptyText", "maxLength": 120 },
+        "due": { "$ref": "defs.schema.json#/$defs/date" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "title", "done"],
+      "properties": {
+        "id": { "$ref": "defs.schema.json#/$defs/ulid" },
+        "title": { "type": "string", "$ref": "defs.schema.json#/$defs/nonEmptyText", "maxLength": 200 },
+        "done": { "type": "boolean" },
+        "due": { "$ref": "defs.schema.json#/$defs/date" },
+        "milestoneId": {
+          "description": "Id вехи, к которой относится задача. Если вехи с таким id нет, задача считается без вехи.",
+          "$ref": "defs.schema.json#/$defs/ulid"
+        },
+        "doneAt": { "$ref": "defs.schema.json#/$defs/dateTime" }
+      }
+    },
+    "logEntry": {
+      "type": "object",
+      "required": ["id", "at", "kind", "text"],
+      "properties": {
+        "id": { "$ref": "defs.schema.json#/$defs/ulid" },
+        "at": { "$ref": "defs.schema.json#/$defs/dateTime" },
+        "kind": {
+          "description": "Известные виды: done — что сделано; decision — решение; thought — мысль. Список открытый: незнакомый вид показывается как «запись».",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "text": { "$ref": "defs.schema.json#/$defs/nonEmptyText" }
+      }
+    }
+  }
+}

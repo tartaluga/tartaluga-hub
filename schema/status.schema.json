@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tartaluga.github.io/schema/status.schema.json",
+  "title": "Status",
+  "description": "Живые виджеты. Файл status.json в ветке status. Пишет только GitHub Action (ADR-005); приложение и скилл его только читают.",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "lastSuccess", "errors", "projects"],
+  "properties": {
+    "schemaVersion": { "$ref": "defs.schema.json#/$defs/schemaVersion" },
+    "generatedAt": {
+      "description": "Когда Action последний раз отработал (даже с ошибками). null — ещё ни разу.",
+      "oneOf": [{ "$ref": "defs.schema.json#/$defs/dateTime" }, { "type": "null" }]
+    },
+    "lastSuccess": {
+      "description": "Когда Action последний раз отработал без ошибок.",
+      "oneOf": [{ "$ref": "defs.schema.json#/$defs/dateTime" }, { "type": "null" }]
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/statusError" }
+    },
+    "projects": {
+      "description": "Ключ — slug проекта.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/projectStatus" }
+    }
+  },
+  "$defs": {
+    "statusError": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "description": "repo_not_accessible — токену статуса не выдан доступ к репо; token_expired — токен истёк; other — прочее.",
+          "type": "string"
+        },
+        "message": { "type": "string" },
+        "project": { "type": "string" },
+        "repo": { "type": "string" }
+      }
+    },
+    "projectStatus": {
+      "type": "object",
+      "properties": {
+        "site": { "$ref": "#/$defs/site" },
+        "repo": { "$ref": "#/$defs/repo" }
+      }
+    },
+    "site": {
+      "type": "object",
+      "required": ["url", "state", "checkedAt"],
+      "properties": {
+        "url": { "type": "string" },
+        "state": {
+          "description": "up — отвечает; down — не отвечает или 5xx; blocked — 403/503 от антибот-защиты, проверить не удалось.",
+          "enum": ["up", "down", "blocked"]
+        },
+        "httpStatus": { "type": ["integer", "null"] },
+        "latency": {
+          "description": "Грубая корзина задержки, чтобы не коммитить каждое колебание.",
+          "enum": ["fast", "ok", "slow", null]
+        },
+        "checkedAt": { "$ref": "defs.schema.json#/$defs/dateTime" },
+        "changedAt": {
+          "description": "Когда state последний раз менялся.",
+          "$ref": "defs.schema.json#/$defs/dateTime"
+        }
+      }
+    },
+    "repo": {
+      "type": "object",
+      "required": ["fullName"],
+      "properties": {
+        "fullName": { "type": "string" },
+        "commits": {
+          "description": "До 5 последних коммитов ветки по умолчанию, новые первыми.",
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "required": ["sha", "message", "date"],
+            "properties": {
+              "sha": { "type": "string" },
+              "message": { "type": "string" },
+              "date": { "$ref": "defs.schema.json#/$defs/dateTime" },
+              "url": { "type": "string" }
+            }
+          }
+        },
+        "lastRun": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "status": { "type": "string" },
+            "conclusion": { "type": ["string", "null"] },
+            "url": { "type": "string" },
+            "at": { "$ref": "defs.schema.json#/$defs/dateTime" }
+          }
+        },
+        "deployment": {
+          "type": "object",
+          "properties": {
+            "environment": { "type": "string" },
+            "state": { "type": "string" },
+            "url": { "type": ["string", "null"] },
+            "at": { "$ref": "defs.schema.json#/$defs/dateTime" }
+          }
+        },
+        "commitsByDay": {
+          "description": "Число коммитов по дням (ключ YYYY-MM-DD), накопительно за последние 365 дней. Для тепловой карты.",
+          "type": "object",
+          "propertyNames": { "$ref": "defs.schema.json#/$defs/date" },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

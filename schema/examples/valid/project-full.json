@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "slug": "tartaluga-hub",
+  "title": "Tartaluga Hub",
+  "description": "Личный хаб проектов: PWA на **GitHub Pages**.",
+  "stack": ["React", "TypeScript", "Vite"],
+  "tags": ["code", "personal"],
+  "status": "active",
+  "nextStep": "Утвердить схему данных",
+  "cover": "covers/tartaluga-hub.webp",
+  "links": [
+    { "id": "01K5TQ0000000000000000A001", "kind": "folder", "value": "C:\\Users\\me\\projects\\hub" },
+    { "id": "01K5TQ0000000000000000A002", "kind": "repo", "value": "tartaluga/tartaluga.github.io" },
+    { "id": "01K5TQ0000000000000000A003", "kind": "site", "value": "https://tartaluga.github.io/", "label": "Прод" }
+  ],
+  "milestones": [
+    { "id": "01K5TQ0000000000000000B001", "title": "MVP", "due": "2026-10-15" }
+  ],
+  "tasks": [
+    { "id": "01K5TQ0000000000000000C001", "title": "Схема данных", "done": true, "milestoneId": "01K5TQ0000000000000000B001", "doneAt": "2026-09-23T03:10:00+03:00" },
+    { "id": "01K5TQ0000000000000000C002", "title": "Экран входа", "done": false, "due": "2026-09-30", "milestoneId": "01K5TQ0000000000000000B001" }
+  ],
+  "log": [
+    { "id": "01K5TQ0000000000000000D001", "at": "2026-09-23T02:30:00+03:00", "kind": "decision", "text": "Хостинг в организации tartaluga 🐢" }
+  ],
+  "createdAt": "2026-09-23T01:00:00+03:00",
+  "updatedAt": "2026-09-23T03:10:00Z",
+  "futureField": { "note": "незнакомые поля разрешены и должны сохраняться" }
+}

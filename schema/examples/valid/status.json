@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-23T04:00:00Z",
+  "lastSuccess": "2026-09-23T04:00:00Z",
+  "errors": [{ "code": "repo_not_accessible", "message": "Нет доступа", "project": "idea-x", "repo": "me/private" }],
+  "projects": {
+    "tartaluga-hub": {
+      "site": { "url": "https://tartaluga.github.io/", "state": "up", "httpStatus": 200, "latency": "fast", "checkedAt": "2026-09-23T04:00:00Z", "changedAt": "2026-09-23T02:00:00Z" },
+      "repo": {
+        "fullName": "tartaluga/tartaluga.github.io",
+        "commits": [{ "sha": "e5b0114", "message": "Скелет", "date": "2026-09-23T02:40:00+03:00" }],
+        "lastRun": { "name": "Деплой на Pages", "status": "completed", "conclusion": "success", "at": "2026-09-23T02:41:00+03:00" },
+        "commitsByDay": { "2026-09-23": 3 }
+      }
+    }
+  }
+}
