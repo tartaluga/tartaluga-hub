@@ -183,10 +183,10 @@ describe('массивы с id', () => {
     expect(r.merged.tasks).toEqual([task(A, 'Первая!'), task(B, 'Вторая')])
   })
 
-  it('удалено на сервере, изменено у меня — конфликт элемента, элемент возвращается в конец', () => {
+  it('удалено на сервере, изменено у меня — конфликт элемента, элемент возвращается на прежнее место', () => {
     const r = merge(base, edit({ tasks: [task(A, 'Первая', { done: true }), task(B, 'Вторая')] }), edit({ tasks: [task(B, 'Вторая'), task(C, 'Третья')] }))
     expect(r.conflicts).toEqual([{ kind: 'element', path: ['tasks', A], deletedBy: 'remote', base: task(A, 'Первая'), local: task(A, 'Первая', { done: true }), remote: undefined }])
-    expect((r.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([B, C, A])
+    expect((r.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([A, B, C])
   })
 
   it('разные поля одного элемента с двух сторон сливаются; одно поле по-разному — конфликт по пути с id', () => {
@@ -207,9 +207,9 @@ describe('массивы с id', () => {
     expect(diff.conflicts).toEqual([{ kind: 'field', path: ['tasks', C, 'title'], base: undefined, local: 'а', remote: 'б' }])
   })
 
-  it('перестановка у меня теряется в пользу удалённого порядка (ADR: порядок удалённый)', () => {
-    const r = merge(base, edit({ tasks: [task(B, 'Вторая'), task(A, 'Первая')] }), edit({ title: 'x' }))
-    expect((r.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([A, B])
+  it('массив изменён с обеих сторон — моя перестановка уступает удалённому порядку (ADR: порядок удалённый)', () => {
+    const r = merge(base, edit({ tasks: [task(B, 'Вторая'), task(A, 'Первая')] }), edit({ tasks: [task(A, 'Первая'), task(B, 'Вторая'), task(C, 'Третья')] }))
+    expect((r.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([A, B, C])
   })
 
   it('лог: одновременные записи с двух устройств обе остаются, кириллица и эмодзи не портятся', () => {
@@ -239,10 +239,10 @@ describe('массивы с id', () => {
     expect(r.merged.tasks).toEqual(remoteTasks)
   })
 
-  it('id-массив удалён целиком (поле отсутствует) с одной стороны, изменён с другой — обычный конфликт поля, без падения', () => {
+  it('id-массив удалён целиком (поле отсутствует) с одной стороны, изменён с другой — это пустой массив: конфликт элемента только у изменённого', () => {
     const r = merge(base, edit({ tasks: undefined }), edit({ tasks: [task(A, 'Первая!'), task(B, 'Вторая')] }))
-    expect(r.conflicts).toEqual([{ kind: 'field', path: ['tasks'], base: T, local: undefined, remote: [task(A, 'Первая!'), task(B, 'Вторая')] }])
-    expect(r.merged.tasks).toEqual([task(A, 'Первая!'), task(B, 'Вторая')])
+    expect(r.conflicts).toEqual([{ kind: 'element', path: ['tasks', A], deletedBy: 'local', base: task(A, 'Первая'), local: undefined, remote: task(A, 'Первая!') }])
+    expect(r.merged.tasks).toEqual([task(A, 'Первая!')])
   })
 
   it('поле-массив появилось с обеих сторон при отсутствии в базе — объединяется по id', () => {
@@ -349,5 +349,79 @@ describe('equal', () => {
     expect(equal(null, undefined)).toBe(false)
     expect(equal({ a: undefined as never }, {})).toBe(false)
     expect(equal({}, [])).toBe(false)
+  })
+})
+
+describe('ревью E1', () => {
+  const task = (id: string, title: string, extra: Record<string, unknown> = {}) => ({ id, title, done: false, ...extra })
+  const entry = (id: string, text: string) => ({ id, at: '2026-09-02T10:00:00+03:00', kind: 'note', text })
+
+  it('перестановка id-массива только у меня не теряется', () => {
+    const r = merge(base, edit({ tasks: [T[1]!, T[0]!] }), base)
+    expect((r.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([B, A])
+    const r2 = merge(base, base, edit({ tasks: [T[1]!, T[0]!] }))
+    expect((r2.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([B, A])
+  })
+
+  it('глубокая вложенность — MergeRefused, а не RangeError; 64 уровня ещё сливаются', () => {
+    const nest = (n: number): JsonObject => {
+      let v: JsonObject = { leaf: true }
+      for (let i = 0; i < n; i++) v = { x: v }
+      return v
+    }
+    const deep = edit({ junk: nest(20000) })
+    expect(() => merge(base, deep, base)).toThrow(MergeRefused)
+    expect(() => merge(base, base, deep)).toThrow(/вложенност/)
+    expect(() => merge(deep, base, base)).toThrow(MergeRefused)
+    expect(() => equal(nest(20000), nest(20000))).toThrow(MergeRefused)
+    const ok = edit({ junk: nest(60) })
+    expect(merge(base, ok, base).merged.junk).toEqual(nest(60))
+  })
+
+  it('отсутствующий ключ равен пустому id-массиву: удалил последнюю запись лога у себя, на сервере добавили', () => {
+    const b = edit({ log: [entry(A, 'старая')] })
+    const r = merge(b, edit({ log: undefined }, b), edit({ log: [entry(A, 'старая'), entry(B, 'новая')] }, b))
+    expect(r.conflicts).toEqual([])
+    expect(r.merged.log).toEqual([entry(B, 'новая')])
+  })
+
+  it('обратное направление: на сервере удалили последнюю запись (ключа нет), у меня добавили', () => {
+    const b = edit({ links: [{ id: A, kind: 'site', value: 'https://a' }] })
+    const r = merge(b, edit({ links: [{ id: A, kind: 'site', value: 'https://a' }, { id: B, kind: 'site', value: 'https://b' }] }, b), edit({ links: undefined }, b))
+    expect(r.conflicts).toEqual([])
+    expect(r.merged.links).toEqual([{ id: B, kind: 'site', value: 'https://b' }])
+  })
+
+  it('отсутствующий ключ и всё удалено — ключа нет, а не пустой массив', () => {
+    const b = edit({ log: [entry(A, 'x'), entry(B, 'y')] })
+    const r = merge(b, edit({ log: undefined }, b), edit({ log: [entry(A, 'x')] }, b))
+    expect(r.conflicts).toEqual([])
+    expect('log' in r.merged).toBe(false)
+  })
+
+  it('базы нет: поле только с одной стороны берётся без конфликта', () => {
+    const r = merge(undefined, edit({ description: 'только у меня' }), edit({ cover: 'covers/bot.webp' }))
+    expect(r.conflicts).toEqual([])
+    expect(r.merged).toMatchObject({ description: 'только у меня', cover: 'covers/bot.webp' })
+  })
+
+  it('updatedAt во вложенном незнакомом объекте — не служебная метка, конфликт', () => {
+    const r = merge(base, edit({ widget: { updatedAt: '2026-09-02T10:00:00Z' } }), edit({ widget: { updatedAt: '2026-09-03T10:00:00Z' } }))
+    expect(r.conflicts.map((c) => c.path)).toEqual([['widget']])
+  })
+
+  it('метка не в полном ISO-8601 с временем — конфликт, а не «позднее»', () => {
+    for (const bad of ['2026-09-09', 'Sep 9 2026 10:00', '2026-09-09T10:00:00', '2026-09-09 10:00:00Z']) {
+      const r = merge(base, edit({ updatedAt: bad }), edit({ updatedAt: '2026-09-03T10:00:00+03:00' }))
+      expect(r.conflicts.map((c) => c.path), bad).toEqual([['updatedAt']])
+    }
+  })
+
+  it('удалено на сервере, изменено у меня — элемент остаётся на прежней позиции', () => {
+    const b = edit({ tasks: [task(A, 'a'), task(B, 'b'), task(C, 'c')] })
+    const r = merge(b, edit({ tasks: [task(A, 'a'), task(B, 'b!'), task(C, 'c'), task(D, 'новая')] }, b), edit({ tasks: [task(A, 'a'), task(C, 'c')] }, b))
+    expect((r.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([A, B, C, D])
+    const first = merge(b, edit({ tasks: [task(A, 'a!'), task(B, 'b'), task(C, 'c')] }, b), edit({ tasks: [task(C, 'c'), task(B, 'b')] }, b))
+    expect((first.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([A, C, B])
   })
 })

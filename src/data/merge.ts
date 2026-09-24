@@ -4,11 +4,15 @@
 //
 // Правила:
 // - поле изменилось с одной стороны — берём изменение; с обеих одинаково — ок; по-разному — конфликт поля;
-// - служебные метки времени (SERVICE_TIMES) при расхождении берутся более поздние, в конфликт не попадают;
+// - служебные метки времени (SERVICE_TIMES) на верхнем уровне и в элементах id-массивов при расхождении
+//   берутся более поздние (только полный ISO-8601 с временем и смещением), в конфликт не попадают;
 // - массивы объектов с уникальным строковым `id` сливаются поэлементно, поля элемента — по тем же правилам;
+//   отсутствующий ключ против id-массива считается пустым массивом (applyEdit убирает пустые log/links);
 //   удалено с одной стороны и не менялось с другой — удаляем; удалено и изменено — конфликт элемента,
-//   в результате элемент остаётся (ADR: по умолчанию «оставить»);
-// - порядок такого массива — удалённый, новые элементы с моей стороны в конец в моём порядке;
+//   в результате элемент остаётся (ADR: по умолчанию «оставить») на своей позиции из базы;
+// - id-массив изменён только с одной стороны — берётся целиком, вместе с перестановкой;
+//   с обеих — порядок удалённый, новые элементы с моей стороны в конец в моём порядке;
+// - вложенность глубже MAX_DEPTH — отказ MergeRefused (рекурсия не должна падать с RangeError);
 // - всё остальное (незнакомые поля, массивы без id, вложенные объекты) — как скаляры, сравнение по содержимому.
 import { SCHEMA_VERSION } from './model'
 
@@ -32,27 +36,43 @@ export interface MergeResult {
 /** Метки, которые при расхождении берутся по более позднему моменту (ADR-004: «updatedAt и подобные»). */
 export const SERVICE_TIMES: ReadonlySet<string> = new Set(['updatedAt', 'doneAt'])
 
-/** Слияние отказано: файл в формате новее, чем понимает сборка (ADR-003: такие файлы не перезаписываем). */
+/** Предельная вложенность JSON (корень — уровень 1). В данных хаба её не больше 4. */
+export const MAX_DEPTH = 64
+
+/** Полный момент ISO-8601, как dateTime в схеме: дата, время и смещение обязательны. */
+const ISO_MOMENT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+
+/**
+ * Слияние отказано — файл уходит во «Входящие конфликты» целиком: формат новее, чем понимает сборка
+ * (ADR-003: такие файлы не перезаписываем), или вложенность глубже MAX_DEPTH.
+ */
 export class MergeRefused extends Error {
-  readonly version: number
-  constructor(version: number) {
-    super(`Файл в формате v${version}, эта версия хаба понимает только v${SCHEMA_VERSION}: слияние невозможно.`)
+  /** Версия формата, если отказ из-за неё; иначе null. */
+  readonly version: number | null
+  constructor(message: string, version: number | null = null) {
+    super(message)
     this.name = 'MergeRefused'
     this.version = version
   }
 }
 
+const tooDeep = () => new MergeRefused(`Слияние: вложенность данных глубже ${MAX_DEPTH} уровней.`)
+
 /**
  * Слить мою версию файла с удалённой относительно базовой копии.
- * base === undefined — базы нет (файл создан с обеих сторон независимо): любое расхождение — конфликт,
- * элементы массивов с id объединяются.
+ * base === undefined — базы нет (файл создан с обеих сторон независимо): поле, которое есть только с одной
+ * стороны, берётся; разные значения с двух сторон — конфликт (кроме служебных меток); элементы id-массивов
+ * объединяются.
  */
 export function merge(base: JsonObject | undefined, local: JsonObject, remote: JsonObject): MergeResult {
   for (const side of [base, local, remote]) {
     if (side === undefined) continue
     if (!isObject(side)) throw new TypeError('Слияние: файл данных должен быть JSON-объектом')
     const v = side.schemaVersion
-    if (typeof v === 'number' && v > SCHEMA_VERSION) throw new MergeRefused(v)
+    if (typeof v === 'number' && v > SCHEMA_VERSION) {
+      throw new MergeRefused(`Файл в формате v${v}, эта версия хаба понимает только v${SCHEMA_VERSION}: слияние невозможно.`, v)
+    }
+    if (depthExceeds(side)) throw tooDeep()
   }
   const conflicts: MergeConflict[] = []
   const merged = mergeObject(base, local, remote, [], conflicts)
@@ -72,9 +92,16 @@ function mergeObject(base: JsonObject | undefined, local: JsonObject, remote: Js
   return out
 }
 
+// Вызывается только для полей верхнего уровня и полей элементов id-массивов (вложенные объекты — скаляры),
+// поэтому SERVICE_TIMES действуют ровно там.
 function mergeValue(key: string, base: Json | undefined, local: Json | undefined, remote: Json | undefined, path: MergePath, conflicts: MergeConflict[]): Json | undefined {
+  if (idArrays(base, local, remote)) {
+    // Отсутствующий ключ = пустой массив. Если после слияния пусто, а с одной из сторон ключа не было, — ключа нет.
+    const absent = local === undefined || remote === undefined
+    const v = mergeIdArray((base ?? []) as JsonObject[], (local ?? []) as JsonObject[], (remote ?? []) as JsonObject[], path, conflicts)
+    return v.length === 0 && absent ? undefined : v
+  }
   if (equal(local, remote)) return clone(local)
-  if (idArrays(base, local, remote)) return mergeIdArray(base as JsonObject[] | undefined, local as JsonObject[], remote as JsonObject[], path, conflicts)
   if (equal(base, local)) return clone(remote)
   if (equal(base, remote)) return clone(local)
   if (SERVICE_TIMES.has(key)) {
@@ -85,38 +112,64 @@ function mergeValue(key: string, base: Json | undefined, local: Json | undefined
   return clone(remote)
 }
 
-function mergeIdArray(base: JsonObject[] | undefined, local: JsonObject[], remote: JsonObject[], path: MergePath, conflicts: MergeConflict[]): Json[] {
-  const baseById = byId(base ?? [])
+function mergeIdArray(base: JsonObject[], local: JsonObject[], remote: JsonObject[], path: MergePath, conflicts: MergeConflict[]): Json[] {
+  // Изменение только с одной стороны (включая перестановку) берём целиком.
+  if (equal(local, remote) || equal(base, remote)) return clone(local)
+  if (equal(base, local)) return clone(remote)
+  const baseById = byId(base)
   const localById = byId(local)
   const remoteById = byId(remote)
-  const out: Json[] = []
-  const take = (id: string) => {
+  const out: { id: string; v: Json }[] = []
+  const take = (id: string): Json | undefined => {
     const b = baseById.get(id)
     const l = localById.get(id)
     const r = remoteById.get(id)
     const p = [...path, id]
-    if (l && r) {
-      out.push(mergeObject(b, l, r, p, conflicts))
-    } else if (b) {
-      // Удалено с одной стороны (с обеих — сюда не попадаем: id нет ни в local, ни в remote).
-      const kept = (l ?? r) as JsonObject
-      if (equal(b, kept)) return
-      conflicts.push({ kind: 'element', path: p, deletedBy: l ? 'remote' : 'local', base: clone(b), local: clone(l), remote: clone(r) })
-      out.push(clone(kept))
-    } else {
-      out.push(clone((l ?? r) as JsonObject))
-    }
+    if (l && r) return mergeObject(b, l, r, p, conflicts)
+    if (!b) return clone((l ?? r) as JsonObject)
+    // Удалено с одной стороны (с обеих — сюда не попадаем: id нет ни в local, ни в remote).
+    const kept = (l ?? r) as JsonObject
+    if (equal(b, kept)) return undefined
+    conflicts.push({ kind: 'element', path: p, deletedBy: l ? 'remote' : 'local', base: clone(b), local: clone(l), remote: clone(r) })
+    return clone(kept)
   }
-  for (const e of remote) take(e.id as string)
-  for (const e of local) if (!remoteById.has(e.id as string)) take(e.id as string)
-  return out
+  // 1. Удалённый порядок.
+  for (const e of remote) {
+    const id = e.id as string
+    const v = take(id)
+    if (v !== undefined) out.push({ id, v })
+  }
+  // 2. Удалено на сервере, изменено у меня — на прежнее место: после ближайшего предшественника из базы, который остался.
+  base.forEach((e, i) => {
+    const id = e.id as string
+    if (remoteById.has(id) || !localById.has(id)) return
+    const v = take(id)
+    if (v === undefined) return
+    let at = 0
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = out.findIndex((x) => x.id === base[j]!.id)
+      if (prev >= 0) {
+        at = prev + 1
+        break
+      }
+    }
+    out.splice(at, 0, { id, v })
+  })
+  // 3. Новые у меня — в конец, в моём порядке.
+  for (const e of local) {
+    const id = e.id as string
+    if (!remoteById.has(id) && !baseById.has(id)) out.push({ id, v: take(id) as Json })
+  }
+  return out.map((x) => x.v)
 }
 
-/** Массив сливается по id, только если на всех сторонах, где он есть, это массив объектов с уникальным строковым id. */
+/**
+ * Массив сливается по id, только если на всех сторонах, где ключ есть, это массив объектов с уникальным
+ * строковым id. Отсутствие ключа с любой стороны — пустой массив.
+ */
 function idArrays(...sides: (Json | undefined)[]): boolean {
   const present = sides.filter((s) => s !== undefined)
-  // База может отсутствовать; local и remote должны быть массивами.
-  if (!Array.isArray(sides[1]) || !Array.isArray(sides[2])) return false
+  if (present.length === 0) return false
   return present.every((s) => {
     if (!Array.isArray(s)) return false
     const ids = new Set<string>()
@@ -135,6 +188,7 @@ function byId(arr: JsonObject[]): Map<string, JsonObject> {
 /** Более поздний момент из двух ISO-строк; undefined, если одна из сторон не момент (удалена или не разбирается). */
 function laterTime(local: Json | undefined, remote: Json | undefined): string | undefined {
   if (typeof local !== 'string' || typeof remote !== 'string') return undefined
+  if (!ISO_MOMENT.test(local) || !ISO_MOMENT.test(remote)) return undefined
   const l = Date.parse(local)
   const r = Date.parse(remote)
   if (Number.isNaN(l) || Number.isNaN(r)) return undefined
@@ -159,12 +213,25 @@ function put(o: JsonObject, k: string, v: Json): void {
 }
 
 /** Равенство по содержимому; порядок ключей объекта не важен, порядок массива важен. */
-export function equal(a: Json | undefined, b: Json | undefined): boolean {
+export function equal(a: Json | undefined, b: Json | undefined, depth = 1): boolean {
   if (a === b) return true
-  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((x, i) => equal(x, b[i]))
+  if (depth > MAX_DEPTH) throw tooDeep()
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((x, i) => equal(x, b[i], depth + 1))
   if (isObject(a) && isObject(b)) {
     const ka = Object.keys(a)
-    return ka.length === Object.keys(b).length && ka.every((k) => hasOwn(b, k) && equal(a[k], b[k]))
+    return ka.length === Object.keys(b).length && ka.every((k) => hasOwn(b, k) && equal(a[k], b[k], depth + 1))
+  }
+  return false
+}
+
+/** Глубже MAX_DEPTH? Обход без рекурсии, чтобы сама проверка не упала на злом файле. */
+function depthExceeds(root: Json): boolean {
+  const stack: [Json, number][] = [[root, 1]]
+  while (stack.length) {
+    const [v, d] = stack.pop()!
+    if (typeof v !== 'object' || v === null) continue
+    if (d > MAX_DEPTH) return true
+    for (const x of Array.isArray(v) ? v : Object.values(v)) stack.push([x, d + 1])
   }
   return false
 }
