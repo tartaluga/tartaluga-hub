@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
-import { Link, NavLink, Outlet } from 'react-router'
-import { ChartBar, GitBranch, Lightbulb, ShieldCheck, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
+import { Link, NavLink, Outlet, useLocation } from 'react-router'
+import { ChartBar, GearSix, Lightbulb, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { Visor } from '../components/Visor'
 import { ThemeSwitch } from '../components/ThemeSwitch'
@@ -8,7 +8,7 @@ import { SyncIndicator } from '../components/SyncIndicator'
 import { SecurityBanner } from '../components/SecurityBanner'
 import { BranchBanner } from '../components/BranchBanner'
 import { Login } from '../screens/Login'
-import { MAIN, useSession } from './session'
+import { useSession } from './session'
 import { buildLibrary } from '../data/projects'
 import css from './Shell.module.css'
 
@@ -21,12 +21,15 @@ const NAV: { to: string; label: string; icon: Icon; count?: keyof Counts }[] = [
   { to: '/stats', label: 'Статистика', icon: ChartBar },
 ]
 
+/** Экраны телефона, в шапке которых шестерёнка настроек (макет: «Сегодня» и «Проекты»). */
+const GEAR_SCREENS = ['/', '/projects']
+
 export function Shell() {
+  const { pathname } = useLocation()
   const phase = useSession((s) => s.phase)
   const sync = useSession((s) => s.sync)
   const boot = useSession((s) => s.boot)
   const signOut = useSession((s) => s.signOut)
-  const branch = useSession((s) => s.branch)
   const files = useSession((s) => s.files)
   // Счётчики в боковой панели, как в макете: проекты без архива и идеи.
   const counts = useMemo<Counts>(
@@ -77,34 +80,29 @@ export function Shell() {
           ))}
         </nav>
         <div className={css.sideFoot}>
-          <NavLink to="/branches" className={({ isActive }) => (isActive ? `${css.branch} ${css.active}` : css.branch)} title="Ветки репо данных">
-            <GitBranch size={18} aria-hidden />
-            <span className="mono">{branch}</span>
+          <NavLink to="/settings" className={({ isActive }) => (isActive ? `${css.link} ${css.active}` : css.link)}>
+            <GearSix size={20} aria-hidden />
+            <span>Настройки</span>
+            <span className={css.navDot} aria-hidden />
           </NavLink>
           <SyncIndicator />
           <div className={css.footRow}>
             <ThemeSwitch />
-            <div className={css.footActions}>
-              <Link to="/security" className={css.signOut} title="Ключи и входы" aria-label="Ключи и входы">
-                <ShieldCheck size={18} aria-hidden />
-              </Link>
-              <button type="button" className={css.signOut} onClick={() => void signOut()} title="Выйти: завершить сессию и стереть данные с этого устройства" aria-label="Выйти">
-                <SignOut size={18} aria-hidden />
-              </button>
-            </div>
+            <button type="button" className={css.signOut} onClick={() => void signOut()} title="Выйти: завершить сессию и стереть данные с этого устройства" aria-label="Выйти">
+              <SignOut size={18} aria-hidden />
+            </button>
           </div>
         </div>
       </aside>
 
       <main className={css.main}>
-        <div className={css.mobileTop}>
-          <Link to="/branches" className={css.mobileIcon} data-draft={branch !== MAIN || undefined} aria-label={`Ветки, открыта ${branch}`}>
-            <GitBranch size={22} aria-hidden />
-          </Link>
-          <Link to="/security" className={css.mobileIcon} aria-label="Ключи и входы">
-            <ShieldCheck size={22} aria-hidden />
-          </Link>
-        </div>
+        {GEAR_SCREENS.includes(pathname) && (
+          <div className={css.mobileTop}>
+            <Link to="/settings" className={css.mobileIcon} aria-label="Настройки">
+              <GearSix size={22} aria-hidden />
+            </Link>
+          </div>
+        )}
         <BranchBanner />
         <SecurityBanner />
         <Outlet />

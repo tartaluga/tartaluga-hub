@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { useSession, type Remote } from './session'
 import { ApiError, type Me } from '../lib/api'
 import { EditConflict } from '../data/editProject'
+import { addTag, moveTag, recolorTag, renameTag, setAbandonedDays } from '../components/TagEditor.model'
 import { getCachedFiles, getCurrentBranch, putCachedFiles, wipeDevice } from '../lib/localdb'
 
 const ME: Me = {
@@ -490,5 +491,90 @@ describe('лог через saveProject', () => {
     await Promise.all([first, second, third])
     expect(r.writes).toHaveLength(2)
     expect(data().log.map((e: { text: string }) => e.text)).toEqual(['один', 'два', 'три'])
+  })
+})
+
+describe('правка настроек (saveSettings)', () => {
+  const settings = (over: object = {}) =>
+    JSON.stringify({ schemaVersion: 1, tags: [{ id: 'web', name: 'веб', color: '#9184d9', extra: 'x' }], future: { a: 1 }, ...over })
+  const data = () => JSON.parse(useSession.getState().files.find((f) => f.path === 'settings.json')!.text)
+  const setup = (over: object = {}) => {
+    const blobs: Record<string, string> = { s1: settings(over) }
+    const r = fakeRemote([{ path: 'settings.json', sha: 's1' }], blobs)
+    useSession.setState({ remote: r.remote })
+    return { ...r, blobs }
+  }
+
+  it('пишет от известного sha; незнакомые поля файла и тегов остаются', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    await useSession.getState().saveSettings(addTag('хобби', '#d472b2'))
+    await useSession.getState().saveSettings(setAbandonedDays(21))
+    expect(r.writes).toEqual(['put main settings.json', 'put main settings.json'])
+    expect(data()).toEqual({
+      schemaVersion: 1,
+      abandonedAfterDays: 21,
+      future: { a: 1 },
+      tags: [
+        { id: 'web', name: 'веб', color: '#9184d9', extra: 'x' },
+        { id: 'hobbi', name: 'хобби', color: '#d472b2' },
+      ],
+    })
+    expect((await getCachedFiles('main')).find((f) => f.path === 'settings.json')!.text).toContain('hobbi')
+  })
+
+  it('файла нет — создаётся с правкой', async () => {
+    const r = fakeRemote([], {})
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    await useSession.getState().saveSettings(addTag('веб', '#9184d9'))
+    expect(r.writes).toEqual(['put main settings.json'])
+    expect(data()).toEqual({ schemaVersion: 1, tags: [{ id: 'veb', name: 'веб', color: '#9184d9' }] })
+  })
+
+  it('правка без изменений не пишет', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    await useSession.getState().saveSettings(recolorTag('web', '#9184d9'))
+    expect(r.writes).toEqual([])
+  })
+
+  it('файл изменили в другом месте — правка накладывается на свежую версию', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    r.blobs.ext = settings({ abandonedAfterDays: 30 })
+    r.trees.main = [{ path: 'settings.json', sha: 'ext' }]
+    await useSession.getState().saveSettings(renameTag('web', 'сайты'))
+    expect(r.writes).toEqual(['put main settings.json', 'put main settings.json'])
+    expect(data()).toMatchObject({ abandonedAfterDays: 30, tags: [{ id: 'web', name: 'сайты', extra: 'x' }] })
+  })
+
+  it('правки идут по очереди, каждая — от результата предыдущей', async () => {
+    setup()
+    await useSession.getState().refresh()
+    const s = useSession.getState()
+    await Promise.all([s.saveSettings(addTag('а', '#6fc2b4')), s.saveSettings(addTag('б', '#d9b36a')), s.saveSettings(moveTag('web', 2))])
+    expect(data().tags.map((t: { name: string }) => t.name)).toEqual(['а', 'б', 'веб'])
+  })
+
+  it('битый файл не перезаписывается', async () => {
+    const r = setup({ tags: 'не массив' })
+    await useSession.getState().refresh()
+    await expect(useSession.getState().saveSettings(setAbandonedDays(5))).rejects.toThrow(/не читается/)
+    expect(r.writes).toEqual([])
+  })
+
+  it('файл новой версии формата не перезаписывается', async () => {
+    const r = setup({ schemaVersion: 2 })
+    await useSession.getState().refresh()
+    await expect(useSession.getState().saveSettings(setAbandonedDays(5))).rejects.toThrow(/v2/)
+    expect(r.writes).toEqual([])
+  })
+
+  it('результат, не проходящий схему, не отправляется', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    await expect(useSession.getState().saveSettings(recolorTag('web', 'red'))).rejects.toThrow(/схемой/)
+    expect(r.writes).toEqual([])
   })
 })

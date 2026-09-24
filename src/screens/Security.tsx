@@ -19,7 +19,9 @@ import {
 import { addPasskey, passkeysSupported } from '../lib/passkey'
 import { useFreshAction } from '../app/useFreshAction'
 import { wipeDevice } from '../lib/localdb'
+import { Link } from 'react-router'
 import css from './Panel.module.css'
+import own from './Security.module.css'
 
 const when = (ms: number) => new Date(ms).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const how = (method: string) => (method === 'passkey' ? 'по ключу' : method === 'github' ? 'через GitHub' : '')
@@ -96,7 +98,9 @@ export function Security() {
 
   return (
     <section className={css.page}>
-      <div className="label">Безопасность</div>
+      <nav className={`label ${own.crumb}`} aria-label="Путь">
+        <Link to="/settings">Настройки</Link> · Безопасность
+      </nav>
       <h1 className={css.title}>Ключи и входы</h1>
 
       {error && (

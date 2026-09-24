@@ -1,0 +1,239 @@
+.page {
+  display: grid;
+  gap: var(--space-6);
+  max-width: 1280px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.back {
+  display: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-left: calc(-1 * var(--space-2));
+  border-radius: var(--radius-md);
+  color: var(--accent);
+}
+
+.title {
+  margin: var(--space-2) 0 0;
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.problem,
+.error {
+  margin: 0;
+  color: var(--magenta);
+}
+
+.problem {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--magenta);
+  border-radius: var(--radius-md);
+  background: var(--magenta-soft);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 560px) minmax(0, 1fr);
+  gap: var(--space-7) 64px;
+  align-items: start;
+}
+
+.column {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.label {
+  margin: 0;
+  font: 500 12px/1.2 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hint {
+  margin-left: var(--space-2);
+  font: 400 12px/1.2 var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+/* Порог заброшенности: −/число/+ и подпись справа, как в макете. */
+.days {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.stepper button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 100%;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.stepper button:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.stepper button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stepper input {
+  width: 48px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 18px;
+  text-align: center;
+}
+
+.stepper input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.daysText {
+  flex: 1 1 240px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.days .error {
+  flex-basis: 100%;
+}
+
+/* Тема: в настройках — с подписями. */
+.theme {
+  display: flex;
+}
+
+.theme button {
+  display: flex;
+  gap: var(--space-2);
+  width: auto;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: 14px;
+}
+
+/* Вход в раздел: иконка, название с пояснением, значение, стрелка. */
+.entry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 56px;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.entry > svg:first-child {
+  color: var(--text-muted);
+}
+
+.entry > svg:last-child {
+  color: var(--text-faint);
+}
+
+.entry:hover > svg:last-child,
+.entry:focus-visible > svg:last-child {
+  color: var(--accent);
+}
+
+.entryText {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  font-size: 15px;
+}
+
+.entrySub {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.badge {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--magenta-soft);
+  color: var(--magenta);
+  font: 500 12px/1.2 var(--font-mono);
+  text-align: center;
+}
+
+.branch {
+  color: var(--text-muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+.branch[data-draft] {
+  color: var(--status-paused);
+}
+
+@media (max-width: 1023px) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .page {
+    gap: var(--space-5);
+  }
+
+  .back {
+    display: grid;
+  }
+
+  .title {
+    margin: 0;
+    font-size: 26px;
+  }
+
+  .hint {
+    display: none;
+  }
+}

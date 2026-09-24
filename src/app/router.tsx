@@ -1,4 +1,4 @@
-import { createHashRouter } from 'react-router'
+import { createHashRouter, redirect, type RouteObject } from 'react-router'
 import { Shell } from './Shell'
 import { Today } from '../screens/Today'
 import { Projects } from '../screens/Projects'
@@ -8,9 +8,9 @@ import { Stats } from '../screens/Stats'
 import { NotFound } from '../screens/NotFound'
 import { Security } from '../screens/Security'
 import { Branches } from '../screens/Branches'
+import { Settings } from '../screens/Settings'
 
-// Hash-роутинг (#/projects): адреса не зависят от сервера статики (ADR-006).
-export const router = createHashRouter([
+export const routes: RouteObject[] = [
   {
     element: <Shell />,
     children: [
@@ -19,9 +19,16 @@ export const router = createHashRouter([
       { path: 'projects/:slug', element: <Project /> },
       { path: 'ideas', element: <Ideas /> },
       { path: 'stats', element: <Stats /> },
-      { path: 'security', element: <Security /> },
-      { path: 'branches', element: <Branches /> },
+      { path: 'settings', element: <Settings /> },
+      { path: 'settings/security', element: <Security /> },
+      { path: 'settings/branches', element: <Branches /> },
+      // Старые адреса (закладки, ссылки из плашек) ведут в настройки.
+      { path: 'security', loader: () => redirect('/settings/security') },
+      { path: 'branches', loader: () => redirect('/settings/branches') },
       { path: '*', element: <NotFound /> },
     ],
   },
-])
+]
+
+// Hash-роутинг (#/projects): адреса не зависят от сервера статики (ADR-006).
+export const router = createHashRouter(routes)

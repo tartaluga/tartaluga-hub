@@ -15,6 +15,7 @@ import {
   problemFiles,
   type Branch,
 } from '../lib/api'
+import { Link } from 'react-router'
 import css from './Panel.module.css'
 import own from './Branches.module.css'
 
@@ -102,7 +103,9 @@ export function Branches() {
 
   return (
     <section className={css.page}>
-      <div className="label">Данные</div>
+      <nav className={`label ${own.crumb}`} aria-label="Путь">
+        <Link to="/settings">Настройки</Link> · Данные
+      </nav>
       <h1 className={css.title}>Ветки</h1>
       <p className={css.muted}>
         Ветка — черновик данных. Правки в ней не трогают main, пока ты её не вольёшь. Кэш и правки на устройстве у каждой ветки свои.
