@@ -95,13 +95,49 @@ describe('скалярные поля', () => {
     expect(r.merged.title).toBe('Бот 2')
   })
 
-  it('массивы без id (теги, стек) и вложенные объекты сливаются как скаляры', () => {
-    const one = merge(base, edit({ tags: ['tg', 'rust'] }), edit({ futureField: { keep: false } }))
+  it('массивы без id (стек) и вложенные объекты сливаются как скаляры', () => {
+    const one = merge(base, edit({ stack: ['ts'] }), edit({ futureField: { keep: false } }))
     expect(one.conflicts).toEqual([])
-    expect(one.merged).toMatchObject({ tags: ['tg', 'rust'], futureField: { keep: false } })
+    expect(one.merged).toMatchObject({ stack: ['ts'], futureField: { keep: false } })
 
-    const two = merge(base, edit({ tags: ['tg', 'rust'] }), edit({ tags: ['tg', 'go'] }))
-    expect(two.conflicts).toEqual([{ kind: 'field', path: ['tags'], base: ['tg'], local: ['tg', 'rust'], remote: ['tg', 'go'] }])
+    const two = merge(base, edit({ stack: ['ts'] }), edit({ stack: ['go'] }))
+    expect(two.conflicts).toEqual([{ kind: 'field', path: ['stack'], base: undefined, local: ['ts'], remote: ['go'] }])
+  })
+})
+
+describe('теги — набор (ADR-008)', () => {
+  it('добавления с двух сторон склеиваются без конфликта: удалённый порядок, мои новые в конце', () => {
+    const r = merge(base, edit({ tags: ['rust', 'tg'] }), edit({ tags: ['go', 'tg'] }))
+    expect(r.conflicts).toEqual([])
+    expect(r.merged.tags).toEqual(['go', 'tg', 'rust'])
+  })
+
+  it('удаление с любой стороны удаляет, даже если другая сторона добавила своё', () => {
+    expect(merge(base, edit({ tags: ['rust'] }), edit({ tags: ['tg', 'go'] })).merged.tags).toEqual(['go', 'rust'])
+    expect(merge(base, edit({ tags: ['tg', 'rust'] }), edit({ tags: [] })).merged.tags).toEqual(['rust'])
+  })
+
+  it('одно и то же добавлено с двух сторон — один раз; дубликаты во входе схлопываются', () => {
+    expect(merge(base, edit({ tags: ['tg', 'go'] }), edit({ tags: ['go', 'tg', 'go'] })).merged.tags).toEqual(['go', 'tg'])
+  })
+
+  it('ключ отсутствует = пустой набор; пустой итог без ключа, если его не было с одной из сторон', () => {
+    expect(merge(base, edit({ tags: undefined }), edit({ tags: ['tg', 'go'] })).merged.tags).toEqual(['go'])
+    expect('tags' in merge(base, edit({ tags: undefined }), base).merged).toBe(false)
+    expect(merge(edit({ tags: undefined }), edit({ tags: ['a'] }), edit({ tags: ['b'] })).merged.tags).toEqual(['b', 'a'])
+  })
+
+  it('не массив строк (чужие данные) — обычное правило скаляра с конфликтом', () => {
+    const r = merge(base, edit({ tags: ['tg', 'rust'] }), edit({ tags: 'go' }))
+    expect(r.conflicts).toEqual([{ kind: 'field', path: ['tags'], base: ['tg'], local: ['tg', 'rust'], remote: 'go' }])
+    const mixed = merge(base, edit({ tags: ['tg', 'rust'] }), edit({ tags: ['tg', 5] }))
+    expect(mixed.conflicts).toEqual([{ kind: 'field', path: ['tags'], base: ['tg'], local: ['tg', 'rust'], remote: ['tg', 5] }])
+  })
+
+  it('поле tags внутри элементов массивов не набор', () => {
+    const t = (tags: string[]) => edit({ tasks: [{ ...T[0], tags }, T[1]] })
+    const r = merge(t(['a']), t(['a', 'b']), t(['a', 'c']))
+    expect(r.conflicts).toEqual([{ kind: 'field', path: ['tasks', A, 'tags'], base: ['a'], local: ['a', 'b'], remote: ['a', 'c'] }])
   })
 })
 
