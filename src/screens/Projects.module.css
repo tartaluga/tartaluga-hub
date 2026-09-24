@@ -16,6 +16,7 @@
 
 .title {
   margin: var(--space-2) 0 0;
+  outline: none;
   font-size: clamp(32px, 5vw, 48px);
   font-weight: 600;
   line-height: 1.05;
@@ -445,7 +446,7 @@
 }
 
 .badge[data-tone='quiet'] {
-  color: #e2c27d;
+  color: var(--status-paused);
 }
 
 .badge[data-tone='hot'] {
@@ -511,8 +512,9 @@
   color: var(--text-muted);
 }
 
-/* Точка статуса у названия и подпись срока — только в строке на телефоне. */
+/* Точка статуса у названия, статус словом (для скринридера) и подпись срока — только в строке на телефоне. */
 .rowDot,
+.rowStatus,
 .rowMeta {
   display: none;
 }
@@ -691,6 +693,18 @@
   .rowDot,
   .rowMeta {
     display: inline-block;
+  }
+
+  /* Невидим глазу, но читается скринридером. */
+  .rowStatus {
+    display: block;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .rowDot {

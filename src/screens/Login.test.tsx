@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { Login } from './Login'
 
 // Поддержку ключей в node не определить: подменяем, чтобы проверить оба вида экрана.
 const mockSupported = vi.fn(() => true)
@@ -11,7 +12,6 @@ vi.mock('../lib/passkey', () => ({
 
 async function render(canPasskey: boolean, reason?: string) {
   mockSupported.mockReturnValue(canPasskey)
-  const { Login } = await import('./Login')
   return renderToStaticMarkup(<Login reason={reason} />)
 }
 
