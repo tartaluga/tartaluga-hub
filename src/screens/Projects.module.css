@@ -238,9 +238,140 @@
   cursor: pointer;
 }
 
-.empty {
-  margin: var(--space-5) 0;
+/* ---------- Пустые состояния ---------- */
+
+/* Проектов нет совсем. ПК (6-8a): сетка из четырёх мест, первое — плитка «Первый проект». */
+.first {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.firstIntro,
+.firstButton {
+  display: none;
+}
+
+/* Не в main на ПК — одна приглушённая строка о ветке над сеткой, без значка и пояснения. */
+.first[data-branch] .firstIntro {
+  display: block;
+}
+
+.first[data-branch] .firstIcon,
+.first[data-branch] .firstText {
+  display: none;
+}
+
+.first[data-branch] .firstHeading {
+  font-size: 15px;
+  font-weight: 400;
   color: var(--text-muted);
+}
+
+.slots {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.slot {
+  min-height: 228px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
+  opacity: 0.6;
+}
+
+.firstCard {
+  width: 100%;
+  height: 100%;
+  min-height: 228px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--glow);
+  transition: background 0.2s;
+}
+
+.firstCard:hover {
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
+}
+
+.firstCardTitle {
+  margin-top: var(--space-2);
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.firstCardText {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.firstIcon {
+  color: var(--accent);
+}
+
+.firstHeading {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.firstText {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* Под фильтр ничего не попало: тот же язык, по центру. */
+.none {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-6) auto;
+  max-width: 420px;
+  text-align: center;
+}
+
+.none .firstIcon {
+  margin-bottom: var(--space-1);
+}
+
+.noneReset {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  margin-top: var(--space-3);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.noneReset:hover {
+  background: var(--accent-soft);
 }
 
 /* ---------- Плитки ---------- */
@@ -373,10 +504,25 @@
   text-overflow: ellipsis;
 }
 
-.when {
+.when,
+.rowMeta {
   flex: none;
   font: 400 13px/1 var(--font-mono);
   color: var(--text-muted);
+}
+
+/* Точка статуса у названия и подпись срока — только в строке на телефоне. */
+.rowDot,
+.rowMeta {
+  display: none;
+}
+
+.rowMeta[data-tone='quiet'] {
+  color: var(--status-paused);
+}
+
+.rowMeta[data-tone='hot'] {
+  color: var(--magenta);
 }
 
 .next {
@@ -498,8 +644,139 @@
     flex: none;
   }
 
+  /* ---------- Список строк вместо сетки (макет 4-2b) ---------- */
+
   .grid {
     grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    margin-top: 0;
+  }
+
+  .tile {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  .tile:hover {
+    box-shadow: none;
+    transform: none;
+  }
+
+  .tile:hover .name {
+    color: var(--accent);
+  }
+
+  .coverWrap {
+    flex: none;
+    width: 76px;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .pill,
+  .badge,
+  .when,
+  .progress > span {
+    display: none;
+  }
+
+  .rowDot,
+  .rowMeta {
+    display: inline-block;
+  }
+
+  .rowDot {
+    flex: none;
+    align-self: center;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--dot, #8a8fa6);
+  }
+
+  .body {
+    min-width: 0;
+    gap: 6px;
+    padding: 0;
+  }
+
+  .titleRow {
+    justify-content: flex-start;
+    gap: var(--space-2);
+  }
+
+  .name {
+    flex: 1;
+    font-size: 17px;
+  }
+
+  .next {
+    font-size: 14px;
+  }
+
+  .progress {
+    margin-top: 0;
+    padding-top: 2px;
+  }
+
+  .track {
+    height: 2px;
+  }
+
+  /* ---------- Пустая библиотека (макет 6-8d): блок у нижнего края, кнопка во всю ширину ---------- */
+
+  .first {
+    min-height: calc(100dvh - 280px);
+    align-content: end;
+    gap: var(--space-4);
+  }
+
+  .slots {
+    display: none;
+  }
+
+  .firstIntro,
+  .first[data-branch] .firstIntro {
+    display: grid;
     gap: var(--space-3);
+  }
+
+  .first[data-branch] .firstIcon,
+  .first[data-branch] .firstText {
+    display: block;
+  }
+
+  .first[data-branch] .firstHeading {
+    font-size: 22px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .firstButton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: 52px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: 17px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .firstButton:hover {
+    background: var(--accent-soft);
   }
 }

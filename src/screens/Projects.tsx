@@ -1,8 +1,9 @@
 // «Проекты» по макету 2a: переключатель статусов со счётчиками, поиск за иконкой, сортировка справа, сетка плиток.
+// На телефоне (< 768 px) те же плитки CSS перестраивает в список строк (4-2b). Пустые состояния — по 6-8a/6-8d.
 // Фильтр живёт в адресе, поэтому «назад» из карточки возвращает ту же выборку.
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { ArrowsDownUp, MagnifyingGlass, Plus, Warning, X } from '@phosphor-icons/react'
+import { ArrowsDownUp, MagnifyingGlass, Plus, PlusCircle, SquaresFour, Warning, X } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { NewProjectDialog } from '../components/NewProjectDialog'
@@ -59,6 +60,11 @@ export function Projects() {
     if (filter.query) set({ query: '' })
   }
 
+  function resetFilter() {
+    setSearchOpen(false)
+    setParams({}, { replace: true })
+  }
+
   return (
     <section className={css.page}>
       <header className={css.head}>
@@ -92,9 +98,12 @@ export function Projects() {
                 <MagnifyingGlass size={20} aria-hidden />
               </button>
             ))}
-          <button type="button" className={css.create} onClick={() => setCreating(true)}>
-            <Plus size={18} aria-hidden /> Новый проект
-          </button>
+          {/* Без проектов создавать предлагает само пустое состояние, как в макете 6-8a/6-8d. */}
+          {lib.projects.length > 0 && (
+            <button type="button" className={css.create} onClick={() => setCreating(true)}>
+              <Plus size={18} aria-hidden /> Новый проект
+            </button>
+          )}
         </div>
       </header>
       <NewProjectDialog open={creating} onClose={() => setCreating(false)} />
@@ -137,7 +146,7 @@ export function Projects() {
                 </button>
               ))}
               {filtered && (
-                <button type="button" className={css.reset} onClick={() => setParams({}, { replace: true })}>
+                <button type="button" className={css.reset} onClick={resetFilter}>
                   <X size={14} aria-hidden /> Сбросить
                 </button>
               )}
@@ -147,14 +156,9 @@ export function Projects() {
       )}
 
       {lib.projects.length === 0 ? (
-        <p className={css.empty}>
-          {branch === MAIN ? 'Проектов пока нет.' : `В ветке «${branch}» проектов нет.`} Начни с кнопки «Новый проект».
-        </p>
+        <EmptyLibrary branch={branch} onCreate={() => setCreating(true)} />
       ) : shown.length === 0 ? (
-        <p className={css.empty}>
-          Ничего не нашлось.{' '}
-          {filter.query && !filter.statuses.includes('archived') && counts.archived > 0 && 'Архив в поиск не входит — открой вкладку «Архив».'}
-        </p>
+        <NothingFound filter={filter} archived={counts.archived} onReset={resetFilter} />
       ) : (
         <ul className={css.grid}>
           {shown.map((p) => (
@@ -184,6 +188,56 @@ export function Projects() {
   )
 }
 
+/** Проектов нет совсем. ПК: плитка «Первый проект» и пустые места сетки (6-8a). Телефон: блок внизу экрана и кнопка (6-8d). */
+function EmptyLibrary({ branch, onCreate }: { branch: string; onCreate: () => void }) {
+  const onMain = branch === MAIN
+  return (
+    <div className={css.first} data-branch={onMain ? undefined : ''}>
+      <div className={css.firstIntro}>
+        <SquaresFour size={40} className={css.firstIcon} aria-hidden />
+        <h2 className={css.firstHeading}>{onMain ? 'Проектов пока нет' : `В ветке «${branch}» проектов нет`}</h2>
+        <p className={css.firstText}>Начни с названия — остальное добавишь потом.</p>
+      </div>
+      <ul className={css.slots}>
+        <li>
+          <button type="button" className={css.firstCard} onClick={onCreate}>
+            <PlusCircle size={26} aria-hidden />
+            <span className={css.firstCardTitle}>Первый проект</span>
+            <span className={css.firstCardText}>Достаточно названия. Остальное — статус, шаг, ссылки — можно добавить потом.</span>
+          </button>
+        </li>
+        {[1, 2, 3].map((i) => (
+          <li key={i} className={css.slot} aria-hidden />
+        ))}
+      </ul>
+      <button type="button" className={css.firstButton} onClick={onCreate}>
+        <Plus size={20} aria-hidden /> Первый проект
+      </button>
+    </div>
+  )
+}
+
+/** Проекты есть, но под фильтр не попал ни один. */
+function NothingFound({ filter, archived, onReset }: { filter: Filter; archived: number; onReset: () => void }) {
+  const onlyStatus = filter.query === '' && filter.tags.length === 0 && filter.statuses.length > 0
+  const hint =
+    filter.query && !filter.statuses.includes('archived') && archived > 0
+      ? 'Архив в поиск не входит — открой вкладку «Архив».'
+      : onlyStatus
+        ? 'Проектов с этим статусом нет.'
+        : 'Попробуй другой запрос или сбрось фильтры.'
+  return (
+    <div className={css.none} role="status">
+      <MagnifyingGlass size={32} className={css.firstIcon} aria-hidden />
+      <h2 className={css.firstHeading}>Ничего не нашлось</h2>
+      <p className={css.firstText}>{hint}</p>
+      <button type="button" className={css.noneReset} onClick={onReset}>
+        <X size={16} aria-hidden /> Сбросить фильтры
+      </button>
+    </div>
+  )
+}
+
 function Tile({ p }: { p: ProjectView }) {
   const d = p.data
   const pct = p.progress === null ? 0 : Math.round(p.progress * 100)
@@ -210,11 +264,20 @@ function Tile({ p }: { p: ProjectView }) {
       </div>
       <div className={css.body}>
         <div className={css.titleRow}>
+          <span className={css.rowDot} aria-hidden />
           <h2 className={css.name} title={d.title}>
             {d.title}
           </h2>
           <span className={css.when} title="Последняя активность">
             {activityText(p.activityDays)}
+          </span>
+          {/* Строка на телефоне: обложка мала для подписей, поэтому срок или тишина — здесь, вместо «когда». */}
+          <span
+            className={css.rowMeta}
+            data-tone={hot ? 'hot' : p.silentDays !== null ? 'quiet' : undefined}
+            title={hot ? `Срок: ${hot.title}` : p.silentDays !== null ? 'В логе давно нет записей' : 'Последняя активность'}
+          >
+            {hot ? deadlineText(hot) : activityText(p.activityDays)}
           </span>
         </div>
         <p className={css.next} data-empty={!d.nextStep || undefined} title={d.nextStep || undefined}>
