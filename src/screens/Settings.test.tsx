@@ -7,6 +7,7 @@ import { Shell } from '../app/Shell'
 import { Settings } from './Settings'
 import { Security } from './Security'
 import { Branches } from './Branches'
+import { BranchBanner } from '../components/BranchBanner'
 
 const settingsFile = (over: object = {}) => ({
   path: 'settings.json',
@@ -71,6 +72,11 @@ describe('навигация', () => {
     expect(gear(render(<Shell />, '/projects'))).toBe(1)
     expect(gear(render(<Shell />, '/ideas'))).toBe(0)
     expect(gear(render(<Shell />, '/settings'))).toBe(0)
+  })
+
+  it('плашка ветки ведёт сразу в настройки, без перенаправления', () => {
+    setState({ branch: 'draft' })
+    expect(render(<BranchBanner />, '/')).toContain('href="/settings/branches"')
   })
 
   it('в боковой панели — пункт «Настройки», без отдельных ссылок на ветки и ключи', () => {

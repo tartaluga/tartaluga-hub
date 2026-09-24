@@ -1,7 +1,7 @@
 // Список тегов из settings.json: переименование на месте, цвет из палитры, удаление, новый тег,
 // порядок — перетаскиванием за ручку (мышь и палец) или стрелками ↑/↓ с клавиатуры на ручке.
 // Пока запись идёт, список показывает результат сразу; ошибка возвращает то, что в файле.
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { DotsSixVertical, Plus, Trash } from '@phosphor-icons/react'
 import { InlineText } from './InlineText'
 import { errorText } from '../app/session'
@@ -47,6 +47,20 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
   const [drag, setDrag] = useState<Drag | null>(null)
   const pending = useRef(0)
   const list = useRef<HTMLUListElement>(null)
+  // Куда вернуть фокус после перерисовки: перестановка переносит строку в DOM, и браузер снимает с неё фокус.
+  const refocus = useRef<{ id: string; target: 'handle' | 'swatch' } | null>(null)
+
+  useEffect(() => {
+    const want = refocus.current
+    if (!want) return
+    const row = [...(list.current?.querySelectorAll<HTMLElement>('[data-tag-row]') ?? [])].find((r) => r.dataset.tagRow === want.id)
+    const el = row?.querySelector<HTMLElement>(want.target === 'handle' ? '[data-handle]' : '[data-swatch]')
+    // Фокус возвращаем, только если он потерялся (ушёл на body), — не отнимаем его у другого поля.
+    const lost = !document.activeElement || document.activeElement === document.body
+    if (el && lost) el.focus()
+    // Пока запись идёт, список ещё раз перерисуется из файла — до тех пор следим за фокусом.
+    if (pending.current === 0) refocus.current = null
+  })
   const view = optimistic ?? tags
 
   /**
@@ -101,13 +115,11 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
   }
 
   function onHandleKey(e: KeyboardEvent, id: string, index: number) {
-    if (e.key === 'ArrowUp' && index > 0) {
-      e.preventDefault()
-      void run(moveTag(id, index - 1))
-    } else if (e.key === 'ArrowDown' && index < view.length - 1) {
-      e.preventDefault()
-      void run(moveTag(id, index + 1))
-    }
+    const to = e.key === 'ArrowUp' ? index - 1 : e.key === 'ArrowDown' ? index + 1 : -1
+    if (to < 0 || to >= view.length) return
+    e.preventDefault()
+    refocus.current = { id, target: 'handle' }
+    void run(moveTag(id, to))
   }
 
   // Линия «сюда встанет»: перед строкой others[index] или после последней.
@@ -124,7 +136,7 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
           return (
             <li
               key={tag.id}
-              data-tag-row
+              data-tag-row={tag.id}
               className={css.item}
               data-dragging={dragging || undefined}
               data-drop={tag.id === dropBefore ? 'before' : tag.id === dropAfter ? 'after' : undefined}
@@ -135,6 +147,7 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
                   <button
                     type="button"
                     className={css.handle}
+                    data-handle
                     aria-label={`Порядок тега «${tag.name}»: перетащи или нажми ↑/↓`}
                     title="Перетащи, чтобы поменять порядок"
                     onPointerDown={(e) => startDrag(e, tag.id, i)}
@@ -149,6 +162,7 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
                 <button
                   type="button"
                   className={css.swatch}
+                  data-swatch
                   style={{ background: tag.color }}
                   disabled={readOnly}
                   aria-label={`Цвет тега «${tag.name}»`}
@@ -176,7 +190,11 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
                   className={css.palette}
                   role="radiogroup"
                   aria-label={`Цвет тега «${tag.name}»`}
-                  onKeyDown={(e) => e.key === 'Escape' && setPaletteFor(null)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Escape') return
+                    refocus.current = { id: tag.id, target: 'swatch' }
+                    setPaletteFor(null)
+                  }}
                 >
                   {PALETTE.map((p) => (
                     <button
