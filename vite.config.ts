@@ -16,8 +16,8 @@ export default defineConfig({
       injectRegister: false,
       includeAssets: ['favicon.svg'],
       manifest: {
-        name: 'Tartaluga Hub',
-        short_name: 'Tartaluga',
+        name: 'Тарталуга Хаб',
+        short_name: 'Тарталуга',
         description: 'Личный хаб проектов',
         lang: 'ru',
         start_url: '/',
@@ -25,7 +25,10 @@ export default defineConfig({
         display: 'standalone',
         background_color: '#161826',
         theme_color: '#161826',
-        icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }],
+        icons: [
+          { src: 'icons/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: 'icons/icon-maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
+        ],
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,woff2,png,webp}'],
