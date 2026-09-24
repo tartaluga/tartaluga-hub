@@ -1,6 +1,7 @@
 // Трёхстороннее слияние файлов данных (ADR-004, шаг 3): база / моё / удалённое.
 // Чистые функции: без сети, IndexedDB и мутаций входа. Работают на уже разобранном JSON
-// (битый JSON и версию формата проверяет parseFile в model.ts).
+// (битый JSON проверяет parseFile в model.ts). Файлы сырые: без подстановок и без выдачи id —
+// инварианты формата v2 держит normalizeProject после слияния (ADR-009, п. 6).
 //
 // Правила:
 // - поле изменилось с одной стороны — берём изменение; с обеих одинаково — ок; по-разному — конфликт поля;
@@ -14,7 +15,7 @@
 //   с обеих — порядок удалённый, новые элементы с моей стороны в конец в моём порядке;
 // - вложенность глубже MAX_DEPTH — отказ MergeRefused (рекурсия не должна падать с RangeError);
 // - всё остальное (незнакомые поля, массивы без id, вложенные объекты) — как скаляры, сравнение по содержимому.
-import { SCHEMA_VERSION } from './model'
+import { SCHEMA_VERSIONS, type FileKind } from './model'
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type JsonObject = { [key: string]: Json }
@@ -62,15 +63,16 @@ const tooDeep = () => new MergeRefused(`Слияние: вложенность �
  * Слить мою версию файла с удалённой относительно базовой копии.
  * base === undefined — базы нет (файл создан с обеих сторон независимо): поле, которое есть только с одной
  * стороны, берётся; разные значения с двух сторон — конфликт (кроме служебных меток); элементы id-массивов
- * объединяются.
+ * объединяются. kind — вид файла: от него зависит, какую версию формата эта сборка понимает (ADR-009, п. 4).
  */
-export function merge(base: JsonObject | undefined, local: JsonObject, remote: JsonObject): MergeResult {
+export function merge(kind: FileKind, base: JsonObject | undefined, local: JsonObject, remote: JsonObject): MergeResult {
+  const known = SCHEMA_VERSIONS[kind]
   for (const side of [base, local, remote]) {
     if (side === undefined) continue
     if (!isObject(side)) throw new TypeError('Слияние: файл данных должен быть JSON-объектом')
     const v = side.schemaVersion
-    if (typeof v === 'number' && v > SCHEMA_VERSION) {
-      throw new MergeRefused(`Файл в формате v${v}, эта версия хаба понимает только v${SCHEMA_VERSION}: слияние невозможно.`, v)
+    if (typeof v === 'number' && v > known) {
+      throw new MergeRefused(`Файл в формате v${v}, эта версия хаба понимает только v${known}: слияние невозможно.`, v)
     }
     if (depthExceeds(side)) throw tooDeep()
   }
