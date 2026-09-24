@@ -101,6 +101,11 @@ function mergeValue(key: string, base: Json | undefined, local: Json | undefined
     const v = mergeIdArray((base ?? []) as JsonObject[], (local ?? []) as JsonObject[], (remote ?? []) as JsonObject[], path, conflicts)
     return v.length === 0 && absent ? undefined : v
   }
+  if (path.length === 1 && SET_FIELDS.has(key)) {
+    // Отсутствующий ключ = пустой набор (как у id-массивов).
+    const set = mergeStringSet(base, local, remote)
+    if (set) return set.length === 0 && (local === undefined || remote === undefined) ? undefined : set
+  }
   if (equal(local, remote)) return clone(local)
   if (equal(base, local)) return clone(remote)
   if (equal(base, remote)) return clone(local)
@@ -110,6 +115,25 @@ function mergeValue(key: string, base: Json | undefined, local: Json | undefined
   }
   conflicts.push({ kind: 'field', path, base: clone(base), local: clone(local), remote: clone(remote) })
   return clone(remote)
+}
+
+// ADR-008: теги — набор, а не значение. Добавленное с любой стороны сохраняется, удалённое с любой — удаляется;
+// порядок — удалённый, мои новые в конце. Не массив строк (чужие данные) — обычное правило скаляра.
+const SET_FIELDS = new Set(['tags'])
+
+function mergeStringSet(base: Json | undefined, local: Json | undefined, remote: Json | undefined): string[] | undefined {
+  const strings = (v: Json | undefined): string[] | undefined =>
+    v === undefined ? [] : Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : undefined
+  const b = strings(base)
+  const l = strings(local)
+  const r = strings(remote)
+  if (!b || !l || !r) return undefined
+  const inB = new Set(b)
+  const inL = new Set(l)
+  const inR = new Set(r)
+  const out = r.filter((x) => !(inB.has(x) && !inL.has(x)))
+  for (const x of l) if (!inR.has(x) && !inB.has(x)) out.push(x)
+  return [...new Set(out)]
 }
 
 function mergeIdArray(base: JsonObject[], local: JsonObject[], remote: JsonObject[], path: MergePath, conflicts: MergeConflict[]): Json[] {
