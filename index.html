@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
-    <meta name="theme-color" content="#161826" />
+    <!-- Следует системной теме (media). Ручное переключение темы в приложении (ThemeSwitch)
+         эти теги не трогает: они не входят в запись карточки C7. -->
+    <meta name="theme-color" content="#161826" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f3f2f9" media="(prefers-color-scheme: light)" />
     <meta name="referrer" content="no-referrer" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Tartaluga Hub</title>
