@@ -1,0 +1,229 @@
+.editor {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.item {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.item:hover,
+.item:focus-within {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.item[data-dragging] {
+  z-index: 2;
+  background: var(--surface-2);
+  border-color: var(--line);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.35);
+  opacity: 0.95;
+}
+
+/* Линия «сюда встанет» — как в макете: акцентная черта между строками. */
+.item[data-drop]::before {
+  content: '';
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.item[data-drop='before']::before {
+  top: -4px;
+}
+
+.item[data-drop='after']::before {
+  bottom: -4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 0 var(--space-2);
+}
+
+.handle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 36px;
+  margin-right: calc(-1 * var(--space-2));
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+}
+
+.handle:hover,
+.handle:focus-visible {
+  color: var(--text);
+}
+
+.item[data-dragging] .handle {
+  cursor: grabbing;
+}
+
+.swatch {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.swatch[aria-expanded='true'] {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.swatch:disabled {
+  cursor: default;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  padding-left: var(--space-2);
+  font-size: 15px;
+}
+
+.remove {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.item:hover .remove,
+.item:focus-within .remove {
+  opacity: 1;
+}
+
+.remove:hover,
+.remove:focus-visible {
+  color: var(--magenta);
+}
+
+/* На сенсорных экранах наведения нет — кнопка видна всегда. */
+@media (hover: none) {
+  .remove {
+    opacity: 1;
+  }
+}
+
+.palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  width: fit-content;
+  margin: 0 0 var(--space-2) calc(var(--space-2) + 28px);
+  padding: var(--space-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.paletteItem {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.paletteItem[aria-checked='true'] {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.add,
+.adding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+
+.add {
+  cursor: pointer;
+}
+
+.add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.adding > :last-child {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) 0;
+}
+
+.empty {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.error {
+  margin: 0;
+  color: var(--magenta);
+}
+
+@media (max-width: 767px) {
+  .item {
+    border-radius: 0;
+    border-width: 0 0 1px;
+    border-bottom-color: var(--line);
+  }
+
+  .item:hover,
+  .item:focus-within {
+    background: none;
+    border-color: transparent transparent var(--line);
+  }
+
+  .row {
+    min-height: 52px;
+  }
+
+  .add {
+    border: 0;
+    padding: 0 var(--space-2);
+    color: var(--accent);
+  }
+}

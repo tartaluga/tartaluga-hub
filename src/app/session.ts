@@ -13,7 +13,9 @@ import {
   wipeDevice,
   type CachedFile,
 } from '../lib/localdb'
-import { parseFile, serialize } from '../data/model'
+import { parseFile, SCHEMA_VERSION, serialize } from '../data/model'
+import { validateSettings } from '../schema/validators.js'
+import type { SettingsChange, SettingsData } from '../components/TagEditor.model'
 import { applyEdit, EditConflict, mergePatch, rebaseEdit, type ProjectPatch } from '../data/editProject'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
@@ -73,6 +75,11 @@ interface Session {
    * уходят следующим одним коммитом. Если файл успели изменить — слияние по полям и одна повторная попытка.
    */
   saveProject(slug: string, patch: ProjectPatch): Promise<void>
+  /**
+   * Правка settings.json. Правки идут по очереди; каждая применяется к версии файла на момент записи,
+   * а если файл успели изменить — к свежей версии, один раз. Файла нет — он создаётся.
+   */
+  saveSettings(change: SettingsChange): Promise<void>
 }
 
 // Идущие сверки по веткам: повторный refresh той же ветки ждёт текущий, другой ветки — идёт параллельно.
@@ -223,7 +230,64 @@ ${path}`
     batch.done.then(cleanup, cleanup)
     return batch.done
   },
+
+  saveSettings(change) {
+    const branch = get().branch
+    const key = `${branch}
+${SETTINGS}`
+    const before = saving.get(key) ?? Promise.resolve()
+    const done = before.catch(() => undefined).then(() => writeSettings(branch, change))
+    saving.set(key, done)
+    const cleanup = () => {
+      if (saving.get(key) === done) saving.delete(key)
+    }
+    done.then(cleanup, cleanup)
+    return done
+  },
 }))
+
+const SETTINGS = 'settings.json'
+
+/** Текущий settings.json открытой ветки. Файла нет — пустые настройки без sha (запись создаст файл). */
+function currentSettings(branch: string): { sha?: string; data: SettingsData } {
+  const state = useSession.getState()
+  if (state.branch !== branch) throw new ApiError(0, 'network', 'Открыта другая ветка — правка не отправлена')
+  const file = state.files.find((f) => f.path === SETTINGS)
+  if (!file) return { data: { schemaVersion: SCHEMA_VERSION, tags: [] } }
+  const parsed = parseFile(SETTINGS, file.sha, file.text)
+  // Битый файл не перезаписываем: в нём могут быть данные, которые человек правил руками.
+  if (!parsed.ok) throw new ApiError(422, 'validation', `settings.json не читается: ${parsed.error}. Поправь файл в репо данных.`)
+  if (parsed.readOnly) throw new ApiError(422, 'validation', parsed.reason)
+  return { sha: file.sha, data: structuredClone(parsed.data) as SettingsData }
+}
+
+async function writeSettings(branch: string, change: SettingsChange): Promise<void> {
+  const { remote } = useSession.getState()
+  const put = async (from: { sha?: string; data: SettingsData }) => {
+    const before = serialize(from.data)
+    const next = change(structuredClone(from.data))
+    if (!validateSettings(next)) throw new ApiError(422, 'validation', 'Настройки не прошли проверку схемой — не сохранено')
+    const text = serialize(next)
+    if (text === before) return // правка ничего не меняет (например, уже применена)
+    const { sha } = await remote.putFile(branch, SETTINGS, text, from.sha)
+    await applyWrite(branch, [{ path: SETTINGS, sha, text }], [])
+  }
+  const base = currentSettings(branch)
+  try {
+    await put(base)
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 409)) throw e
+    // Файл изменили (или создали) в другом месте: дочитываем свежую версию и накладываем правку на неё.
+    await useSession.getState().refresh()
+    let fresh = currentSettings(branch)
+    if (fresh.sha === base.sha) {
+      await useSession.getState().refresh()
+      fresh = currentSettings(branch)
+    }
+    if (fresh.sha === base.sha) throw e
+    await put(fresh)
+  }
+}
 
 /** Текущая версия файла проекта на экране: разобранные данные и sha, от которого считается правка. */
 function currentProject(branch: string, path: string) {

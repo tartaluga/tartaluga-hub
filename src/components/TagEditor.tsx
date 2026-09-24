@@ -1,0 +1,232 @@
+// Список тегов из settings.json: переименование на месте, цвет из палитры, удаление, новый тег,
+// порядок — перетаскиванием за ручку (мышь и палец) или стрелками ↑/↓ с клавиатуры на ручке.
+// Пока запись идёт, список показывает результат сразу; ошибка возвращает то, что в файле.
+import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { DotsSixVertical, Plus, Trash } from '@phosphor-icons/react'
+import { InlineText } from './InlineText'
+import { errorText } from '../app/session'
+import {
+  addTag,
+  dropIndex,
+  moveTag,
+  nextColor,
+  PALETTE,
+  recolorTag,
+  removeTag,
+  renameTag,
+  TAG_NAME_MAX,
+  tagNameError,
+  type SettingsChange,
+  type Tag,
+} from './TagEditor.model'
+import css from './TagEditor.module.css'
+
+interface Props {
+  tags: Tag[]
+  /** Файл нельзя править (битый или новой версии) — только показываем. */
+  readOnly?: boolean
+  /** Сколько проектов помечено каждым тегом (id → число) — для предупреждения при удалении. */
+  usage?: Record<string, number>
+  onChange(change: SettingsChange): Promise<void>
+}
+
+interface Drag {
+  id: string
+  from: number
+  y0: number
+  dy: number
+  mids: number[]
+  index: number
+}
+
+export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
+  const [optimistic, setOptimistic] = useState<Tag[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [paletteFor, setPaletteFor] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [drag, setDrag] = useState<Drag | null>(null)
+  const pending = useRef(0)
+  const list = useRef<HTMLUListElement>(null)
+  const view = optimistic ?? tags
+
+  /**
+   * Применить правку к экрану сразу и отправить; null — получилось, строка — ошибка.
+   * inline — ошибку покажет поле ввода, под списком её не дублируем.
+   */
+  async function run(change: SettingsChange, inline = false): Promise<string | null> {
+    setError(null)
+    setOptimistic((prev) => change({ schemaVersion: 1, tags: prev ?? tags }).tags)
+    pending.current++
+    try {
+      await onChange(change)
+      return null
+    } catch (e) {
+      const text = errorText(e)
+      if (!inline) setError(text)
+      return text
+    } finally {
+      if (--pending.current === 0) setOptimistic(null)
+    }
+  }
+
+  function remove(tag: Tag) {
+    const n = usage[tag.id] ?? 0
+    const warn = n ? `\n\nИм помечено проектов: ${n}. В проектах метка останется, но без названия и цвета.` : ''
+    if (!window.confirm(`Удалить тег «${tag.name}»?${warn}`)) return
+    void run(removeTag(tag.id))
+  }
+
+  function startDrag(e: PointerEvent<HTMLButtonElement>, id: string, from: number) {
+    if (readOnly || e.button !== 0) return
+    const rows = [...(list.current?.querySelectorAll<HTMLElement>('[data-tag-row]') ?? [])]
+    const mids = rows.map((r) => {
+      const b = r.getBoundingClientRect()
+      return b.top + b.height / 2
+    })
+    e.currentTarget.setPointerCapture(e.pointerId)
+    e.preventDefault()
+    setPaletteFor(null)
+    setDrag({ id, from, y0: e.clientY, dy: 0, mids, index: from })
+  }
+
+  function moveDrag(e: PointerEvent) {
+    if (!drag) return
+    setDrag({ ...drag, dy: e.clientY - drag.y0, index: dropIndex(drag.mids, drag.from, e.clientY) })
+  }
+
+  function endDrag(commit: boolean) {
+    if (!drag) return
+    setDrag(null)
+    if (commit && drag.index !== drag.from) void run(moveTag(drag.id, drag.index))
+  }
+
+  function onHandleKey(e: KeyboardEvent, id: string, index: number) {
+    if (e.key === 'ArrowUp' && index > 0) {
+      e.preventDefault()
+      void run(moveTag(id, index - 1))
+    } else if (e.key === 'ArrowDown' && index < view.length - 1) {
+      e.preventDefault()
+      void run(moveTag(id, index + 1))
+    }
+  }
+
+  // Линия «сюда встанет»: перед строкой others[index] или после последней.
+  const others = drag ? view.filter((t) => t.id !== drag.id) : []
+  const dropBefore = drag && drag.index !== drag.from ? others[drag.index]?.id : undefined
+  const dropAfter = drag && drag.index !== drag.from && drag.index >= others.length ? others.at(-1)?.id : undefined
+
+  return (
+    <div className={css.editor}>
+      {view.length === 0 && !adding && <p className={css.empty}>Тегов пока нет.</p>}
+      <ul className={css.list} ref={list}>
+        {view.map((tag, i) => {
+          const dragging = drag?.id === tag.id
+          return (
+            <li
+              key={tag.id}
+              data-tag-row
+              className={css.item}
+              data-dragging={dragging || undefined}
+              data-drop={tag.id === dropBefore ? 'before' : tag.id === dropAfter ? 'after' : undefined}
+              style={dragging ? { transform: `translateY(${drag.dy}px)` } : undefined}
+            >
+              <div className={css.row}>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    className={css.handle}
+                    aria-label={`Порядок тега «${tag.name}»: перетащи или нажми ↑/↓`}
+                    title="Перетащи, чтобы поменять порядок"
+                    onPointerDown={(e) => startDrag(e, tag.id, i)}
+                    onPointerMove={moveDrag}
+                    onPointerUp={() => endDrag(true)}
+                    onPointerCancel={() => endDrag(false)}
+                    onKeyDown={(e) => onHandleKey(e, tag.id, i)}
+                  >
+                    <DotsSixVertical size={18} aria-hidden />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={css.swatch}
+                  style={{ background: tag.color }}
+                  disabled={readOnly}
+                  aria-label={`Цвет тега «${tag.name}»`}
+                  aria-expanded={paletteFor === tag.id}
+                  onClick={() => setPaletteFor(paletteFor === tag.id ? null : tag.id)}
+                />
+                <div className={css.name}>
+                  <InlineText
+                    value={tag.name}
+                    label={`Название тега «${tag.name}»`}
+                    placeholder="Название"
+                    maxLength={TAG_NAME_MAX}
+                    readOnly={readOnly}
+                    onSave={async (text) => tagNameError(text, view, tag.id) ?? run(renameTag(tag.id, text), true)}
+                  />
+                </div>
+                {!readOnly && (
+                  <button type="button" className={css.remove} aria-label={`Удалить тег «${tag.name}»`} title="Удалить тег" onClick={() => remove(tag)}>
+                    <Trash size={16} aria-hidden />
+                  </button>
+                )}
+              </div>
+              {paletteFor === tag.id && !readOnly && (
+                <div
+                  className={css.palette}
+                  role="radiogroup"
+                  aria-label={`Цвет тега «${tag.name}»`}
+                  onKeyDown={(e) => e.key === 'Escape' && setPaletteFor(null)}
+                >
+                  {PALETTE.map((p) => (
+                    <button
+                      key={p.color}
+                      type="button"
+                      role="radio"
+                      aria-checked={tag.color.toLowerCase() === p.color}
+                      aria-label={p.label}
+                      title={p.label}
+                      className={css.paletteItem}
+                      style={{ background: p.color }}
+                      onClick={() => {
+                        setPaletteFor(null)
+                        void run(recolorTag(tag.id, p.color))
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+
+      {!readOnly &&
+        (adding ? (
+          <div className={css.adding}>
+            <Plus size={16} aria-hidden />
+            <InlineText
+              value=""
+              label="Название нового тега"
+              placeholder="Название тега"
+              maxLength={TAG_NAME_MAX}
+              autoOpen
+              onClose={() => setAdding(false)}
+              onSave={async (text) => tagNameError(text, view) ?? run(addTag(text, nextColor(view)), true)}
+            />
+          </div>
+        ) : (
+          <button type="button" className={css.add} onClick={() => setAdding(true)}>
+            <Plus size={16} aria-hidden />
+            Новый тег
+          </button>
+        ))}
+
+      {error && (
+        <p className={css.error} role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
