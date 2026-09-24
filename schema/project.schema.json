@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://tartaluga.github.io/schema/project.schema.json",
   "title": "Project",
-  "description": "Один проект хаба. Файл projects/<slug>.json. Незнакомые поля разрешены и должны сохраняться всеми, кто пишет файл (ADR-003).",
+  "description": "Один проект хаба. Файл projects/<slug>.json, schemaVersion 1 или 2 (ADR-009). Незнакомые поля разрешены и должны сохраняться всеми, кто пишет файл (ADR-003).",
   "type": "object",
   "required": ["schemaVersion", "slug", "title", "status", "createdAt", "updatedAt"],
   "properties": {
@@ -60,8 +60,28 @@
     "updatedAt": {
       "description": "Время последней правки. Любой пишущий (приложение, скилл) обновляет его.",
       "$ref": "defs.schema.json#/$defs/dateTime"
+    },
+    "doneAt": {
+      "description": "v2. Когда проект перешёл в «готово». Допустимо только при status = done. Хаб ставит при переходе в «готово» и удаляет при уходе из него; у проектов, закрытых до v2, поля нет (ADR-009).",
+      "$ref": "defs.schema.json#/$defs/dateTime"
+    },
+    "fromIdea": {
+      "description": "v2. Идея, из которой сделан проект («Сделать проектом»). Есть только у таких проектов, не меняется (ADR-009).",
+      "type": "object",
+      "required": ["ideaId", "text", "createdAt"],
+      "properties": {
+        "ideaId": { "$ref": "defs.schema.json#/$defs/ulid" },
+        "text": { "$ref": "defs.schema.json#/$defs/nonEmptyText" },
+        "createdAt": { "$ref": "defs.schema.json#/$defs/dateTime" }
+      }
     }
   },
+  "allOf": [
+    {
+      "if": { "type": "object", "required": ["doneAt"] },
+      "then": { "type": "object", "properties": { "status": { "const": "done" } } }
+    }
+  ],
   "$defs": {
     "link": {
       "type": "object",
@@ -97,6 +117,11 @@
         "id": { "$ref": "defs.schema.json#/$defs/ulid" },
         "title": { "type": "string", "$ref": "defs.schema.json#/$defs/nonEmptyText", "maxLength": 120 },
         "due": { "$ref": "defs.schema.json#/$defs/date" }
+      },
+      "not": {
+        "description": "У вехи первого срока (originalDue) не бывает (ADR-009).",
+        "type": "object",
+        "required": ["originalDue"]
       }
     },
     "task": {
@@ -111,8 +136,13 @@
           "description": "Id вехи, к которой относится задача. Если вехи с таким id нет, задача считается без вехи.",
           "$ref": "defs.schema.json#/$defs/ulid"
         },
-        "doneAt": { "$ref": "defs.schema.json#/$defs/dateTime" }
-      }
+        "doneAt": { "$ref": "defs.schema.json#/$defs/dateTime" },
+        "originalDue": {
+          "description": "v2. Первый срок задачи для статистики «в срок / перенесено». Допустимо только при due. Хаб копирует due при первом задании срока и дальше не меняет; если поля нет, первым сроком считается due (ADR-009).",
+          "$ref": "defs.schema.json#/$defs/date"
+        }
+      },
+      "dependentRequired": { "originalDue": ["due"] }
     },
     "logEntry": {
       "type": "object",

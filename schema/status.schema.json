@@ -72,6 +72,10 @@
       "required": ["fullName"],
       "properties": {
         "fullName": { "type": "string" },
+        "defaultBranch": {
+          "description": "Ветка по умолчанию репо («Последний коммит · main»).",
+          "type": "string"
+        },
         "commits": {
           "description": "До 5 последних коммитов ветки по умолчанию, новые первыми.",
           "type": "array",
@@ -101,6 +105,10 @@
           "type": "object",
           "properties": {
             "environment": { "type": "string" },
+            "creator": {
+              "description": "Логин автора деплоя, напр. netlify[bot]. Известных ботов интерфейс сопоставляет с провайдером, иначе показывает environment.",
+              "type": "string"
+            },
             "state": { "type": "string" },
             "url": { "type": ["string", "null"] },
             "at": { "$ref": "defs.schema.json#/$defs/dateTime" }

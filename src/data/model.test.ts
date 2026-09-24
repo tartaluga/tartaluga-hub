@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { nowIso, parseFile, parseLocalDate, serialize, slugify, uniqueSlug } from './model'
+import { firstDue, nowIso, parseFile, parseLocalDate, SCHEMA_VERSIONS, serialize, slugify, uniqueSlug } from './model'
 import type { Project } from '../schema/types'
 
 const project = (extra: object = {}) =>
@@ -39,9 +39,50 @@ describe('parseFile', () => {
     expect(parseFile('projects/y.json', 'sha', project())).toMatchObject({ ok: false, error: expect.stringContaining('slug') })
   })
 
-  it('версия формата выше нашей — только чтение', () => {
-    const p = parseFile('projects/x.json', 'sha', project({ schemaVersion: 2 }))
-    expect(p).toMatchObject({ ok: true, readOnly: true, reason: expect.stringContaining('v2') })
+  it('версии по видам: проект v2, идея и настройки v1 (ADR-009)', () => {
+    expect(SCHEMA_VERSIONS).toEqual({ project: 2, idea: 1, settings: 1 })
+  })
+
+  it('проект v1 читается и правится', () => {
+    expect(parseFile('projects/x.json', 'sha', project({ schemaVersion: 1 }))).toMatchObject({ ok: true, readOnly: false })
+  })
+
+  it('проект v2 с новыми полями читается и правится', () => {
+    const p = parseFile(
+      'projects/x.json',
+      'sha',
+      project({
+        schemaVersion: 2,
+        status: 'done',
+        doneAt: '2026-09-24T10:00:00+03:00',
+        fromIdea: { ideaId: '01K5TQ0000000000000000E001', text: 'идея', createdAt: '2026-09-20T10:00:00+03:00' },
+        tasks: [{ id: '01K5TQ0000000000000000C001', title: 'т', done: false, due: '2026-10-02', originalDue: '2026-10-01' }],
+      }),
+    )
+    expect(p).toMatchObject({ ok: true, readOnly: false })
+  })
+
+  it('проект v3 — только чтение с понятной причиной', () => {
+    const p = parseFile('projects/x.json', 'sha', project({ schemaVersion: 3 }))
+    expect(p).toMatchObject({ ok: true, readOnly: true, reason: expect.stringContaining('v3') })
+    if (!p.ok || !p.readOnly) throw new Error('ожидалось только чтение')
+    expect(p.reason).toContain('проектов только до v2')
+  })
+
+  it('идея и настройки v2 — только чтение: для них знакома только v1', () => {
+    const idea = JSON.stringify({ schemaVersion: 2, id: '01K5TQ0000000000000000E001', text: 'т', createdAt: '2026-09-23T01:00:00Z' })
+    const pi = parseFile('ideas/01K5TQ0000000000000000E001.json', 's', idea)
+    expect(pi).toMatchObject({ ok: true, readOnly: true, reason: expect.stringContaining('идей только до v1') })
+    const ps = parseFile('settings.json', 's', JSON.stringify({ schemaVersion: 2, tags: [] }))
+    expect(ps).toMatchObject({ ok: true, readOnly: true, reason: expect.stringContaining('настроек только до v1') })
+  })
+
+  it('чтение v1 файл не переписывает: ни originalDue, ни версии', () => {
+    const task = { id: '01K5TQ0000000000000000C001', title: 'т', done: false, due: '2026-10-01' }
+    const p = parseFile('projects/x.json', 'sha', project({ tasks: [task] }))
+    if (!p.ok) throw new Error(p.error)
+    expect(p.data.schemaVersion).toBe(1)
+    expect(p.data.tasks).toEqual([task])
   })
 
   it('задачи без id (ручная правка) получают id и помечаются', () => {
@@ -82,5 +123,17 @@ describe('slug', () => {
 
   it('занятый slug получает номер', () => {
     expect(uniqueSlug('Бот', ['bot', 'bot-2'])).toBe('bot-3')
+  })
+})
+
+describe('firstDue', () => {
+  it('originalDue, если есть', () => {
+    expect(firstDue({ due: '2026-10-05', originalDue: '2026-10-01' })).toBe('2026-10-01')
+  })
+  it('без originalDue (v1, скилл, ручная правка) — due', () => {
+    expect(firstDue({ due: '2026-10-05' })).toBe('2026-10-05')
+  })
+  it('без срока — нет первого срока', () => {
+    expect(firstDue({})).toBeUndefined()
   })
 })
