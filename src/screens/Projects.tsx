@@ -1,7 +1,7 @@
 // «Проекты» по макету 2a: переключатель статусов со счётчиками, поиск за иконкой, сортировка справа, сетка плиток.
 // На телефоне (< 768 px) те же плитки CSS перестраивает в список строк (4-2b). Пустые состояния — по 6-8a/6-8d.
 // Фильтр живёт в адресе, поэтому «назад» из карточки возвращает ту же выборку.
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { ArrowsDownUp, MagnifyingGlass, Plus, PlusCircle, SquaresFour, Warning, X } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
@@ -49,6 +49,7 @@ export function Projects() {
   const counts = useMemo(() => countByStatus(lib.projects), [lib])
   const [searchOpen, setSearchOpen] = useState(filter.query !== '')
   const [creating, setCreating] = useState(false)
+  const titleRef = useRef<HTMLHeadingElement>(null)
 
   const set = (next: Partial<Filter>) => setParams(filterToParams({ ...filter, ...next }), { replace: true })
   const total = lib.projects.length - counts.archived
@@ -60,9 +61,11 @@ export function Projects() {
     if (filter.query) set({ query: '' })
   }
 
+  // Кнопка сброса после него исчезает; фокус — на заголовок экрана, а не на body.
   function resetFilter() {
     setSearchOpen(false)
     setParams({}, { replace: true })
+    titleRef.current?.focus()
   }
 
   return (
@@ -73,7 +76,9 @@ export function Projects() {
             {total} {plural(total, 'проект', 'проекта', 'проектов')}
             {counts.active > 0 && ` · ${counts.active} в работе`}
           </div>
-          <h1 className={css.title}>Проекты</h1>
+          <h1 className={css.title} ref={titleRef} tabIndex={-1}>
+            Проекты
+          </h1>
         </div>
         <div className={css.headActions}>
           {lib.projects.length > 0 &&
@@ -189,7 +194,7 @@ export function Projects() {
 }
 
 /** Проектов нет совсем. ПК: плитка «Первый проект» и пустые места сетки (6-8a). Телефон: блок внизу экрана и кнопка (6-8d). */
-function EmptyLibrary({ branch, onCreate }: { branch: string; onCreate: () => void }) {
+export function EmptyLibrary({ branch, onCreate }: { branch: string; onCreate: () => void }) {
   const onMain = branch === MAIN
   return (
     <div className={css.first} data-branch={onMain ? undefined : ''}>
@@ -218,7 +223,7 @@ function EmptyLibrary({ branch, onCreate }: { branch: string; onCreate: () => vo
 }
 
 /** Проекты есть, но под фильтр не попал ни один. */
-function NothingFound({ filter, archived, onReset }: { filter: Filter; archived: number; onReset: () => void }) {
+export function NothingFound({ filter, archived, onReset }: { filter: Filter; archived: number; onReset: () => void }) {
   const onlyStatus = filter.query === '' && filter.tags.length === 0 && filter.statuses.length > 0
   const hint =
     filter.query && !filter.statuses.includes('archived') && archived > 0
@@ -227,10 +232,12 @@ function NothingFound({ filter, archived, onReset }: { filter: Filter; archived:
         ? 'Проектов с этим статусом нет.'
         : 'Попробуй другой запрос или сбрось фильтры.'
   return (
-    <div className={css.none} role="status">
+    <div className={css.none}>
       <MagnifyingGlass size={32} className={css.firstIcon} aria-hidden />
       <h2 className={css.firstHeading}>Ничего не нашлось</h2>
-      <p className={css.firstText}>{hint}</p>
+      <p className={css.firstText} role="status">
+        {hint}
+      </p>
       <button type="button" className={css.noneReset} onClick={onReset}>
         <X size={16} aria-hidden /> Сбросить фильтры
       </button>
@@ -265,6 +272,8 @@ function Tile({ p }: { p: ProjectView }) {
       <div className={css.body}>
         <div className={css.titleRow}>
           <span className={css.rowDot} aria-hidden />
+          {/* На телефоне плашки статуса нет, точка — только цвет; статус словом для скринридера. */}
+          <span className={css.rowStatus}>{STATUS_LABEL[d.status as Status]}</span>
           <h2 className={css.name} title={d.title}>
             {d.title}
           </h2>

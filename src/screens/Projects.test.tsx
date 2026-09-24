@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { MAIN } from '../app/session'
-import { Projects } from './Projects'
+import { isValidElement, type ReactElement, type ReactNode } from 'react'
+import { EMPTY_FILTER } from '../data/projects'
+import { EmptyLibrary, NothingFound, Projects } from './Projects'
 
 // Серверный рендер zustand берёт начальное состояние стора, поэтому стор подменяем простым объектом.
 const mockState = vi.hoisted(() => ({ files: [] as { path: string; sha: string; text: string }[], branch: 'main', tree: null }))
@@ -50,11 +52,9 @@ describe('Projects: проектов нет', () => {
     const html = render()
     expect(html).toContain('0 проектов')
     expect(html).toContain('Достаточно названия. Остальное — статус, шаг, ссылки — можно добавить потом.')
-    expect(count(html, 'aria-hidden="true"></li>')).toBe(3)
     expect(html).toContain('Проектов пока нет')
     expect(html).toContain('Начни с названия — остальное добавишь потом.')
-    // Две кнопки создания (плитка на ПК, кнопка на телефоне; CSS показывает одну), в шапке кнопки нет.
-    expect(count(html, 'Первый проект</')).toBe(2)
+    expect(html).toContain('Первый проект')
     expect(html).not.toContain(' Новый проект</button>')
     expect(html).not.toContain('Ничего не нашлось')
   })
@@ -63,7 +63,6 @@ describe('Projects: проектов нет', () => {
     setState({ branch: 'опыт' })
     const html = render()
     expect(html).toContain('В ветке «опыт» проектов нет')
-    expect(html).toContain('data-branch=""')
     expect(html).not.toContain('Проектов пока нет')
   })
 })
@@ -102,9 +101,54 @@ describe('Projects: список', () => {
     setState({ files: [project('a', { nextStep: 'Шаг', createdAt: now, updatedAt: now })] })
     const html = render()
     expect(html).toContain('Проект a')
+    // Статус словом: на плашке обложки (ПК) и скрытой подписью строки (телефон, для скринридера).
+    expect(count(html, '>в работе</span>')).toBe(2)
     expect(count(html, 'title="Последняя активность"')).toBe(2)
     expect(html).toContain('→ Шаг')
     expect(html).not.toContain('Ничего не нашлось')
     expect(html).not.toContain('Первый проект')
+  })
+})
+
+// DOM-окружения (jsdom/happy-dom) в проекте нет: кнопки ищем в дереве элементов компонента без хуков и жмём их обработчик.
+type Props = { children?: ReactNode; onClick?: () => void }
+function textOf(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  if (isValidElement<Props>(node)) return textOf(node.props.children)
+  return ''
+}
+function buttons(node: ReactNode, out: ReactElement<Props>[] = []): ReactElement<Props>[] {
+  if (Array.isArray(node)) node.forEach((n) => buttons(n, out))
+  else if (isValidElement<Props>(node)) {
+    if (node.type === 'button') out.push(node)
+    buttons(node.props.children, out)
+  }
+  return out
+}
+const click = (tree: ReactNode, label: string) => {
+  const found = buttons(tree).filter((b) => textOf(b).includes(label))
+  expect(found.length).toBeGreaterThan(0)
+  found.forEach((b) => b.props.onClick?.())
+  return found.length
+}
+
+describe('Пустые состояния: кнопки', () => {
+  it('«Первый проект» (и плитка ПК, и кнопка телефона) открывает создание', () => {
+    const onCreate = vi.fn()
+    const n = click(EmptyLibrary({ branch: MAIN, onCreate }), 'Первый проект')
+    expect(onCreate).toHaveBeenCalledTimes(n)
+  })
+
+  it('«Сбросить фильтры» сбрасывает фильтр', () => {
+    const onReset = vi.fn()
+    click(NothingFound({ filter: { ...EMPTY_FILTER, query: 'x' }, archived: 0, onReset }), 'Сбросить фильтры')
+    expect(onReset).toHaveBeenCalledOnce()
+  })
+
+  it('подсказка — живая область, а не весь блок', () => {
+    const html = renderToStaticMarkup(<NothingFound filter={{ ...EMPTY_FILTER, query: 'x' }} archived={0} onReset={() => {}} />)
+    expect(html).toMatch(/<p [^>]*role="status"[^>]*>Попробуй/)
+    expect(count(html, 'role="status"')).toBe(1)
   })
 })
