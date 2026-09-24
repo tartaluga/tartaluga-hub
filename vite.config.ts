@@ -16,6 +16,7 @@ export default defineConfig({
       injectRegister: false,
       includeAssets: ['favicon.svg'],
       manifest: {
+        id: '/',
         name: 'Тарталуга Хаб',
         short_name: 'Тарталуга',
         description: 'Личный хаб проектов',
@@ -26,6 +27,10 @@ export default defineConfig({
         background_color: '#161826',
         theme_color: '#161826',
         icons: [
+          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
           { src: 'icons/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
           { src: 'icons/icon-maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
         ],

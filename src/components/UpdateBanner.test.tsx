@@ -70,4 +70,22 @@ describe('UpdateBanner: плашка «Обновить»', () => {
 
     expect(() => getOptions().onRegisteredSW?.('/sw.js', undefined)).not.toThrow()
   })
+
+  it('повторная регистрация не плодит параллельные таймеры: старый гасится', async () => {
+    const { getOptions } = stubHook(false)
+    const { UpdateBanner } = await import('./UpdateBanner')
+    renderToStaticMarkup(<UpdateBanner />)
+
+    const reg1 = { update: vi.fn().mockResolvedValue(undefined) } as unknown as ServiceWorkerRegistration
+    const reg2 = { update: vi.fn().mockResolvedValue(undefined) } as unknown as ServiceWorkerRegistration
+    getOptions().onRegisteredSW?.('/sw.js', reg1)
+    expect(vi.getTimerCount()).toBe(1)
+
+    getOptions().onRegisteredSW?.('/sw.js', reg2)
+    expect(vi.getTimerCount()).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+    expect(reg1.update).not.toHaveBeenCalled()
+    expect(reg2.update).toHaveBeenCalledTimes(1)
+  })
 })
