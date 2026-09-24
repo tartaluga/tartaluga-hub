@@ -95,7 +95,7 @@ describe('buildLibrary', () => {
   })
 
   it('файл новой версии формата показывается, но помечен «только чтение»', () => {
-    const lib = buildLibrary([project('a', { schemaVersion: 2 })], TODAY)
+    const lib = buildLibrary([project('a', { schemaVersion: 3 })], TODAY)
     expect(lib.projects[0]!.readOnly).toBe(true)
   })
 })

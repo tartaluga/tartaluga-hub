@@ -2,7 +2,8 @@
 // Черновик собирается один раз на попытку создания и переиспользуется при повторе (schema/README.md, правило 6):
 // тот же путь с тем же текстом сервер считает успехом, поэтому повтор после обрыва связи не создаст дубль.
 import type { Project } from '../schema/types'
-import { nowIso, parseFile, SCHEMA_VERSION, serialize, uniqueSlug } from './model'
+import { nowIso, parseFile, SCHEMA_VERSIONS, serialize, uniqueSlug } from './model'
+import { normalizeProject } from './normalize'
 
 export interface NewProjectInput {
   title: string
@@ -26,7 +27,7 @@ export function newProjectDraft(input: NewProjectInput, takenSlugs: Iterable<str
   const slug = uniqueSlug(title, takenSlugs)
   const at = nowIso(now)
   const data: Project = {
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: SCHEMA_VERSIONS.project,
     slug,
     title,
     status: input.status,
@@ -35,7 +36,8 @@ export function newProjectDraft(input: NewProjectInput, takenSlugs: Iterable<str
     updatedAt: at,
   }
   const path = `projects/${slug}.json`
-  const text = serialize(data)
+  // Новый проект сразу в формате v2: «готово» при создании получает doneAt (ADR-009, п. 6).
+  const text = serialize(normalizeProject(undefined, data, at))
   // Сервер проверит то же самое, но так ошибка видна сразу и без сети.
   const parsed = parseFile(path, '', text)
   if (!parsed.ok) return { ok: false, error: parsed.error }

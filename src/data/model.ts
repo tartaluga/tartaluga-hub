@@ -11,12 +11,6 @@ export type FileKind = 'project' | 'idea' | 'settings'
 /** Максимальная версия формата каждого вида файлов, которую понимает эта сборка (ADR-009, п. 4). */
 export const SCHEMA_VERSIONS: Readonly<Record<FileKind, number>> = Object.freeze({ project: 2, idea: 1, settings: 1 })
 
-/**
- * @deprecated Общая версия времён v1. Оставлена, пока слияние (merge.ts) и создание проекта (newProject.ts)
- * не перешли на SCHEMA_VERSIONS по виду файла. Новому коду — SCHEMA_VERSIONS.
- */
-export const SCHEMA_VERSION = 1
-
 const KIND_LABEL: Record<FileKind, string> = { project: 'проектов', idea: 'идей', settings: 'настроек' }
 
 /** Первый срок задачи для экранов и статистики: originalDue, а в файлах v1 и правках мимо хаба — due (ADR-009, п. 5). */

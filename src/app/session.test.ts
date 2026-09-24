@@ -436,7 +436,7 @@ describe('правка проекта (saveProject)', () => {
   })
 
   it('файл с версией формата выше нашей не правится', async () => {
-    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], { a1: file({ schemaVersion: 2 }) })
+    const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], { a1: file({ schemaVersion: 3 }) })
     useSession.setState({ remote: r.remote })
     await useSession.getState().refresh()
     await expect(useSession.getState().saveProject('a', { title: 'Б' })).rejects.toThrow(/v2/)

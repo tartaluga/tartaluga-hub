@@ -11,9 +11,22 @@ describe('newProjectDraft', () => {
     expect(d.slug).toBe('bot-raspisaniya')
     expect(d.path).toBe('projects/bot-raspisaniya.json')
     const data = JSON.parse(d.text)
-    expect(data).toMatchObject({ schemaVersion: 1, slug: 'bot-raspisaniya', title: 'Бот расписания', status: 'active' })
+    expect(data).toMatchObject({ schemaVersion: 2, slug: 'bot-raspisaniya', title: 'Бот расписания', status: 'active' })
     expect(data).not.toHaveProperty('nextStep')
     expect(data.createdAt).toBe(data.updatedAt)
+  })
+
+  it('новый проект сразу v2: «готово» получает doneAt = момент создания, остальные статусы — нет (ADR-009)', () => {
+    const done = newProjectDraft(input({ status: 'done' }), [], NOW)
+    if (!done.ok) throw new Error(done.error)
+    const data = JSON.parse(done.text)
+    expect(data).toMatchObject({ schemaVersion: 2, status: 'done' })
+    expect(data.doneAt).toBe(data.createdAt)
+    for (const status of ['idea', 'active', 'paused', 'archived'] as const) {
+      const d = newProjectDraft(input({ status }), [], NOW)
+      if (!d.ok) throw new Error(d.error)
+      expect(JSON.parse(d.text), status).not.toHaveProperty('doneAt')
+    }
   })
 
   it('занятый slug — следующий свободный', () => {

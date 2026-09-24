@@ -45,7 +45,7 @@ describe('PUT /api/file', () => {
     ['битый JSON', { path: 'projects/tartaluga-hub.json', text: '{ "slug":' }, 422],
     ['нарушение схемы', { path: 'projects/tartaluga-hub.json', text: PROJECT.replace('"active"', '"wip"') }, 422],
     ['slug не совпал с файлом', { path: 'projects/other.json', text: PROJECT }, 422],
-    ['версия формата выше нашей', { path: 'projects/tartaluga-hub.json', text: PROJECT.replace('"schemaVersion": 1', '"schemaVersion": 2') }, 422],
+    ['версия формата выше нашей', { path: 'projects/tartaluga-hub.json', text: PROJECT.replace('"schemaVersion": 1', '"schemaVersion": 3') }, 422],
     ['элементы без id', { path: 'projects/tartaluga-hub.json', text: PROJECT.replace('"id": "01K5TQ0000000000000000C002", ', '') }, 422],
     ['sha не hex', { path: 'projects/tartaluga-hub.json', text: PROJECT, sha: 'zzz' }, 400],
   ])('%s → %i, в GitHub ничего не пишется', async (_name, body, status) => {
