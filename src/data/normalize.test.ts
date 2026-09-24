@@ -65,6 +65,12 @@ describe('normalizeProject: doneAt', () => {
     expect(normalizeProject(project(), project({ status: 'done' }), NOW).doneAt).toBe(NOW)
   })
 
+  it('переход в done из любого статуса, кроме done, — ставит now', () => {
+    for (const status of ['idea', 'active', 'paused', 'archived'] as const) {
+      expect(normalizeProject(project({ status }), project({ status: 'done' }), NOW).doneAt, status).toBe(NOW)
+    }
+  })
+
   it('новый проект сразу в «готово» — ставит now', () => {
     expect(normalizeProject(undefined, project({ status: 'done' }), NOW).doneAt).toBe(NOW)
   })
@@ -131,6 +137,23 @@ describe('normalizeProject: originalDue', () => {
   it('есть originalDue при due — не меняется, даже если в prev другое', () => {
     const prev = project({ tasks: [task(T1, { due: '2026-09-01', originalDue: '2026-08-01' })] })
     const out = normalizeProject(prev, project({ tasks: [task(T1, { due: '2026-10-05', originalDue: '2026-10-01' })] }), NOW)
+    expect(tasksOf(out)[0]!.originalDue).toBe('2026-10-01')
+  })
+
+  it('originalDue пустой или не строка при due — мусор не сохраняется, берётся по правилу', () => {
+    const prev = project({ tasks: [task(T1, { due: '2026-10-01' })] })
+    for (const junk of ['', 42, null, { d: 1 }]) {
+      const withPrev = normalizeProject(prev, project({ tasks: [task(T1, { due: '2026-10-15', originalDue: junk })] }), NOW)
+      expect(tasksOf(withPrev)[0]!.originalDue, JSON.stringify(junk)).toBe('2026-10-01')
+      const fresh = normalizeProject(undefined, project({ tasks: [task(T1, { due: '2026-10-15', originalDue: junk })] }), NOW)
+      expect(tasksOf(fresh)[0]!.originalDue, JSON.stringify(junk)).toBe('2026-10-15')
+      expect(validateProject(fresh)).toBe(true)
+    }
+  })
+
+  it('мусорный originalDue в prev пропускается: берётся due из prev', () => {
+    const prev = project({ tasks: [task(T1, { due: '2026-10-01', originalDue: '' })] })
+    const out = normalizeProject(prev, project({ tasks: [task(T1, { due: '2026-10-15' })] }), NOW)
     expect(tasksOf(out)[0]!.originalDue).toBe('2026-10-01')
   })
 
