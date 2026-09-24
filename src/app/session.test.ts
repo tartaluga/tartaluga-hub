@@ -549,6 +549,16 @@ describe('правка настроек (saveSettings)', () => {
     expect(data()).toMatchObject({ abandonedAfterDays: 30, tags: [{ id: 'web', name: 'сайты', extra: 'x' }] })
   })
 
+  it('на другом устройстве появился тег с тем же именем — переименование отклоняется, второй записи нет', async () => {
+    const r = setup()
+    await useSession.getState().refresh()
+    r.blobs.ext = settings({ tags: [{ id: 'web', name: 'веб', color: '#9184d9' }, { id: 'sites', name: 'сайты', color: '#6fc2b4' }] })
+    r.trees.main = [{ path: 'settings.json', sha: 'ext' }]
+    await expect(useSession.getState().saveSettings(renameTag('web', 'Сайты'))).rejects.toThrow(/уже есть/)
+    expect(r.writes).toEqual(['put main settings.json'])
+    expect(data().tags.map((t: { name: string }) => t.name)).toEqual(['веб', 'сайты'])
+  })
+
   it('правки идут по очереди, каждая — от результата предыдущей', async () => {
     setup()
     await useSession.getState().refresh()

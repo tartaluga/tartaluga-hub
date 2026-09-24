@@ -69,6 +69,11 @@ describe('правки settings', () => {
     expect(s.future).toBe('сохранить')
   })
 
+  it('переименование в имя, которое уже занято в свежем файле, отклоняется', () => {
+    expect(() => renameTag('web', 'Хобби')(base())).toThrow(/уже есть/)
+    expect(renameTag('hobby', 'ХОББИ')(base()).tags[1]!.name).toBe('ХОББИ')
+  })
+
   it('удаление', () => {
     expect(ids(removeTag('hobby')(base()))).toEqual(['web', 'study'])
     expect(ids(removeTag('нет')(base()))).toEqual(['web', 'hobby', 'study'])

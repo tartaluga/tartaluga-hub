@@ -12,7 +12,7 @@ export function BranchBanner() {
   return (
     <>
       {branch !== MAIN && (
-        <Link to="/branches" className={css.banner} data-draft title="Ветки репо данных">
+        <Link to="/settings/branches" className={css.banner} data-draft title="Ветки репо данных">
           <GitBranch size={20} aria-hidden />
           <span>
             ветка: <b className="mono">{branch}</b>

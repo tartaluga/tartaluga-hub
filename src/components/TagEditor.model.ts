@@ -3,6 +3,7 @@
 // Незнакомые поля файла и тегов проходят насквозь (ADR-003, правило 1).
 import { parseFile, slugify, type WithUnknown } from '../data/model'
 import { DEFAULT_ABANDONED_DAYS } from '../data/projects'
+import { ApiError } from '../lib/api'
 import type { Settings } from '../schema/types'
 
 export type SettingsData = WithUnknown<Settings>
@@ -54,7 +55,15 @@ export function nextColor(tags: Tag[]): string {
 
 const mapTag = (id: string, fn: (t: Tag) => Tag): SettingsChange => (s) => ({ ...s, tags: s.tags.map((t) => (t.id === id ? fn(t) : t)) })
 
-export const renameTag = (id: string, name: string): SettingsChange => mapTag(id, (t) => ({ ...t, name: oneLine(name) }))
+/**
+ * Переименование. Имя проверяется ещё раз по свежему файлу: пока правка шла, на другом устройстве
+ * мог появиться тег с таким же именем — тогда правка отклоняется, а не создаёт два одинаковых.
+ */
+export const renameTag = (id: string, name: string): SettingsChange => (s) => {
+  const clean = oneLine(name)
+  if (s.tags.some((t) => t.id !== id && norm(t.name) === norm(clean))) throw new ApiError(422, 'validation', 'Такой тег уже есть')
+  return mapTag(id, (t) => ({ ...t, name: clean }))(s)
+}
 
 export const recolorTag = (id: string, color: string): SettingsChange => mapTag(id, (t) => ({ ...t, color }))
 

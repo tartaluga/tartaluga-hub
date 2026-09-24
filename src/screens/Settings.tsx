@@ -137,7 +137,7 @@ function DaysStepper({ days, readOnly, onSave }: { days: number; readOnly: boole
       save.current(value).then(
         () => setDraft((d) => (d === value ? null : d)),
         (e) => {
-          setDraft(null)
+          setDraft((d) => (d === value ? null : d))
           setError(errorText(e))
         },
       )

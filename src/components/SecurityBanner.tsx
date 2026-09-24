@@ -60,7 +60,7 @@ export function SecurityBanner() {
         <div className={css.banner} data-tone="warn" role="status">
           <ShieldWarning size={20} aria-hidden />
           <span>Пока тебя не было: {unseen} {eventsWord(unseen)} — входы, изменения ключей.</span>
-          <Link to="/security" className={css.action}>
+          <Link to="/settings/security" className={css.action}>
             Посмотреть
           </Link>
         </div>
