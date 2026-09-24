@@ -80,6 +80,21 @@ describe('скалярные поля', () => {
     expect(r.merged.cover).toBeNull()
   })
 
+  it('поле null в базе удалено с одной стороны, не менялось с другой — удаление принимается без конфликта', () => {
+    const withNullCover = edit({ cover: null })
+    const r = merge(withNullCover, edit({ cover: undefined }, withNullCover), withNullCover)
+    expect(r.conflicts).toEqual([])
+    expect('cover' in r.merged).toBe(false)
+  })
+
+  it('поле удалено с обеих сторон независимо — просто отсутствует, без конфликта', () => {
+    const withCover = edit({ cover: 'covers/bot.webp' })
+    const r = merge(withCover, edit({ cover: undefined }, withCover), edit({ cover: undefined, title: 'Бот 2' }, withCover))
+    expect(r.conflicts).toEqual([])
+    expect('cover' in r.merged).toBe(false)
+    expect(r.merged.title).toBe('Бот 2')
+  })
+
   it('массивы без id (теги, стек) и вложенные объекты сливаются как скаляры', () => {
     const one = merge(base, edit({ tags: ['tg', 'rust'] }), edit({ futureField: { keep: false } }))
     expect(one.conflicts).toEqual([])
@@ -122,6 +137,18 @@ describe('служебные метки времени', () => {
   it('метка изменена с одной стороны — берётся она, даже если она раньше базы', () => {
     const r = merge(base, edit({ updatedAt: '2026-08-01T10:00:00+03:00' }), base)
     expect(r.merged.updatedAt).toBe('2026-08-01T10:00:00+03:00')
+  })
+
+  it('один и тот же момент в разных часовых поясах с двух сторон — не конфликт, строки разные', () => {
+    // 12:00+03:00 и 09:00Z — один и тот же момент, но разные строки: equal(local, remote) не сработает,
+    // нужна ветка через Date.parse.
+    const r = merge(
+      base,
+      edit({ title: 'Л', updatedAt: '2026-09-02T12:00:00+03:00' }),
+      edit({ nextStep: 'x', updatedAt: '2026-09-02T09:00:00Z' }),
+    )
+    expect(r.conflicts).toEqual([])
+    expect(['2026-09-02T12:00:00+03:00', '2026-09-02T09:00:00Z']).toContain(r.merged.updatedAt)
   })
 })
 
@@ -201,6 +228,21 @@ describe('массивы с id', () => {
     const dup = edit({ links: [{ id: A, kind: 'site', value: 'https://a' }, { id: A, kind: 'site', value: 'https://b' }] })
     const r2 = merge(base, dup, edit({ links: [{ id: B, kind: 'site', value: 'https://c' }] }))
     expect(r2.conflicts.map((c) => c.path)).toEqual([['links']])
+  })
+
+  it('часть элементов массива без id (смешанный массив) — тоже сливается как скаляр целиком', () => {
+    const mixed = edit({ tasks: [task(A, 'Первая'), { title: 'без id', done: false }] })
+    const remoteTasks = [task(A, 'Первая!'), task(B, 'Вторая')]
+    const r = merge(base, mixed, edit({ tasks: remoteTasks }))
+    expect(r.conflicts.map((c) => c.path)).toEqual([['tasks']])
+    // Конфликт скаляра разрешается в пользу удалённого значения (как обычное поле).
+    expect(r.merged.tasks).toEqual(remoteTasks)
+  })
+
+  it('id-массив удалён целиком (поле отсутствует) с одной стороны, изменён с другой — обычный конфликт поля, без падения', () => {
+    const r = merge(base, edit({ tasks: undefined }), edit({ tasks: [task(A, 'Первая!'), task(B, 'Вторая')] }))
+    expect(r.conflicts).toEqual([{ kind: 'field', path: ['tasks'], base: T, local: undefined, remote: [task(A, 'Первая!'), task(B, 'Вторая')] }])
+    expect(r.merged.tasks).toEqual([task(A, 'Первая!'), task(B, 'Вторая')])
   })
 
   it('поле-массив появилось с обеих сторон при отсутствии в базе — объединяется по id', () => {
