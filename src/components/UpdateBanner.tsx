@@ -1,17 +1,29 @@
+import { useEffect, useRef } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import css from './UpdateBanner.module.css'
 
 // Новая версия приложения не подменяет старую молча (ADR-006): показываем плашку,
 // обновление — по нажатию. Проверяем наличие новой версии раз в час.
 export function UpdateBanner() {
+  const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
   } = useRegisterSW({
     onRegisteredSW(_url, reg) {
-      if (reg) setInterval(() => void reg.update(), 60 * 60 * 1000)
+      // При повторной регистрации (например, после обновления) не плодим параллельные таймеры.
+      if (intervalRef.current !== undefined) clearInterval(intervalRef.current)
+      intervalRef.current = reg ? setInterval(() => void reg.update(), 60 * 60 * 1000) : undefined
     },
   })
+
+  useEffect(
+    () => () => {
+      if (intervalRef.current !== undefined) clearInterval(intervalRef.current)
+    },
+    [],
+  )
 
   if (!needRefresh) return null
   return (
