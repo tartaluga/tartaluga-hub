@@ -13,7 +13,9 @@ import {
   wipeDevice,
   type CachedFile,
 } from '../lib/localdb'
-import { parseFile, SCHEMA_VERSION, serialize } from '../data/model'
+import { parseFile, SCHEMA_VERSIONS, serialize, type WithUnknown } from '../data/model'
+import type { Project } from '../schema/types'
+import { normalizeProject } from '../data/normalize'
 import { validateSettings } from '../schema/validators.js'
 import type { SettingsChange, SettingsData } from '../components/TagEditor.model'
 import { applyEdit, EditConflict, mergePatch, rebaseEdit, type ProjectPatch } from '../data/editProject'
@@ -253,7 +255,7 @@ function currentSettings(branch: string): { sha?: string; data: SettingsData } {
   const state = useSession.getState()
   if (state.branch !== branch) throw new ApiError(0, 'network', 'Открыта другая ветка — правка не отправлена')
   const file = state.files.find((f) => f.path === SETTINGS)
-  if (!file) return { data: { schemaVersion: SCHEMA_VERSION, tags: [] } }
+  if (!file) return { data: { schemaVersion: SCHEMA_VERSIONS.settings, tags: [] } }
   const parsed = parseFile(SETTINGS, file.sha, file.text)
   // Битый файл не перезаписываем: в нём могут быть данные, которые человек правил руками.
   if (!parsed.ok) throw new ApiError(422, 'validation', `settings.json не читается: ${parsed.error}. Поправь файл в репо данных.`)
@@ -305,7 +307,8 @@ async function writeProject(branch: string, path: string, patch: ProjectPatch): 
   const { remote } = useSession.getState()
   const base = currentProject(branch, path)
   const put = async (from: { sha: string; data: Record<string, unknown> }) => {
-    const text = serialize(applyEdit(from.data, patch))
+    const prev = from.data as WithUnknown<Project>
+    const text = serialize(normalizeProject(prev, applyEdit(prev, patch) as WithUnknown<Project>))
     const { sha } = await remote.putFile(branch, path, text, from.sha)
     await applyWrite(branch, [{ path, sha, text }], [])
   }

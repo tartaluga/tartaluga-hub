@@ -376,6 +376,17 @@ describe('правка проекта (saveProject)', () => {
     expect((await getCachedFiles('main')).find((f) => f.path === 'projects/a.json')!.text).toContain('"Б"')
   })
 
+  it('запись нормализует проект по ADR-009: v2, doneAt при переходе в «готово» и снятие при уходе', async () => {
+    setup()
+    await useSession.getState().refresh()
+    await useSession.getState().saveProject('a', { status: 'done' })
+    expect(data()).toMatchObject({ schemaVersion: 2, status: 'done', future: 1 })
+    expect(typeof data().doneAt).toBe('string')
+    await useSession.getState().saveProject('a', { status: 'paused' })
+    expect(data().status).toBe('paused')
+    expect(data()).not.toHaveProperty('doneAt')
+  })
+
   it('правки, пришедшие во время записи, уходят следующим одним коммитом', async () => {
     const r = setup()
     await useSession.getState().refresh()
