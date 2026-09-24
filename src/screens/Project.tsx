@@ -34,6 +34,7 @@ import {
   LINK_PLACEHOLDER,
   linkHref,
   linkText,
+  mergePatch,
   newLink,
   normalizePatch,
   patchError,
@@ -44,6 +45,7 @@ import {
 } from '../data/editProject'
 import type { Link as ProjectLink, Project as ProjectData } from '../schema/types'
 import { ApiError } from '../lib/api'
+import { ProjectLog } from './ProjectLog'
 import css from './Project.module.css'
 
 // Разбор Markdown — отдельный чанк: стартовый экран его не ждёт, офлайн он в кэше service worker.
@@ -95,7 +97,7 @@ function ProjectCard({ slug }: { slug: string }) {
     const patch = normalizePatch(raw)
     const invalid = patchError(patch)
     if (invalid) return invalid
-    setPending((cur) => ({ ...cur, ...patch }))
+    setPending((cur) => mergePatch(cur, patch))
     try {
       await saveProject(slug, patch)
       return null
@@ -106,11 +108,7 @@ function ProjectCard({ slug }: { slug: string }) {
       return errorText(e)
     } finally {
       // Убираем только свои значения: если поле успели поправить ещё раз, его новое значение остаётся.
-      setPending((cur) => {
-        const next = { ...cur }
-        for (const k of Object.keys(patch) as (keyof ProjectPatch)[]) if (next[k] === patch[k]) delete next[k]
-        return next
-      })
+      setPending((cur) => settled(cur, patch))
     }
   }
 
@@ -172,6 +170,7 @@ function ProjectCard({ slug }: { slug: string }) {
       <div className={css.body}>
         <div className={css.main}>
           <Description text={d.description ?? ''} readOnly={ro} save={save} />
+          <ProjectLog log={d.log ?? []} readOnly={ro} save={save} />
         </div>
         <aside className={css.aside}>
           <Stack items={d.stack ?? []} readOnly={ro} save={save} />
@@ -192,6 +191,26 @@ function ProjectCard({ slug }: { slug: string }) {
       </div>
     </section>
   )
+}
+
+/**
+ * Правка подтверждена сервером или отклонена — убираем её из неподтверждённых. Поле убираем, только если
+ * в нём всё ещё наше значение (его могли успеть поправить ещё раз); записи лога — по id.
+ */
+function settled(cur: ProjectPatch, done: ProjectPatch): ProjectPatch {
+  const next: ProjectPatch = { ...cur }
+  for (const k of Object.keys(done) as (keyof ProjectPatch)[]) {
+    if (k !== 'logAdd' && k !== 'logRemove' && next[k] === done[k]) delete next[k]
+  }
+  const addIds = new Set(done.logAdd?.map((e) => e.id))
+  const removeIds = new Set(done.logRemove)
+  const logAdd = next.logAdd?.filter((e) => !addIds.has(e.id))
+  const logRemove = next.logRemove?.filter((id) => !removeIds.has(id))
+  if (logAdd?.length) next.logAdd = logAdd
+  else delete next.logAdd
+  if (logRemove?.length) next.logRemove = logRemove
+  else delete next.logRemove
+  return next
 }
 
 /** Сохранение без поля ввода (кнопки, чипы): ошибка показывается под блоком. */
