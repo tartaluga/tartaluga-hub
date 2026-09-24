@@ -3,13 +3,26 @@
 // - незнакомые поля проходят насквозь (работаем с исходным объектом, а не с урезанной копией);
 // - файлы с версией формата выше нашей — только для чтения.
 import { ulid } from 'ulid'
-import type { Idea, Project, Settings } from '../schema/types'
+import type { Idea, Project, Settings, Task } from '../schema/types'
 import { validateIdea, validateProject, validateSettings, type ValidateFn, type ValidationError } from '../schema/validators.js'
 
-/** Максимальная версия формата, которую понимает эта сборка. */
+export type FileKind = 'project' | 'idea' | 'settings'
+
+/** Максимальная версия формата каждого вида файлов, которую понимает эта сборка (ADR-009, п. 4). */
+export const SCHEMA_VERSIONS: Readonly<Record<FileKind, number>> = Object.freeze({ project: 2, idea: 1, settings: 1 })
+
+/**
+ * @deprecated Общая версия времён v1. Оставлена, пока слияние (merge.ts) и создание проекта (newProject.ts)
+ * не перешли на SCHEMA_VERSIONS по виду файла. Новому коду — SCHEMA_VERSIONS.
+ */
 export const SCHEMA_VERSION = 1
 
-export type FileKind = 'project' | 'idea' | 'settings'
+const KIND_LABEL: Record<FileKind, string> = { project: 'проектов', idea: 'идей', settings: 'настроек' }
+
+/** Первый срок задачи для экранов и статистики: originalDue, а в файлах v1 и правках мимо хаба — due (ADR-009, п. 5). */
+export function firstDue(task: Pick<Task, 'due' | 'originalDue'>): string | undefined {
+  return task.originalDue ?? task.due
+}
 
 /** Тип данных плюс незнакомые поля, которые надо сохранить. */
 export type WithUnknown<T> = T & Record<string, unknown>
@@ -58,7 +71,8 @@ export function parseFile(path: string, sha: string, text: string): Parsed {
   if (nameError) return { ok: false, kind, path, sha, error: nameError }
 
   const version = obj.schemaVersion as number
-  if (version > SCHEMA_VERSION) {
+  const known = SCHEMA_VERSIONS[kind]
+  if (version > known) {
     return {
       ok: true,
       kind,
@@ -66,7 +80,7 @@ export function parseFile(path: string, sha: string, text: string): Parsed {
       sha,
       data: obj as never,
       readOnly: true,
-      reason: `Файл записан в формате v${version}, а эта версия хаба понимает только v${SCHEMA_VERSION}. Обнови хаб, чтобы править его.`,
+      reason: `Файл записан в формате v${version}, а эта версия хаба понимает файлы ${KIND_LABEL[kind]} только до v${known}. Обнови хаб, чтобы править его.`,
       idsAssigned,
     }
   }

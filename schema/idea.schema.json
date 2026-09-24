@@ -17,6 +17,10 @@
       "items": { "type": "string", "minLength": 1 },
       "uniqueItems": true
     },
+    "project": {
+      "description": "Slug проекта, к которому привязана идея. Есть только у привязанных идей. Удаляя проект, хаб отвязывает его идеи тем же коммитом (ADR-009).",
+      "$ref": "defs.schema.json#/$defs/slug"
+    },
     "createdAt": { "$ref": "defs.schema.json#/$defs/dateTime" },
     "updatedAt": { "$ref": "defs.schema.json#/$defs/dateTime" }
   }

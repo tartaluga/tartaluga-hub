@@ -20,7 +20,7 @@ function schemaOf(path: string): ValidateFn {
   return fn
 }
 
-describe('JSON Schema v1: примеры', () => {
+describe('JSON Schema: примеры', () => {
   it('примеры нашлись', () => {
     expect(Object.keys(valid).length).toBeGreaterThanOrEqual(5)
     expect(Object.keys(invalid).length).toBeGreaterThanOrEqual(5)
@@ -78,6 +78,81 @@ describe('JSON Schema v1: совместимость (ADR-003)', () => {
 
   it('а новый статус проекта — несовместимое изменение', () => {
     expect(validateProject({ ...base, status: 'blocked' })).toBe(false)
+  })
+})
+
+describe('JSON Schema: проект v2 (ADR-009)', () => {
+  const base = {
+    schemaVersion: 2,
+    slug: 'x',
+    title: 'X',
+    status: 'active',
+    createdAt: '2026-09-23T01:00:00+03:00',
+    updatedAt: '2026-09-23T01:00:00+03:00',
+  }
+  const id = '01K5TQ0000000000000000C001'
+  const keywords = (fn: ValidateFn) => (fn.errors ?? []).map((e) => e.keyword)
+
+  it('doneAt допустим только при status = done', () => {
+    expect(validateProject({ ...base, status: 'done', doneAt: '2026-09-24T10:00:00+03:00' })).toBe(true)
+    expect(validateProject({ ...base, status: 'done' })).toBe(true)
+    for (const status of ['idea', 'active', 'paused', 'archived']) {
+      expect(validateProject({ ...base, status, doneAt: '2026-09-24T10:00:00+03:00' }), status).toBe(false)
+      expect(keywords(validateProject)).toContain('const')
+    }
+  })
+
+  it('doneAt — момент со смещением, не дата', () => {
+    expect(validateProject({ ...base, status: 'done', doneAt: '2026-09-24' })).toBe(false)
+  })
+
+  it('originalDue задачи — только при due', () => {
+    expect(validateProject({ ...base, tasks: [{ id, title: 'т', done: false, due: '2026-10-02', originalDue: '2026-10-01' }] })).toBe(true)
+    expect(validateProject({ ...base, tasks: [{ id, title: 'т', done: false, due: '2026-10-02' }] })).toBe(true)
+    expect(validateProject({ ...base, tasks: [{ id, title: 'т', done: false, originalDue: '2026-10-01' }] })).toBe(false)
+    expect(keywords(validateProject)).toContain('dependentRequired')
+    expect(validateProject({ ...base, tasks: [{ id, title: 'т', done: false, due: '2026-10-02', originalDue: '2026-10-01T00:00Z' }] })).toBe(false)
+  })
+
+  it('у вехи originalDue не бывает', () => {
+    const m = { id: '01K5TQ0000000000000000B001', title: 'в', due: '2026-10-01' }
+    expect(validateProject({ ...base, milestones: [m] })).toBe(true)
+    expect(validateProject({ ...base, milestones: [{ ...m, originalDue: '2026-09-01' }] })).toBe(false)
+    expect(keywords(validateProject)).toContain('not')
+  })
+
+  it('fromIdea: ideaId, text и createdAt обязательны', () => {
+    const fromIdea = { ideaId: '01K5TQ0000000000000000E001', text: 'идея', createdAt: '2026-09-20T10:00:00+03:00' }
+    expect(validateProject({ ...base, fromIdea })).toBe(true)
+    for (const key of Object.keys(fromIdea)) {
+      const broken: Record<string, unknown> = { ...fromIdea }
+      delete broken[key]
+      expect(validateProject({ ...base, fromIdea: broken }), key).toBe(false)
+    }
+    expect(validateProject({ ...base, fromIdea: { ...fromIdea, text: '  ' } })).toBe(false)
+    expect(validateProject({ ...base, fromIdea: { ...fromIdea, ideaId: 'не-ulid' } })).toBe(false)
+  })
+
+  it('версия 1 с новыми полями тоже проходит: версию проверяет приложение', () => {
+    expect(validateProject({ ...base, schemaVersion: 1, status: 'done', doneAt: '2026-09-24T10:00:00+03:00' })).toBe(true)
+  })
+})
+
+describe('JSON Schema: идея и статус (ADR-009)', () => {
+  const idea = { schemaVersion: 1, id: '01K5TQ0000000000000000E001', text: 'т', createdAt: '2026-09-23T01:00:00Z' }
+
+  it('идея: project — slug проекта', () => {
+    expect(validateIdea({ ...idea, project: 'tartaluga-hub' })).toBe(true)
+    expect(validateIdea({ ...idea, project: 'Tartaluga Hub' })).toBe(false)
+    expect(validateIdea({ ...idea, project: '' })).toBe(false)
+  })
+
+  it('статус: repo.defaultBranch и deployment.creator — необязательные строки', () => {
+    const status = (repo: object) => ({ schemaVersion: 1, generatedAt: null, lastSuccess: null, errors: [], projects: { x: { repo: { fullName: 'a/b', ...repo } } } })
+    expect(validateStatus(status({}))).toBe(true)
+    expect(validateStatus(status({ defaultBranch: 'main', deployment: { creator: 'netlify[bot]' } }))).toBe(true)
+    expect(validateStatus(status({ defaultBranch: 1 }))).toBe(false)
+    expect(validateStatus(status({ deployment: { creator: null } }))).toBe(false)
   })
 })
 
