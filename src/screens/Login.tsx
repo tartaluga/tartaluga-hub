@@ -64,12 +64,7 @@ export function Login({ reason }: { reason?: string }) {
           </div>
         </div>
 
-        <p className={css.lead}>
-          {canPasskey
-            ? 'Приложи палец, лицо или используй Windows Hello. Первый вход на новом устройстве — через GitHub, потом добавь ключ.'
-            : 'Этот браузер не умеет входить по ключу доступа. Войди через GitHub.'}
-        </p>
-
+        {/* Решение владельца: на странице входа только кнопки, без пояснений про GitHub и репозиторий. */}
         {error && (
           <p className={css.error} role="alert">
             {error}
