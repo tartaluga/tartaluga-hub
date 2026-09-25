@@ -339,3 +339,143 @@ describe('выход на другом устройстве', () => {
     expect(await alive(ctx, other)).toBe(true)
   })
 })
+
+describe('V4: граничные случаи', () => {
+  const get = (ctx: Ctx, cookie: string, now?: number) => ctx.send(new Request(`${ORIGIN}/api/passkeys`, { headers: { Cookie: cookie } }), now)
+  const devCookie = (res: Response) => `${DEVICE_KEY_COOKIE}=${cookieFrom(res, DEVICE_KEY_COOKIE)}`
+  const hashOf = (cookie: string) => sha256Hex(cookie.split('=')[1]!)
+  const sessionOf = (res: Response) => `${SESSION_COOKIE}=${cookieFrom(res, SESSION_COOKIE)}`
+
+  it('без ключей: thisDevice false и пустой список', async () => {
+    const ctx = await setup()
+    expect(await (await get(ctx, ctx.cookie)).json()).toEqual({ thisDevice: false, passkeys: [] })
+  })
+
+  it('из двух ключей помечен только тот, что в cookie', async () => {
+    const ctx = await setup()
+    const a = newKey()
+    const b = newKey()
+    await registerKey(ctx, a, { name: 'A' })
+    const res = await registerKey(ctx, b, { name: 'B' })
+    const body = await (await get(ctx, `${ctx.cookie}; ${devCookie(res)}`)).json()
+    expect(body.thisDevice).toBe(true)
+    expect(body.passkeys.map((p: { name: string; thisDevice: boolean }) => [p.name, p.thisDevice])).toEqual([
+      ['A', false],
+      ['B', true],
+    ])
+  })
+
+  it('сессия по ключу с cookie удалённого ключа — не «это устройство» (cookie важнее способа входа)', async () => {
+    const ctx = await setup()
+    const a = newKey()
+    const b = newKey()
+    const regA = await registerKey(ctx, a)
+    await registerKey(ctx, b)
+    const login = await loginWith(ctx, b)
+    const bSession = sessionOf(login)
+    expect((await ctx.send(mutation('DELETE', `/api/passkeys/${a.id}`, ctx.cookie))).status).toBe(200)
+    // Cookie устройства говорит «ключ A», которого больше нет, а сессия открыта ключом B.
+    const body = await (await get(ctx, `${bSession}; ${devCookie(regA)}`)).json()
+    expect(body.thisDevice).toBe(false)
+    expect(body.passkeys.every((p: { thisDevice: boolean }) => !p.thisDevice)).toBe(true)
+  })
+
+  it('сессия по ключу без cookie, но ключей уже нет — false', async () => {
+    const ctx = await setup()
+    const key = newKey()
+    await registerKey(ctx, key)
+    const s = sessionOf(await loginWith(ctx, key))
+    expect((await ctx.send(mutation('DELETE', `/api/passkeys/${key.id}`, s))).status).toBe(200)
+    expect(await (await get(ctx, s)).json()).toEqual({ thisDevice: false, passkeys: [] })
+  })
+
+  it('cookie устройства живёт 400 дней: через 401 день не считается, через 399 — считается', async () => {
+    const ctx = await setup()
+    const key = newKey()
+    const dev = devCookie(await registerKey(ctx, key))
+    const day = 24 * 60 * 60_000
+    for (const [days, expected] of [
+      [399, true],
+      [401, false],
+    ] as const) {
+      const at = Date.now() + days * day
+      // Сессию «переносим» в будущее прямо в базе: вход через GitHub в тесте привязан к текущему времени.
+      const s = await session(ctx.env, ctx.gh.fn)
+      ctx.sql
+        .prepare('UPDATE sessions SET created_at = ?, auth_at = ?, last_used_at = ?, expires_at = ? WHERE id_hash = ?')
+        .run(at, at, at, at + day, await hashOf(s))
+      const r = await get(ctx, `${s}; ${dev}`, at)
+      expect(r.status).toBe(200)
+      expect((await r.json()).thisDevice).toBe(expected)
+    }
+  })
+
+  it('cookie устройства — только подпись devkey: сессионная cookie в её роли не принимается', async () => {
+    const ctx = await setup()
+    const key = newKey()
+    await registerKey(ctx, key)
+    const fake = `${DEVICE_KEY_COOKIE}=${ctx.cookie.split('=')[1]}`
+    expect((await (await get(ctx, `${ctx.cookie}; ${fake}`)).json()).thisDevice).toBe(false)
+  })
+
+  it('журнал: session_revoked — кто завершил и какое устройство; попадает в плашку следующего входа', async () => {
+    const ctx = await setup()
+    const other = await session(ctx.env, ctx.gh.fn)
+    const otherHash = await hashOf(other)
+    ctx.sql.prepare('UPDATE sessions SET device = ? WHERE id_hash = ?').run('Android · Chrome', otherHash)
+    ctx.sql.prepare('UPDATE sessions SET device = ? WHERE id_hash = ?').run('Windows · Edge', await hashOf(ctx.cookie))
+    const t = Date.now() + 1000
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}`, ctx.cookie), t)).status).toBe(200)
+    expect(ctx.sql.prepare("SELECT at, event, method, device, detail FROM security_log WHERE event = 'session_revoked'").all()).toEqual([
+      { at: t, event: 'session_revoked', method: 'github', device: 'Windows · Edge', detail: 'Android · Chrome' },
+    ])
+    const later = t + 60_000
+    const next = await session(ctx.env, ctx.gh.fn, later)
+    ctx.sql.prepare('UPDATE sessions SET created_at = ?, auth_at = ?, last_used_at = ?, expires_at = ? WHERE id_hash = ?').run(later, later, later, later + 3600_000, await hashOf(next))
+    // Всё, кроме session_revoked, уже «видел»: плашка должна насчитать ровно это событие.
+    ctx.sql.prepare("UPDATE security_log SET seen = 1 WHERE event <> 'session_revoked'").run()
+    const unseen = (await (await ctx.send(new Request(`${ORIGIN}/api/me`, { headers: { Cookie: next } }), later)).json()).unseenSecurityEvents
+    expect(unseen).toBe(1)
+  })
+
+  it('истёкшую сессию не удалить: 404, строка на месте, события нет', async () => {
+    const ctx = await setup()
+    const other = await session(ctx.env, ctx.gh.fn)
+    const otherHash = await hashOf(other)
+    ctx.sql.prepare('UPDATE sessions SET expires_at = ? WHERE id_hash = ?').run(Date.now() - 1, otherHash)
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}`, ctx.cookie))).status).toBe(404)
+    expect(count(ctx, 'SELECT count(*) AS n FROM sessions')).toBe(2)
+    expect(count(ctx, "SELECT count(*) AS n FROM security_log WHERE event = 'session_revoked'")).toBe(0)
+  })
+
+  it('список входов: id — 64 hex, истёкшие не показаны', async () => {
+    const ctx = await setup()
+    const other = await session(ctx.env, ctx.gh.fn)
+    ctx.sql.prepare('UPDATE sessions SET expires_at = ? WHERE id_hash = ?').run(Date.now() - 1, await hashOf(other))
+    const { sessions } = await (await ctx.send(new Request(`${ORIGIN}/api/sessions`, { headers: { Cookie: ctx.cookie } }))).json()
+    expect(sessions).toEqual([expect.objectContaining({ id: await hashOf(ctx.cookie), current: true })])
+    expect(sessions[0].id).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('маршрут: GET по id — 405, вложенный путь и пустой id — не удаляют', async () => {
+    const ctx = await setup()
+    const other = await session(ctx.env, ctx.gh.fn)
+    const otherHash = await hashOf(other)
+    expect((await ctx.send(new Request(`${ORIGIN}/api/sessions/${otherHash}`, { headers: { Cookie: ctx.cookie } }))).status).toBe(405)
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}/x`, ctx.cookie))).status).not.toBe(200)
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/`, ctx.cookie))).status).not.toBe(200)
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}%0A`, ctx.cookie))).status).toBe(400)
+    expect(count(ctx, 'SELECT count(*) AS n FROM sessions')).toBe(2)
+  })
+
+  it('чужая сессия, открытая ключом, удаляется так же; событие с методом того, кто удаляет', async () => {
+    const ctx = await setup()
+    const key = newKey()
+    await registerKey(ctx, key)
+    const pk = sessionOf(await loginWith(ctx, key))
+    const pkHash = await hashOf(pk)
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${pkHash}`, ctx.cookie))).status).toBe(200)
+    expect((await ctx.send(new Request(`${ORIGIN}/api/me`, { headers: { Cookie: pk } }))).status).toBe(401)
+    expect(ctx.sql.prepare("SELECT method FROM security_log WHERE event = 'session_revoked'").all()).toEqual([{ method: 'github' }])
+  })
+})
