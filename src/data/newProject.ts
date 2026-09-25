@@ -4,6 +4,7 @@
 import type { Project } from '../schema/types'
 import { nowIso, parseFile, SCHEMA_VERSIONS, serialize, uniqueSlug } from './model'
 import { normalizeProject } from './normalize'
+import { restoredDraft } from '../lib/drafts'
 
 export interface NewProjectInput {
   title: string
@@ -61,4 +62,12 @@ export function takenSlugs(paths: Iterable<string>): string[] {
 export function projectPaths(slug: string, treePaths: string[]): string[] {
   const own = new Set([`projects/${slug}.json`, `covers/${slug}.webp`, `covers/${slug}.jpg`])
   return treePaths.filter((p) => own.has(p))
+}
+
+/** Ключи черновиков формы «Новый проект» (ADR-011): незаконченная форма переживает обновление хаба. */
+export const NEW_PROJECT_DRAFT = { title: 'new-project:title', nextStep: 'new-project:nextStep' } as const
+
+/** От прошлой версии хаба пришла незаконченная форма — экран открывает окно сразу. */
+export function hasNewProjectDraft(): boolean {
+  return restoredDraft(NEW_PROJECT_DRAFT.title) !== undefined || restoredDraft(NEW_PROJECT_DRAFT.nextStep) !== undefined
 }

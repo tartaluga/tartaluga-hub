@@ -1,6 +1,7 @@
 // Правка текста на месте: нажал — поле ввода; Enter или уход из поля — сохранить, Esc — отменить.
 // Если сохранить не вышло, поле остаётся открытым с введённым текстом и причиной — ввод не теряется.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { restoredDraft, useDraft } from '../lib/drafts'
 import css from './InlineText.module.css'
 
 interface Props {
@@ -19,15 +20,24 @@ interface Props {
   onClose?(): void
   /** null — сохранено, строка — ошибка для человека. */
   onSave(text: string): Promise<string | null>
+  /**
+   * Ключ черновика (ADR-011): несохранённый текст переживает обновление хаба. Если от прошлой версии
+   * пришёл черновик с этим ключом, поле открывается сразу с ним.
+   */
+  draftKey?: string
 }
 
-export function InlineText({ value, display, placeholder, label, maxLength, multiline, readOnly, className, autoOpen, onClose, onSave }: Props) {
-  const [editing, setEditing] = useState(!!autoOpen && !readOnly)
-  const [draft, setDraft] = useState(value)
+export function InlineText({ value, display, placeholder, label, maxLength, multiline, readOnly, className, autoOpen, onClose, onSave, draftKey }: Props) {
+  // Черновик прошлой версии в поле только для чтения не открываем: он остаётся в реестре и едет дальше.
+  const [carried] = useState(() => (draftKey === undefined || readOnly ? undefined : restoredDraft(draftKey)))
+  const [editing, setEditing] = useState((!!autoOpen || carried !== undefined) && !readOnly)
+  const [draft, setDraft] = useState(carried ?? value)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const saving = useRef(false)
   const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
+  // В handoff уходит только изменённый текст открытого поля.
+  const { discard } = useDraft(draftKey ?? null, editing && draft !== value ? draft : undefined, label)
 
   useEffect(() => {
     if (!editing) return
@@ -45,6 +55,7 @@ export function InlineText({ value, display, placeholder, label, maxLength, mult
   }
 
   function close() {
+    discard()
     setEditing(false)
     onClose?.()
   }

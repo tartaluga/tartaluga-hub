@@ -5,9 +5,10 @@ import { useNavigate } from 'react-router'
 import { X } from '@phosphor-icons/react'
 import { errorText, useSession } from '../app/session'
 import { STATUS_LABEL, type Status } from '../data/projects'
-import { newProjectDraft, NEXT_STEP_MAX, takenSlugs, TITLE_MAX, type NewProjectInput } from '../data/newProject'
+import { NEW_PROJECT_DRAFT, newProjectDraft, NEXT_STEP_MAX, takenSlugs, TITLE_MAX, type NewProjectInput } from '../data/newProject'
 import { uniqueSlug } from '../data/model'
 import { ApiError } from '../lib/api'
+import { discardRestoredDraft, restoredDraft, useDraft } from '../lib/drafts'
 import css from './NewProjectDialog.module.css'
 
 const NEW_STATUSES: Status[] = ['idea', 'active', 'paused']
@@ -21,6 +22,9 @@ export function NewProjectDialog({ open, onClose }: { open: boolean; onClose(): 
   const [input, setInput] = useState<NewProjectInput>({ title: '', status: 'active', nextStep: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Незаконченная форма переживает обновление хаба (ADR-011).
+  useDraft(NEW_PROJECT_DRAFT.title, open && input.title ? input.title : undefined, 'Новый проект: название')
+  useDraft(NEW_PROJECT_DRAFT.nextStep, open && input.nextStep ? input.nextStep : undefined, 'Новый проект: следующий шаг')
   // Черновик прошлой неудачной попытки: ключ — поля формы, из которых он собран.
   const draft = useRef<{ key: string; slug: string; path: string; text: string } | null>(null)
 
@@ -31,7 +35,9 @@ export function NewProjectDialog({ open, onClose }: { open: boolean; onClose(): 
     const d = ref.current
     if (!d) return
     if (open && !d.open) {
-      setInput({ title: '', status: 'active', nextStep: '' })
+      setInput({ title: restoredDraft(NEW_PROJECT_DRAFT.title) ?? '', status: 'active', nextStep: restoredDraft(NEW_PROJECT_DRAFT.nextStep) ?? '' })
+      discardRestoredDraft(NEW_PROJECT_DRAFT.title)
+      discardRestoredDraft(NEW_PROJECT_DRAFT.nextStep)
       setError(null)
       draft.current = null
       d.showModal()

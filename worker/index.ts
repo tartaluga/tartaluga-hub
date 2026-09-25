@@ -3,6 +3,7 @@
 import { GitHubError } from '../src/lib/github'
 import { listFiles, readBlob, readStatus } from './api'
 import { CALLBACK_PATH, githubCallback, githubStart } from './authGithub'
+import { checkBuild } from './build'
 import type { Env } from './env'
 import { deleteOtherSession, listSessions, logoutAll, markSeen, securityLog, unseenCount } from './account'
 import { authenticate, authenticationOptions, deletePasskey, listPasskeys, register, registrationOptions } from './passkeys'
@@ -61,6 +62,9 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
   if (!found) throw new HttpError(401, 'unauthorized', 'Нужно войти')
   if (found.setCookie) onRefresh(found.setCookie)
   const session = found.session
+  // Запись от устаревшей сборки хаба — 409 stale_build (ADR-011 §3); одно место для всех изменяющих запросов.
+  const staleBuild = await checkBuild(request, pathname, env)
+  if (staleBuild) return staleBuild
 
   const now = deps.now()
   if (pathname === '/api/me') {

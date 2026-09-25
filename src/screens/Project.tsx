@@ -49,6 +49,7 @@ import { ApiError } from '../lib/api'
 import { normalizeProject } from '../data/normalize'
 import type { WithUnknown } from '../data/model'
 import { ProjectTasks } from '../components/ProjectTasks'
+import { restoredDraft, useDraftText } from '../lib/drafts'
 import { ProjectLog } from './ProjectLog'
 import css from './Project.module.css'
 
@@ -157,7 +158,7 @@ function ProjectCard({ slug }: { slug: string }) {
         {STATUS_LABEL[d.status as Status]} · {activityText(p.activityDays)}
       </div>
       <h1 className={css.title}>
-        <InlineText value={d.title} placeholder="Без названия" label="Название" maxLength={TITLE_MAX} readOnly={ro} onSave={(title) => save({ title })} />
+        <InlineText value={d.title} placeholder="Без названия" label="Название" maxLength={TITLE_MAX} readOnly={ro} draftKey={`project:${d.slug}:title`} onSave={(title) => save({ title })} />
       </h1>
       <div className={css.next}>
         <InlineText
@@ -167,6 +168,7 @@ function ProjectCard({ slug }: { slug: string }) {
           label="Следующий шаг"
           maxLength={NEXT_STEP_MAX}
           readOnly={ro}
+          draftKey={`project:${d.slug}:nextStep`}
           onSave={(nextStep) => save({ nextStep })}
         />
       </div>
@@ -177,13 +179,13 @@ function ProjectCard({ slug }: { slug: string }) {
       <div className={css.body}>
         <div className={css.main}>
           <ProjectTasks tasks={d.tasks ?? []} readOnly={ro} save={save} />
-          <Description text={d.description ?? ''} readOnly={ro} save={save} />
-          <ProjectLog log={d.log ?? []} readOnly={ro} save={save} />
+          <Description slug={d.slug} text={d.description ?? ''} readOnly={ro} save={save} />
+          <ProjectLog slug={d.slug} log={d.log ?? []} readOnly={ro} save={save} />
         </div>
         <aside className={css.aside}>
-          <Stack items={d.stack ?? []} readOnly={ro} save={save} />
+          <Stack slug={d.slug} items={d.stack ?? []} readOnly={ro} save={save} />
           <Tags ids={d.tags ?? []} known={lib.tags} settingsProblem={lib.settingsProblem} readOnly={ro} save={save} />
-          <Links links={d.links ?? []} readOnly={ro} save={save} />
+          <Links slug={d.slug} links={d.links ?? []} readOnly={ro} save={save} />
         </aside>
       </div>
 
@@ -244,8 +246,10 @@ function StatusPicker({ status, readOnly, save }: { status: Status; readOnly: bo
   )
 }
 
-function Description({ text, readOnly, save }: { text: string; readOnly: boolean; save: Save }) {
-  const [editing, setEditing] = useState(false)
+function Description({ slug, text, readOnly, save }: { slug: string; text: string; readOnly: boolean; save: Save }) {
+  const draftKey = `project:${slug}:description`
+  // Черновик описания от прошлой версии хаба (ADR-011) — сразу открыть поле с ним.
+  const [editing, setEditing] = useState(() => !readOnly && restoredDraft(draftKey) !== undefined)
   return (
     <Section title="Описание">
       {editing ? (
@@ -256,6 +260,7 @@ function Description({ text, readOnly, save }: { text: string; readOnly: boolean
           maxLength={DESCRIPTION_MAX}
           multiline
           autoOpen
+          draftKey={draftKey}
           onClose={() => setEditing(false)}
           onSave={(description) => save({ description })}
         />
@@ -277,9 +282,9 @@ function Description({ text, readOnly, save }: { text: string; readOnly: boolean
   )
 }
 
-function Stack({ items, readOnly, save }: { items: string[]; readOnly: boolean; save: Save }) {
+function Stack({ slug, items, readOnly, save }: { slug: string; items: string[]; readOnly: boolean; save: Save }) {
   const { run, alert } = useAction(save)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useDraftText(`project:${slug}:stack`, 'Стек: новый пункт')
   async function add(e: FormEvent) {
     e.preventDefault()
     const item = draft.trim()
@@ -374,11 +379,11 @@ function Tags({ ids, known, settingsProblem, readOnly, save }: { ids: string[]; 
   )
 }
 
-function Links({ links, readOnly, save }: { links: ProjectLink[]; readOnly: boolean; save: Save }) {
+function Links({ slug, links, readOnly, save }: { slug: string; links: ProjectLink[]; readOnly: boolean; save: Save }) {
   const { run, alert } = useAction(save)
-  const [adding, setAdding] = useState(false)
+  const [value, setValue] = useDraftText(`project:${slug}:link`, 'Новая ссылка: адрес')
+  const [adding, setAdding] = useState(() => !readOnly && value !== '')
   const [kind, setKind] = useState<LinkKind>('site')
-  const [value, setValue] = useState('')
   const [label, setLabel] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)

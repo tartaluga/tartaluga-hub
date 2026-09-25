@@ -6,6 +6,7 @@ import { ArrowsDownUp, Plus } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { NewProjectDialog } from '../components/NewProjectDialog'
+import { hasNewProjectDraft } from '../data/newProject'
 import { parseLocalDate } from '../data/model'
 import { buildLibrary, STATUS_LABEL, type ProjectView } from '../data/projects'
 import { abandoned, eyebrowDate, hotItems, hotWhen, localKey, nextSteps, pulse, pulseCaption, statusShares, summary } from '../data/today'
@@ -40,7 +41,7 @@ export function Today() {
   const files = useSession((s) => s.files)
   const branch = useSession((s) => s.branch)
   const now = useNow()
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState(hasNewProjectDraft)
   const [quietestFirst, setQuietestFirst] = useState(readQuietOrder)
   // Пересчитываем только при смене файлов или дня, а не на каждый тик часов.
   const day = localKey(now)
