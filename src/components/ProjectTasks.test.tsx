@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectPatch } from '../data/editProject'
-import type { Task } from '../schema/types'
+import type { Milestone, Task } from '../schema/types'
 import { ProjectTasks } from './ProjectTasks'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -159,5 +159,137 @@ describe('ProjectTasks', () => {
     await type(field, 'Макет меню')
     await key(field, 'Enter')
     expect(save).toHaveBeenCalledWith({ taskSet: [{ id: B, title: 'Макет меню' }] })
+  })
+})
+
+describe('ProjectTasks: вехи', () => {
+  const M = '01K5Y00000000000000000MMMM'
+  const N = '01K5Y00000000000000000NNNN'
+  const C = '01K5Y0000000000000000000CC'
+  const milestones: Milestone[] = [
+    { id: M, title: 'Бета', due: '2026-09-20' },
+    { id: N, title: 'Релиз' },
+  ]
+  const grouped: Task[] = [
+    { id: A, title: 'Сдать главу', done: true, milestoneId: M },
+    { id: B, title: 'Макет', done: false, milestoneId: M },
+    { id: C, title: 'Потерянная', done: false, milestoneId: '01K5Y00000000000000000ZZZZ' },
+  ]
+  const renderMs = (list: Task[], ms: Milestone[], readOnly = false) =>
+    act(async () => root.render(<ProjectTasks tasks={list} milestones={ms} readOnly={readOnly} save={save} today={TODAY} />))
+  const groups = () => [...host.querySelectorAll<HTMLElement>('section > div')]
+
+  it('без вех — заголовка «Без вехи» нет', async () => {
+    await render(tasks)
+    expect(host.textContent).not.toContain('Без вехи')
+  })
+
+  it('группы по порядку вех, в конце «Без вехи» (с задачами из несуществующей вехи); прогресс и счётчик', async () => {
+    await renderMs(grouped, milestones)
+    const g = groups()
+    expect(g).toHaveLength(3)
+    expect([...g[0]!.querySelectorAll('li')].map((li) => li.textContent)).toEqual([expect.stringContaining('Сдать главу'), expect.stringContaining('Макет')])
+    expect(g[0]!.querySelector('[role="img"]')!.getAttribute('aria-label')).toBe('Сделано 1 из 2')
+    const segs = g[0]!.querySelectorAll('[role="img"] > span')
+    expect(segs).toHaveLength(2)
+    expect([...segs].map((s) => s.hasAttribute('data-done'))).toEqual([true, false])
+    expect(g[0]!.textContent).toContain('1/2')
+    // Срок вехи прошёл, а задачи не все сделаны — просрочка.
+    expect(g[0]!.firstElementChild!.hasAttribute('data-overdue')).toBe(true)
+    expect(g[0]!.textContent).toContain('−3 дн · 20.09')
+    expect(g[1]!.querySelectorAll('li')).toHaveLength(0)
+    expect(g[1]!.textContent).toContain('0/0')
+    expect(g[2]!.querySelector('h3')!.textContent).toBe('Без вехи')
+    expect(g[2]!.textContent).toContain('Потерянная')
+  })
+
+  it('больше 20 задач — сплошная полоса с заливкой', async () => {
+    const many = Array.from({ length: 21 }, (_, i) => ({ id: `01K5Y00000000000000000${String(i).padStart(4, '0')}`, title: `т${i}`, done: i < 7, milestoneId: M }))
+    await renderMs(many, milestones.slice(0, 1))
+    const bar = groups()[0]!.querySelector('[role="img"]')!
+    expect(bar.getAttribute('aria-label')).toBe('Сделано 7 из 21')
+    expect(bar.children).toHaveLength(1)
+    expect((bar.querySelector('span > span') as HTMLElement).style.width).toBe(`${(7 / 21) * 100}%`)
+  })
+
+  it('новая задача в группе получает milestoneId вехи, в «Без вехи» — без него', async () => {
+    await renderMs(grouped, milestones)
+    await click(byLabel('Добавить задачу в «Релиз»'))
+    await type(byLabel('Новая задача в «Релиз»'), 'Выложить')
+    await submit(byLabel<HTMLInputElement>('Новая задача в «Релиз»').form!)
+    expect(save.mock.calls[0]![0].taskAdd).toEqual([{ id: expect.any(String), title: 'Выложить', done: false, milestoneId: N }])
+    await click(byLabel('Добавить задачу без вехи'))
+    await type(byLabel('Новая задача без вехи'), 'Просто')
+    await submit(byLabel<HTMLInputElement>('Новая задача без вехи').form!)
+    expect(save.mock.calls[1]![0].taskAdd).toEqual([{ id: expect.any(String), title: 'Просто', done: false }])
+  })
+
+  it('перенос задачи в другую веху и без вехи — select', async () => {
+    await renderMs(grouped, milestones)
+    const sel = byLabel<HTMLSelectElement>('Веха задачи Макет')
+    expect(sel.value).toBe(M)
+    expect(byLabel<HTMLSelectElement>('Веха задачи Потерянная').value).toBe('')
+    await act(async () => {
+      sel.value = N
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(save).toHaveBeenLastCalledWith({ taskSet: [{ id: B, milestoneId: N }] })
+    await act(async () => {
+      sel.value = ''
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(save).toHaveBeenLastCalledWith({ taskSet: [{ id: B, milestoneId: null }] })
+  })
+
+  it('новая веха: форма, Enter добавляет, форма закрывается', async () => {
+    await render([])
+    await click(button('Веха'))
+    await type(byLabel('Новая веха'), '  Альфа ')
+    await type(byLabel('Срок новой вехи'), '2026-10-10')
+    await submit(byLabel<HTMLInputElement>('Новая веха').form!)
+    expect(save).toHaveBeenCalledWith({ milestoneAdd: [{ id: expect.any(String), title: 'Альфа', due: '2026-10-10' }] })
+    expect(byLabel('Новая веха')).toBeNull()
+  })
+
+  it('правка названия и срока вехи', async () => {
+    await renderMs(grouped, milestones)
+    await click(button('Релиз'))
+    const field = byLabel<HTMLInputElement>('Название вехи')
+    await type(field, 'Релиз 1.0')
+    await key(field, 'Enter')
+    expect(save).toHaveBeenCalledWith({ milestoneSet: [{ id: N, title: 'Релиз 1.0' }] })
+    await click(byLabel('Задать срок вехи Релиз'))
+    await type(byLabel('Срок вехи'), '2026-10-01')
+    await click(button('Сохранить'))
+    expect(save).toHaveBeenLastCalledWith({ milestoneSet: [{ id: N, due: '2026-10-01' }] })
+  })
+
+  it('удаление вехи — подтверждение в интерфейсе; отмена ничего не пишет', async () => {
+    const confirm = vi.fn(() => true)
+    Object.defineProperty(window, 'confirm', { value: confirm, configurable: true, writable: true })
+    await renderMs(grouped, milestones)
+    await click(byLabel('Удалить веху Бета'))
+    expect(host.textContent).toContain('Задачи останутся')
+    await click(button('Отмена'))
+    expect(save).not.toHaveBeenCalled()
+    expect(host.textContent).not.toContain('Задачи останутся')
+    await click(byLabel('Удалить веху Бета'))
+    await click(button('Удалить'))
+    expect(save).toHaveBeenCalledWith({ milestoneRemove: [M] })
+    expect(confirm).not.toHaveBeenCalled()
+  })
+
+  it('только чтение: вехи и прогресс видны, кнопок правки нет; пустой «Без вехи» скрыт', async () => {
+    await renderMs(grouped.slice(0, 2), milestones, true)
+    expect(host.textContent).toContain('Бета')
+    expect(host.textContent).toContain('1/2')
+    expect(host.textContent).not.toContain('Без вехи')
+    expect(byLabel('Удалить веху Бета')).toBeNull()
+    expect(byLabel('Веха задачи Макет')).toBeNull()
+    expect(byLabel('Добавить задачу в «Бета»')).toBeNull()
+    expect(host.querySelectorAll('button').length).toBe(
+      // Только отметки задач (они выключены) и названия InlineText в режиме чтения — не кнопки.
+      host.querySelectorAll('button[role="checkbox"]').length,
+    )
   })
 })

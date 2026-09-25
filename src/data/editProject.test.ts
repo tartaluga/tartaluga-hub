@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyEdit, linkHref, linkText, logKindLabel, logWhen, mergePatch, newLink, newLogEntry, normalizePatch, patchError, rebaseEdit, sortedLog, vscodeHref, webUrl } from './editProject'
-import { EditConflict, isDate, newTask, settledPatch, TASK_TITLE_MAX, taskDue, taskProgress, toggleTask, type ProjectPatch } from './editProject'
+import { EditConflict, isDate, MILESTONE_TITLE_MAX, newMilestone, newTask, settledPatch, TASK_TITLE_MAX, taskDue, taskProgress, toggleTask, type ProjectPatch } from './editProject'
 import { parseFile, serialize, type WithUnknown } from './model'
-import type { Project, Task } from '../schema/types'
+import type { Milestone, Project, Task } from '../schema/types'
 import { normalizeProject } from './normalize'
 
 const NOW = new Date(2026, 8, 23, 15, 0, 0)
@@ -309,7 +309,7 @@ describe('задачи', () => {
     const cur = mergePatch(sent, { taskSet: [{ id: A, due: '2026-10-01' }, toggleTask(t.id, true, NOW)] })
     expect(settledPatch(cur, sent)).toEqual({
       taskSet: [
-        { id: t.id, title: 'Релиз', done: true, doneAt: expect.stringMatching(/^2026-09-23T15/), due: null },
+        { id: t.id, title: 'Релиз', done: true, doneAt: expect.stringMatching(/^2026-09-23T15/), due: null, milestoneId: null },
         { id: A, due: '2026-10-01' },
       ],
     })
@@ -326,5 +326,117 @@ describe('задачи', () => {
     expect(taskDue({ done: true, due: '2026-09-21', originalDue: '2026-09-21' }, today)).toEqual({ text: '21.09', overdue: false, today: false, movedFrom: null })
     expect(taskDue({ done: false, due: 'мусор' }, today)).toEqual({ text: 'мусор', overdue: false, today: false, movedFrom: null })
     expect(taskProgress([{ done: true }, { done: false }])).toEqual({ done: 1, total: 2 })
+  })
+})
+
+describe('вехи', () => {
+  const M = '01K5Y00000000000000000MMMM'
+  const N = '01K5Y00000000000000000NNNN'
+  const A = '01K5Y0000000000000000000AA'
+  const B = '01K5Y0000000000000000000BB'
+  const milestones: Milestone[] = [{ id: M, title: 'Бета', due: '2026-10-01', future: 1 } as Milestone]
+  const tasks: Task[] = [
+    { id: A, title: 'Сдать главу', done: false, milestoneId: M },
+    { id: B, title: 'Макет', done: true },
+  ]
+  const withMs = { ...base, schemaVersion: 2, milestones, tasks } as WithUnknown<Project> & { milestones: Milestone[]; tasks: Task[] }
+  const valid = (data: object) => parseFile('projects/bot.json', '', serialize(data))
+
+  it('newMilestone и newTask с вехой: чистые, проходят схему; повтор добавления не дублирует', () => {
+    const m = newMilestone('  Релиз   1 ', '2026-11-01')
+    expect(m).toEqual({ id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/), title: 'Релиз 1', due: '2026-11-01' })
+    expect(newMilestone('x')).not.toHaveProperty('due')
+    expect(newTask('т', undefined, M)).toMatchObject({ milestoneId: M })
+    expect(newTask('т')).not.toHaveProperty('milestoneId')
+    const out = applyEdit(withMs, { milestoneAdd: [m] }, NOW)
+    expect(out.milestones?.map((x) => x.id)).toEqual([M, m.id])
+    expect(applyEdit(out, { milestoneAdd: [m] }, NOW).milestones).toHaveLength(2)
+    expect(valid(out)).toMatchObject({ ok: true, readOnly: false })
+    expect(applyEdit(base, { milestoneAdd: [m] }, NOW)).toMatchObject({ milestones: [m] })
+  })
+
+  it('правка вехи: только названные поля, незнакомые сохраняются, null снимает срок', () => {
+    const out = applyEdit(withMs, { milestoneSet: [{ id: M, title: 'Бета 2' }] }, NOW)
+    expect(out.milestones).toEqual([{ id: M, title: 'Бета 2', due: '2026-10-01', future: 1 }])
+    expect(applyEdit(withMs, { milestoneSet: [{ id: M, due: null }] }, NOW).milestones![0]).not.toHaveProperty('due')
+    expect(applyEdit(withMs, { milestoneSet: [{ id: N, title: 'x' }] }, NOW).milestones).toEqual(milestones)
+  })
+
+  it('удаление вехи снимает milestoneId с её задач, задачи остаются; последняя веха — поле уходит', () => {
+    const out = applyEdit(withMs, { milestoneRemove: [M] }, NOW)
+    expect(out).not.toHaveProperty('milestones')
+    expect(out.tasks).toEqual([{ id: A, title: 'Сдать главу', done: false }, tasks[1]])
+    expect(valid(out)).toMatchObject({ ok: true })
+    // Задача, добавленная в эту же веху в том же патче, тоже остаётся без вехи.
+    const both = applyEdit(withMs, { taskAdd: [{ id: '01K5Y0000000000000000000CC', title: 'н', done: false, milestoneId: M }], milestoneRemove: [M] }, NOW)
+    expect(both.tasks?.every((t) => !t.milestoneId)).toBe(true)
+    // Без задач в вехе массив задач не переписывается.
+    const noTasks = { ...withMs, tasks: [] }
+    expect(applyEdit(noTasks, { milestoneRemove: [M] }, NOW).tasks).toEqual([])
+  })
+
+  it('перенос задачи в другую веху и без вехи', () => {
+    expect(applyEdit(withMs, { taskSet: [{ id: B, milestoneId: M }] }, NOW).tasks![1]).toMatchObject({ milestoneId: M })
+    expect(applyEdit(withMs, { taskSet: [{ id: A, milestoneId: null }] }, NOW).tasks![0]).not.toHaveProperty('milestoneId')
+  })
+
+  it('normalizePatch и patchError: пробелы, пустое название, длина, битый срок', () => {
+    expect(normalizePatch({ milestoneAdd: [{ id: N, title: '  a  b ' }], milestoneSet: [{ id: M, title: ' c ' }, { id: M, due: null }], milestoneRemove: [M, M] })).toEqual({
+      milestoneAdd: [{ id: N, title: 'a b' }],
+      milestoneSet: [{ id: M, title: 'c' }, { id: M, due: null }],
+      milestoneRemove: [M],
+    })
+    expect(patchError(normalizePatch({ milestoneSet: [{ id: M, title: '   ' }] }))).toBe('Нужно название вехи')
+    expect(patchError({ milestoneAdd: [{ id: N, title: 'x'.repeat(MILESTONE_TITLE_MAX + 1) }] })).toMatch(/Веха длиннее/)
+    expect(patchError({ milestoneAdd: [{ id: N, title: 'x'.repeat(MILESTONE_TITLE_MAX) }] })).toBeNull()
+    expect(patchError({ milestoneSet: [{ id: M, due: '2026-02-31' }] })).toMatch(/Срок/)
+    expect(patchError({ milestoneSet: [{ id: M, due: null }] })).toBeNull()
+  })
+
+  it('mergePatch: добавленная и тут же убранная веха не пишется, её задачи остаются без вехи; правки копятся', () => {
+    const m = newMilestone('Новая')
+    const t = newTask('В новую', undefined, m.id)
+    const merged = mergePatch({ milestoneAdd: [m], taskAdd: [t], taskSet: [{ id: B, milestoneId: m.id }] }, { milestoneRemove: [m.id] })
+    expect(merged).toEqual({ taskAdd: [{ id: t.id, title: 'В новую', done: false }], taskSet: [{ id: B, milestoneId: null }] })
+    expect(mergePatch({ milestoneAdd: [m] }, { milestoneSet: [{ id: m.id, due: '2026-12-01' }] })).toEqual({ milestoneAdd: [{ ...m, due: '2026-12-01' }] })
+    expect(mergePatch({ milestoneSet: [{ id: M, title: 'a' }] }, { milestoneSet: [{ id: M, due: null }] })).toEqual({ milestoneSet: [{ id: M, title: 'a', due: null }] })
+    expect(mergePatch({ milestoneSet: [{ id: M, title: 'a' }] }, { milestoneRemove: [M] })).toEqual({ milestoneRemove: [M] })
+    expect(applyEdit(withMs, mergePatch({ milestoneSet: [{ id: M, title: 'a' }] }, { milestoneRemove: [M] }), NOW)).not.toHaveProperty('milestones')
+  })
+
+  it('rebaseEdit: вехи накладываются по id, конфликт только на том же поле той же вехи; уже сделанное — already', () => {
+    const m = newMilestone('Моя')
+    const theirs = { ...withMs, milestones: [...milestones, { id: N, title: 'Их' }] }
+    expect(rebaseEdit(withMs, theirs, { milestoneAdd: [m] })).toEqual({ kind: 'apply' })
+    expect(rebaseEdit(withMs, { ...withMs, milestones: [...milestones, m] }, { milestoneAdd: [m] })).toEqual({ kind: 'already' })
+    expect(rebaseEdit(withMs, theirs, { milestoneSet: [{ id: M, title: 'Бета 2' }] })).toEqual({ kind: 'apply' })
+    const retitled = { ...withMs, milestones: [{ ...milestones[0]!, title: 'Их бета' }] }
+    expect(rebaseEdit(withMs, retitled, { milestoneSet: [{ id: M, due: null }] })).toEqual({ kind: 'apply' })
+    expect(rebaseEdit(withMs, retitled, { milestoneSet: [{ id: M, title: 'Моя бета' }] })).toEqual({ kind: 'conflict', fields: ['milestones'] })
+    expect(rebaseEdit(withMs, retitled, { milestoneSet: [{ id: M, title: 'Их бета' }] })).toEqual({ kind: 'already' })
+    expect(new EditConflict(['milestones']).message).toMatch(/вехи/)
+  })
+
+  it('rebaseEdit удаления вехи: пока в вехе на свежей версии есть задачи — писать есть что', () => {
+    const gone = { ...withMs, milestones: [] }
+    expect(rebaseEdit(withMs, gone, { milestoneRemove: [M] })).toEqual({ kind: 'apply' })
+    expect(rebaseEdit(withMs, { ...gone, tasks: [{ id: A, title: 'Сдать главу', done: false }, tasks[1]!] }, { milestoneRemove: [M] })).toEqual({ kind: 'already' })
+    // На свежей версии в веху положили ещё задачу — удаление снимет веху и с неё.
+    const fresh = { ...withMs, tasks: [...tasks, { id: '01K5Y0000000000000000000DD', title: 'их', done: false, milestoneId: M }] }
+    expect(rebaseEdit(withMs, fresh, { milestoneRemove: [M] })).toEqual({ kind: 'apply' })
+    expect(applyEdit(fresh, { milestoneRemove: [M] }, NOW).tasks?.some((t) => t.milestoneId)).toBe(false)
+  })
+
+  it('settledPatch: подтверждённые операции с вехами уходят, более свежие остаются', () => {
+    const m = newMilestone('Релиз')
+    const sent: ProjectPatch = { milestoneAdd: [m], milestoneSet: [{ id: M, title: 'x' }], milestoneRemove: [N] }
+    expect(settledPatch(sent, sent)).toEqual({})
+    const cur = mergePatch(sent, { milestoneSet: [{ id: M, due: '2026-10-05' }, { id: m.id, due: '2026-12-01' }] })
+    expect(settledPatch(cur, sent)).toEqual({
+      milestoneSet: [
+        { id: m.id, title: 'Релиз', due: '2026-12-01' },
+        { id: M, due: '2026-10-05' },
+      ],
+    })
   })
 })
