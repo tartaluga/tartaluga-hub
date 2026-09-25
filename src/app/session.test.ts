@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useSession, type Remote } from './session'
+import { COMMIT_LIMIT, useSession, type Remote } from './session'
 import { ApiError, type Me } from '../lib/api'
 import { EditConflict } from '../data/editProject'
 import { addTag, moveTag, recolorTag, renameTag, setAbandonedDays } from '../components/TagEditor.model'
@@ -361,7 +361,7 @@ describe('запись: создание и удаление файлов', () =
     const r = fakeRemote(tree, blobs)
     useSession.setState({ remote: r.remote })
     await useSession.getState().refresh()
-    const many = Array.from({ length: 25 }, (_, i) => ({ path: `ideas/${i}.json`, text: '{}' }))
+    const many = Array.from({ length: COMMIT_LIMIT + 5 }, (_, i) => ({ path: `ideas/${i}.json`, text: '{}' }))
     await expect(useSession.getState().deleteFiles(() => ['projects/a.json'], 'm', () => many)).rejects.toMatchObject({ status: 422 })
     expect(r.writes).toHaveLength(1)
   })
@@ -736,18 +736,31 @@ describe('удаление тега (deleteTag)', () => {
     expect(r.commits).toEqual([])
   })
 
-  it('больше файлов, чем сервер принимает за коммит, — отказ до отправки', async () => {
-    const r = setup(Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`p${i}`, ['web']])))
+  it('лимит коммита клиента совпадает с серверным (worker/write.ts) — 100 файлов', () => {
+    expect(COMMIT_LIMIT).toBe(100)
+  })
+
+  it('граница: settings.json и 99 проектов — ровно 100 файлов, одним коммитом', async () => {
+    const r = setup(Object.fromEntries(Array.from({ length: 99 }, (_, i) => [`p${i}`, ['web']])))
     await useSession.getState().refresh()
-    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('в 20 проектах — за один раз хаб меняет не больше 19.') })
+    await useSession.getState().deleteTag('web')
+    expect(r.commits).toHaveLength(1)
+    expect(r.commits[0]!.changes).toHaveLength(100)
+    expect(r.commits[0]!.changes[0]!.path).toBe('settings.json')
+  })
+
+  it('больше файлов, чем сервер принимает за коммит, — отказ до отправки', async () => {
+    const r = setup(Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`p${i}`, ['web']])))
+    await useSession.getState().refresh()
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('в 100 проектах — за один раз хаб меняет не больше 99.') })
     expect(r.commits).toEqual([])
   })
 
-  it('лимит в тексте отказа: тега в settings.json уже нет — все 20 мест под проекты', async () => {
-    const r = setup(Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`p${i}`, ['web']])))
+  it('лимит в тексте отказа: тега в settings.json уже нет — все 100 мест под проекты', async () => {
+    const r = setup(Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`p${i}`, ['web']])))
     r.blobs.s1 = JSON.stringify({ schemaVersion: 1, tags: [{ id: 'hw', name: 'железо', color: '#8a8fa6' }] })
     await useSession.getState().refresh()
-    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('в 21 проектах — за один раз хаб меняет не больше 20.') })
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('в 101 проектах — за один раз хаб меняет не больше 100.') })
     expect(r.commits).toEqual([])
   })
 
