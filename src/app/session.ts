@@ -72,8 +72,13 @@ interface Session {
   dismissBranchNotice(): void
   /** Записать новый JSON-файл в открытую ветку. Повторяемо: тот же путь с тем же текстом — успех. */
   createFile(path: string, text: string): Promise<void>
-  /** Удалить файлы одним коммитом. Если ветку успели сдвинуть — сверка и одна повторная попытка. */
-  deleteFiles(paths: (tree: Tree) => string[], message: string): Promise<void>
+  /**
+   * Удалить файлы одним коммитом. Если ветку успели сдвинуть — сверка и одна повторная попытка.
+   * also — правки других файлов тем же коммитом (например, отвязка идей удаляемого проекта); считаются
+   * заново по свежим файлам при каждой попытке. Если всё не влезает в лимит коммита, первый коммит несёт
+   * удаление и сколько влезет правок, остальные правки уходят следующими коммитами.
+   */
+  deleteFiles(paths: (tree: Tree) => string[], message: string, also?: (files: CachedFile[]) => CommitChange[]): Promise<void>
   /**
    * Правка полей проекта. Правки одного файла идут по очереди, а все, что накопились, пока шла запись,
    * уходят следующим одним коммитом. Если файл успели изменить — слияние по полям и одна повторная попытка.
@@ -193,22 +198,34 @@ export const useSession = create<Session>((set, get) => ({
     void get().refresh()
   },
 
-  async deleteFiles(pathsOf, message) {
+  async deleteFiles(pathsOf, message, also) {
     const { branch, remote } = get()
-    for (let attempt = 0; ; attempt++) {
+    const sent = new Set<string>()
+    for (let attempt = 0, part = 1; ; ) {
       if (!get().tree) await get().refresh()
       const tree = get().tree
       if (!tree || get().branch !== branch) throw new ApiError(0, 'network', 'Нет связи с сервером хаба — удаление не отправлено')
       const paths = pathsOf(tree).filter((p) => tree.paths.includes(p))
-      if (!paths.length) return // уже удалено (например, на другом устройстве)
+      const extra = also ? also(get().files) : []
+      if (!paths.length && !extra.length) return // уже удалено (например, на другом устройстве)
+      // Правка, которую уже отправили и получили назад, — значит, она не применяется: не зацикливаемся.
+      if (extra.some((c) => sent.has(c.path))) throw new ApiError(422, 'validation', 'Не удалось записать связанные файлы — обнови страницу и проверь данные')
+      const changes: CommitChange[] = [...paths.map((path) => ({ path, text: null })), ...extra.slice(0, Math.max(0, COMMIT_LIMIT - paths.length))]
       try {
-        const res = await remote.commit(branch, paths.map((path) => ({ path, text: null })), tree.head, message)
-        await applyWrite(branch, [], paths, res.head)
-        void get().refresh()
-        return
+        const res = await remote.commit(branch, changes, tree.head, part === 1 ? message : `${message} (часть ${part})`)
+        const written = changes.flatMap((c) => ('text' in c && c.text !== null ? [{ path: c.path, text: c.text }] : []))
+        await applyWrite(branch, written.map((c) => ({ path: c.path, sha: res.shas[c.path] ?? '', text: c.text })), paths, res.head)
+        for (const c of written) sent.add(c.path)
+        if (changes.length === paths.length + extra.length) {
+          void get().refresh()
+          return
+        }
+        attempt = 0
+        part++
       } catch (e) {
         // Ветку сдвинули после нашей сверки: перечитываем дерево и пробуем ещё раз, но только один.
         if (!(e instanceof ApiError && e.status === 409) || attempt > 0) throw e
+        attempt++
         set({ tree: null })
       }
     }
@@ -298,7 +315,9 @@ async function untagAll(branch: string, id: string): Promise<void> {
     changes.push(...untag.changes)
     if (!changes.length) return // тега уже нет нигде (например, удалили на другом устройстве)
     if (changes.length > COMMIT_LIMIT) {
-      throw new ApiError(413, 'payload_too_large', `Тег стоит в ${untag.changes.length} проектах — за один раз хаб меняет не больше ${COMMIT_LIMIT - 1}. Сними его с части проектов вручную.`)
+      // Сколько проектов влезает рядом с settings.json — если он в коммит не входит, лимит целиком их.
+      const room = COMMIT_LIMIT - (changes.length - untag.changes.length)
+      throw new ApiError(413, 'payload_too_large', `Тег стоит в ${untag.changes.length} проектах — за один раз хаб меняет не больше ${room}. Сними его с части проектов вручную.`)
     }
 
     try {
@@ -400,7 +419,7 @@ async function writeProject(branch: string, path: string, patch: ProjectPatch): 
 }
 
 /** Сразу показать результат записи: кэш на устройстве, файлы на экране и дерево ветки. */
-async function applyWrite(branch: string, changed: CachedFile[], removed: string[], head?: string): Promise<void> {
+export async function applyWrite(branch: string, changed: CachedFile[], removed: string[], head?: string): Promise<void> {
   await putCachedFiles(branch, changed, removed).catch(() => undefined)
   const state = useSession.getState()
   if (state.branch !== branch) return

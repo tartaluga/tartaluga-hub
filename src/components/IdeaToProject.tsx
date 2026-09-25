@@ -17,7 +17,7 @@ export function IdeaToProject({ idea, taken, onCancel }: { idea: Idea; taken: st
   const [status, setStatus] = useState<Status>('active')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const draft = useRef<{ key: string; slug: string; path: string; text: string } | null>(null)
+  const draft = useRef<{ key: string; idea: Idea; slug: string; path: string; text: string } | null>(null)
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -26,16 +26,16 @@ export function IdeaToProject({ idea, taken, onCancel }: { idea: Idea; taken: st
     if (draft.current?.key !== key) {
       const d = projectFromIdeaDraft(idea, { title, status, nextStep: '' }, taken)
       if (!d.ok) return setError(d.error)
-      draft.current = { key, ...d }
+      draft.current = { key, idea, ...d }
     }
     const d = draft.current
     setBusy(true)
     setError(null)
     try {
-      await makeProjectFromIdea(idea.id, d)
+      await makeProjectFromIdea(d.idea, d)
       navigate(`/projects/${d.slug}`)
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'slug_taken') draft.current = null
+      if (err instanceof ApiError && (err.code === 'slug_taken' || err.code === 'idea_changed')) draft.current = null
       setError(err instanceof ApiError && err.status !== 0 ? err.message : ideaErrorText(err, 'проект не создан'))
       setBusy(false)
     }

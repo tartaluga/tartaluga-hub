@@ -1,6 +1,6 @@
 // Строка идеи: дата, первая строка текста, справа — проект или «В проект».
 // Раскрытая строка: правка текста на месте, привязка к проекту, «Сделать проектом», удаление.
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ArrowBendUpRight, LockSimple } from '@phosphor-icons/react'
 import { deleteIdea, IDEA_MAX, ideaErrorText, saveIdea, shortDate, type IdeaView, type ProjectRef } from '../data/ideas'
@@ -21,6 +21,8 @@ const NO_PROJECT = ''
 
 export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
   const [making, setMaking] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const removeButton = useRef<HTMLButtonElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const panelId = `idea-${idea.id}`
@@ -46,9 +48,16 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
     }
   }
 
+  /** Удаление — после подтверждения внутри страницы (как у тегов). */
   function remove() {
-    if (!window.confirm(`Удалить идею «${idea.title}»? Файл удалится из репо данных.`)) return
+    setConfirming(false)
     void run('идея не удалена', () => deleteIdea(idea.id))
+  }
+
+  function cancelRemove() {
+    setConfirming(false)
+    // Кнопка «Удалить» снова в DOM только после отрисовки — возвращаем фокус на неё.
+    requestAnimationFrame(() => removeButton.current?.focus())
   }
 
   // Проект, к которому привязана идея, может быть удалён мимо хаба — тогда он всё равно в списке, чтобы select не врал.
@@ -105,6 +114,8 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
               />
               {making ? (
                 <IdeaToProject idea={idea.data} taken={taken} onCancel={() => setMaking(false)} />
+              ) : confirming ? (
+                <DeleteIdeaConfirm title={idea.title} onConfirm={remove} onCancel={cancelRemove} />
               ) : (
                 <div className={css.actions}>
                   <label className={css.inline}>
@@ -129,7 +140,7 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
                   <button type="button" className={css.primary} disabled={busy} onClick={() => setMaking(true)}>
                     Сделать проектом
                   </button>
-                  <button type="button" className={css.danger} disabled={busy} onClick={remove}>
+                  <button ref={removeButton} type="button" className={css.danger} disabled={busy} onClick={() => setConfirming(true)}>
                     Удалить
                   </button>
                 </div>
@@ -144,5 +155,29 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
         </div>
       )}
     </li>
+  )
+}
+
+/** Подтверждение удаления идеи внутри страницы. Escape — отмена. */
+export function DeleteIdeaConfirm({ title, onConfirm, onCancel }: { title: string; onConfirm(): void; onCancel(): void }) {
+  return (
+    <div
+      className={css.confirm}
+      role="group"
+      aria-label={`Удаление идеи «${title}»`}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onCancel()
+      }}
+    >
+      <p className={css.confirmText}>Удалить идею «{title}»? Файл удалится из репо данных, вернуть можно только через историю git.</p>
+      <div className={css.confirmActions}>
+        <button type="button" className={css.confirmDelete} autoFocus onClick={onConfirm}>
+          Удалить идею
+        </button>
+        <button type="button" className={css.confirmCancel} onClick={onCancel}>
+          Отмена
+        </button>
+      </div>
+    </div>
   )
 }

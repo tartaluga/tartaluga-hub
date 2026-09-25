@@ -23,7 +23,8 @@ import { errorText, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { InlineText } from '../components/InlineText'
 import { activityText, buildLibrary, STATUS_LABEL, type Status } from '../data/projects'
-import { NEXT_STEP_MAX, projectPaths, TITLE_MAX } from '../data/newProject'
+import { NEXT_STEP_MAX, TITLE_MAX } from '../data/newProject'
+import { deleteProject } from '../data/ideas'
 import {
   applyEdit,
   DESCRIPTION_MAX,
@@ -72,7 +73,6 @@ function ProjectCard({ slug }: { slug: string }) {
   const navigate = useNavigate()
   const files = useSession((s) => s.files)
   const sync = useSession((s) => s.sync)
-  const deleteFiles = useSession((s) => s.deleteFiles)
   const saveProject = useSession((s) => s.saveProject)
   const lib = useMemo(() => buildLibrary(files, new Date()), [files])
   const p = lib.projects.find((x) => x.data.slug === slug)
@@ -84,13 +84,13 @@ function ProjectCard({ slug }: { slug: string }) {
 
   async function remove(title: string) {
     const ok = window.confirm(
-      `Удалить проект «${title}»?\n\nФайл проекта и его обложка удалятся из репо данных одним коммитом. Вернуть можно только через историю git.`,
+      `Удалить проект «${title}»?\n\nФайл проекта и его обложка удалятся из репо данных одним коммитом, идеи проекта отвяжутся. Вернуть можно только через историю git.`,
     )
     if (!ok) return
     setBusy(true)
     setError(null)
     try {
-      await deleteFiles((tree) => projectPaths(slug, tree.paths), `Хаб: удалить проект ${slug}`)
+      await deleteProject(slug)
       navigate('/projects', { replace: true })
     } catch (e) {
       setError(e instanceof ApiError && e.status === 409 ? 'Данные в репо изменились дважды подряд — обнови страницу и попробуй ещё раз.' : errorText(e))

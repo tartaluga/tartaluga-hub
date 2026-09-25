@@ -1,14 +1,14 @@
 // Идеи (инбокс): разбор ideas/<id>.json для экрана, черновики и правки, запись в репо данных.
-// Чистые функции — сверху; запись — внизу, поверх публичного API сессии (createFile, deleteFiles, refresh, remote),
-// без правки session.ts. Контракт: schema/README.md (идея v1 + project), ADR-009 (fromIdea, привязка к проекту).
+// Чистые функции — сверху; запись — внизу, поверх API сессии (createFile, deleteFiles, refresh, remote, applyWrite).
+// Контракт: schema/README.md (идея v1 + project), ADR-009 (fromIdea, привязка к проекту).
 import { ulid } from 'ulid'
-import { errorText, useSession } from '../app/session'
+import { applyWrite, errorText, useSession } from '../app/session'
 import { ApiError, type CommitChange } from '../lib/api'
-import { putCachedFiles, type CachedFile } from '../lib/localdb'
+import type { CachedFile } from '../lib/localdb'
 import type { Idea, Project } from '../schema/types'
 import { validateIdea } from '../schema/validators.js'
 import { nowIso, parseFile, SCHEMA_VERSIONS, serialize, uniqueSlug, type WithUnknown } from './model'
-import { newProjectDraft, TITLE_MAX, type NewProjectInput } from './newProject'
+import { newProjectDraft, projectPaths, TITLE_MAX, type NewProjectInput } from './newProject'
 import { normalizeProject } from './normalize'
 
 export const IDEA_MAX = 2000
@@ -152,8 +152,15 @@ export interface IdeaPatch {
   project?: string | null
 }
 
-/** Применить правку к данным идеи. Незнакомые поля сохраняются. Ошибка — строка для человека. */
-export function applyIdeaPatch(prev: WithUnknown<Idea>, patch: IdeaPatch, now = new Date()): { ok: true; data: WithUnknown<Idea> } | { ok: false; error: string } {
+/**
+ * Применить правку к данным идеи. Незнакомые поля сохраняются. Ошибка — строка для человека.
+ * Правка ничего не меняет — changed: false, данные прежние (updatedAt не трогаем, писать нечего).
+ */
+export function applyIdeaPatch(
+  prev: WithUnknown<Idea>,
+  patch: IdeaPatch,
+  now = new Date(),
+): { ok: true; changed: boolean; data: WithUnknown<Idea> } | { ok: false; error: string } {
   const next = structuredClone(prev)
   if (patch.text !== undefined) {
     const t = checkText(patch.text)
@@ -164,9 +171,10 @@ export function applyIdeaPatch(prev: WithUnknown<Idea>, patch: IdeaPatch, now = 
     if (patch.project === null) delete next.project
     else next.project = patch.project
   }
+  if (serialize(next) === serialize(prev)) return { ok: true, changed: false, data: next }
   next.updatedAt = nowIso(now)
   if (!validateIdea(next)) return { ok: false, error: 'Идея не прошла проверку схемой — не сохранено' }
-  return { ok: true, data: next }
+  return { ok: true, changed: true, data: next }
 }
 
 const fieldValue = (d: Idea, k: keyof IdeaPatch) => (k === 'project' ? (d.project ?? null) : d.text)
@@ -217,27 +225,12 @@ export function unlinkIdeasChanges(slug: string, files: CachedFile[], now = new 
     const data = parsed.data as WithUnknown<Idea>
     if (data.project !== slug) continue
     const r = applyIdeaPatch(data, { project: null }, now)
-    if (r.ok) out.push({ path: f.path, text: serialize(r.data) })
+    if (r.ok && r.changed) out.push({ path: f.path, text: serialize(r.data) })
   }
   return out
 }
 
 // ---------- Запись ----------
-
-/** Сразу показать результат записи: кэш на устройстве, файлы и дерево ветки (как applyWrite в session.ts). */
-async function applyLocal(branch: string, changed: CachedFile[], removed: string[], head?: string): Promise<void> {
-  await putCachedFiles(branch, changed, removed).catch(() => undefined)
-  const state = useSession.getState()
-  if (state.branch !== branch) return
-  const files = new Map(state.files.map((f) => [f.path, f]))
-  for (const p of removed) files.delete(p)
-  for (const f of changed) files.set(f.path, f)
-  const tree = state.tree && {
-    head: head ?? state.tree.head,
-    paths: [...state.tree.paths.filter((p) => !removed.includes(p)), ...changed.map((f) => f.path).filter((p) => !state.tree!.paths.includes(p))],
-  }
-  useSession.setState({ files: [...files.values()], tree })
-}
 
 /** Текст ошибки записи для человека. */
 export function ideaErrorText(e: unknown, what: string): string {
@@ -284,9 +277,10 @@ async function writeIdea(branch: string, path: string, patch: IdeaPatch): Promis
   const put = async (from: { sha: string; data: WithUnknown<Idea> }) => {
     const r = applyIdeaPatch(from.data, patch)
     if (!r.ok) throw new ApiError(422, 'validation', r.error)
+    if (!r.changed) return // правка ничего не меняет — пустой коммит не нужен
     const text = serialize(r.data)
     const { sha } = await remote.putFile(branch, path, text, from.sha)
-    await applyLocal(branch, [{ path, sha, text }], [])
+    await applyWrite(branch, [{ path, sha, text }], [])
   }
   const base = currentIdea(branch, path)
   try {
@@ -308,6 +302,14 @@ async function writeIdea(branch: string, path: string, patch: IdeaPatch): Promis
   }
 }
 
+/**
+ * Удалить проект (файл и обложки) и отвязать его идеи тем же коммитом (ADR-009).
+ * Идей больше, чем влезает в коммит, — остаток отвязывается следующими коммитами (session.deleteFiles).
+ */
+export async function deleteProject(slug: string): Promise<void> {
+  await useSession.getState().deleteFiles((tree) => projectPaths(slug, tree.paths), `Хаб: удалить проект ${slug}`, (files) => unlinkIdeasChanges(slug, files))
+}
+
 /** Удалить идею одним коммитом. Уже удалена — успех. */
 export async function deleteIdea(id: string): Promise<void> {
   const path = `ideas/${id}.json`
@@ -326,11 +328,20 @@ async function freshTree(previousHead?: string) {
   return tree
 }
 
+/** Файл идеи на экране — та же идея, что в черновике проекта (по содержимому, со всеми полями). */
+function sameIdea(file: CachedFile | undefined, idea: Idea): boolean {
+  if (!file) return false
+  const parsed = parseFile(file.path, file.sha, file.text)
+  return parsed.ok && !parsed.readOnly && serialize(parsed.data) === serialize(idea)
+}
+
 /**
  * «Сделать проектом»: файл проекта и удаление файла идеи одним коммитом (ADR-009).
- * Черновик (slug и текст) выбирается до первой попытки и не меняется при повторах.
+ * Черновик (slug и текст) выбирается до первой попытки и не меняется при повторах; idea — версия идеи,
+ * из которой он собран: если файл идеи с тех пор изменили, коммита нет (409 idea_changed).
  */
-export async function makeProjectFromIdea(ideaId: string, draft: { slug: string; path: string; text: string }): Promise<void> {
+export async function makeProjectFromIdea(idea: Idea, draft: { slug: string; path: string; text: string }): Promise<void> {
+  const ideaId = idea.id
   const ideaPath = `ideas/${ideaId}.json`
   const branch = useSession.getState().branch
   let head: string | undefined
@@ -345,13 +356,17 @@ export async function makeProjectFromIdea(ideaId: string, draft: { slug: string;
       throw new ApiError(409, 'slug_taken', `Проект «${draft.slug}» уже есть в репо. Измени название.`)
     }
     if (!tree.paths.includes(ideaPath)) throw new ApiError(404, 'not_found', 'Идеи больше нет в этой ветке')
+    // Идею удаляем, только если это та самая версия, из которой собран проект: иначе чужая правка пропадёт.
+    if (!sameIdea(useSession.getState().files.find((f) => f.path === ideaPath), idea)) {
+      throw new ApiError(409, 'idea_changed', 'Идею изменили на другом устройстве — проект не создан. Открой «Сделать проектом» заново.')
+    }
     const changes: CommitChange[] = [
       { path: draft.path, text: draft.text },
       { path: ideaPath, text: null },
     ]
     try {
       const res = await useSession.getState().remote.commit(branch, changes, tree.head, `Идеи: ${ideaId} → проект ${draft.slug}`)
-      await applyLocal(branch, [{ path: draft.path, sha: res.shas[draft.path] ?? '', text: draft.text }], [ideaPath], res.head)
+      await applyWrite(branch, [{ path: draft.path, sha: res.shas[draft.path] ?? '', text: draft.text }], [ideaPath], res.head)
       void useSession.getState().refresh()
       return
     } catch (e) {
