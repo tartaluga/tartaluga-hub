@@ -4,7 +4,7 @@ import { GitHubError } from '../src/lib/github'
 import { listFiles, readBlob, readStatus } from './api'
 import { CALLBACK_PATH, githubCallback, githubStart } from './authGithub'
 import type { Env } from './env'
-import { listSessions, logoutAll, markSeen, securityLog, unseenCount } from './account'
+import { deleteOtherSession, listSessions, logoutAll, markSeen, securityLog, unseenCount } from './account'
 import { authenticate, authenticationOptions, deletePasskey, listPasskeys, register, registrationOptions } from './passkeys'
 import { commit, createBranch, deleteBranch, listBranches, mergeBranch, putFile, refreshStatus } from './write'
 import { assertSameOriginMutation, errorResponse, HttpError, json } from './http'
@@ -79,6 +79,11 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
     allow(method, 'GET')
     return listSessions(env, session, now)
   }
+  const sessionRoute = /^\/api\/sessions\/([^/]+)$/.exec(pathname)
+  if (sessionRoute) {
+    allow(method, 'DELETE')
+    return deleteOtherSession(sessionRoute[1]!, env, session, now)
+  }
   if (pathname === '/api/security') {
     allow(method, 'GET')
     return securityLog(env)
@@ -89,7 +94,7 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
   }
   if (pathname === '/api/passkeys') {
     allow(method, 'GET')
-    return listPasskeys(env)
+    return listPasskeys(request, env, session, now)
   }
   if (pathname === '/api/passkeys/register/options') {
     allow(method, 'POST')

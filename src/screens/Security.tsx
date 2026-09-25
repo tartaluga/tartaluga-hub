@@ -1,11 +1,12 @@
 // «Ключи и входы» (ADR-007): ключи доступа, где выполнен вход, журнал безопасности.
-// Добавление и удаление ключа и «Выйти везде» требуют свежего входа — сервер скажет fresh_login_required.
+// Добавление и удаление ключа, выход на другом устройстве и «Выйти везде» требуют свежего входа — сервер скажет fresh_login_required.
 import { useCallback, useEffect, useState } from 'react'
-import { DeviceMobile, Fingerprint, GithubLogo, Key, SignOut, Trash } from '@phosphor-icons/react'
+import { CheckCircle, DeviceMobile, Fingerprint, GithubLogo, Key, Plus, SignOut, Trash } from '@phosphor-icons/react'
 import { useSession } from '../app/session'
 import {
   ApiError,
   deletePasskey,
+  deleteSession,
   GITHUB_LOGIN_URL,
   listPasskeys,
   listSessions,
@@ -34,10 +35,13 @@ const EVENTS: Record<string, (e: SecurityEvent) => string> = {
   passkey_added: (e) => `Добавлен ключ «${e.detail}»`,
   passkey_removed: (e) => `Удалён ключ «${e.detail}»`,
   passkey_failed: () => 'Неудачная попытка входа по ключу',
+  session_revoked: (e) => `Завершён вход на устройстве «${e.detail}»`,
 }
-const WARN = new Set(['login_denied', 'passkey_failed', 'passkey_removed', 'logout_all'])
+const WARN = new Set(['login_denied', 'passkey_failed', 'passkey_removed', 'logout_all', 'session_revoked'])
 
 interface Data {
+  /** У этого устройства уже есть ключ. */
+  thisDevice: boolean
   passkeys: Passkey[]
   sessions: SessionInfo[]
   events: SecurityEvent[]
@@ -60,7 +64,7 @@ export function Security() {
   const load = useCallback(async () => {
     try {
       const [p, s, l] = await Promise.all([listPasskeys(), listSessions(), securityLog()])
-      setData({ passkeys: p.passkeys, sessions: s.sessions, events: l.events })
+      setData({ thisDevice: p.thisDevice, passkeys: p.passkeys, sessions: s.sessions, events: l.events })
     } catch (e) {
       setLoadError(e instanceof ApiError ? e.message : 'Не удалось загрузить')
     }
@@ -94,7 +98,13 @@ export function Security() {
     })
   }
 
+  const endSession = (s: SessionInfo) => {
+    if (!window.confirm(`Завершить вход на устройстве «${s.device}»? Там придётся войти заново.`)) return
+    void run(() => deleteSession(s.id).then(() => undefined))
+  }
+
   const firstKey = data && data.passkeys.length === 0
+  const canAdd = passkeysSupported()
 
   return (
     <section className={css.page}>
@@ -122,10 +132,24 @@ export function Security() {
           <h2 className={css.h2}>
             <Key size={20} aria-hidden /> Ключи доступа
           </h2>
-          {passkeysSupported() && (
-            <button type="button" className={css.button} onClick={() => void add()} disabled={busy}>
-              <Fingerprint size={18} aria-hidden /> Добавить ключ
-            </button>
+          {data?.thisDevice ? (
+            <div className={own.keyActions}>
+              <span className={own.state}>
+                <CheckCircle size={18} weight="fill" aria-hidden /> Ключ этого устройства
+              </span>
+              {canAdd && (
+                <button type="button" className={`${css.ghost} ${own.secondary}`} onClick={() => void add()} disabled={busy}>
+                  <Plus size={18} aria-hidden /> Добавить ещё ключ
+                </button>
+              )}
+            </div>
+          ) : (
+            data &&
+            canAdd && (
+              <button type="button" className={css.button} onClick={() => void add()} disabled={busy}>
+                <Fingerprint size={18} aria-hidden /> Добавить ключ
+              </button>
+            )
           )}
         </div>
         {firstKey && (
@@ -137,7 +161,9 @@ export function Security() {
           {data?.passkeys.map((p) => (
             <li key={p.id} className={css.row}>
               <div>
-                <div>{p.name}</div>
+                <div>
+                  {p.name} {p.thisDevice && <span className={css.badge}>это устройство</span>}
+                </div>
                 <div className={css.meta}>
                   добавлен {when(p.createdAt)} · {p.lastUsedAt ? `вход ${when(p.lastUsedAt)}` : 'ещё не использовался'}
                 </div>
@@ -161,8 +187,8 @@ export function Security() {
           </button>
         </div>
         <ul className={css.list}>
-          {data?.sessions.map((s, i) => (
-            <li key={i} className={css.row}>
+          {data?.sessions.map((s) => (
+            <li key={s.id} className={css.row}>
               <div>
                 <div>
                   {s.device} {s.current && <span className={css.badge}>это устройство</span>}
@@ -171,6 +197,17 @@ export function Security() {
                   вход {how(s.method)} {when(s.createdAt)} · активность {when(s.lastUsedAt)}
                 </div>
               </div>
+              {!s.current && (
+                <button
+                  type="button"
+                  className={`${css.ghost} ${own.secondary} ${own.rowButton}`}
+                  onClick={() => endSession(s)}
+                  disabled={busy}
+                  aria-label={`Выйти на устройстве ${s.device}`}
+                >
+                  <SignOut size={16} aria-hidden /> Выйти
+                </button>
+              )}
             </li>
           ))}
         </ul>

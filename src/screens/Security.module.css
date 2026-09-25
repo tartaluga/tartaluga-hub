@@ -8,3 +8,32 @@
 .crumb a:focus-visible {
   color: var(--accent);
 }
+
+/* Дополнения к Panel.module.css только для «Ключи и входы». */
+
+.keyActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* «Ключ этого устройства» — состояние, не кнопка. */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: 500 12px/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--status-done);
+}
+
+.secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rowButton {
+  min-height: 36px;
+}
