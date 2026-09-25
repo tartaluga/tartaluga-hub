@@ -296,7 +296,7 @@
   }
 
   .activityRow {
-    grid-template-columns: minmax(0, 8rem) minmax(0, 1fr) 2.5rem;
+    grid-template-columns: minmax(0, 10rem) minmax(0, 1fr) 2.5rem;
     gap: var(--space-3);
   }
 
