@@ -30,3 +30,16 @@ export function passkeyErrorText(e: unknown): string | null {
   if (e instanceof Error && e.name === 'NotAllowedError') return null // отмена или истёк таймаут
   return 'Ключ не сработал. Попробуй ещё раз или войди через GitHub.'
 }
+
+/** Ключ мог устареть: его удалили из менеджера паролей, а хаб о нём ещё помнит (решение владельца — не отслеживать, а предупредить). */
+export const STALE_KEY_HINT = 'Если ключ удалили из менеджера паролей (Google, Windows), он устарел: войди через GitHub, удали его в «Ключах и входах» и добавь заново.'
+
+/**
+ * Текст ошибки входа по ключу на экране входа. В отличие от passkeyErrorText, отмену не глотает:
+ * отмена часто значит, что ключа в менеджере паролей больше нет. Нет сети и сбой сервера — без подсказки про ключ.
+ */
+export function passkeySignInErrorText(e: unknown): string {
+  if (e instanceof ApiError && (e.status === 0 || e.status === 429 || e.status >= 500)) return e.message
+  const base = passkeyErrorText(e) ?? 'Вход по ключу не состоялся.'
+  return `${base} ${STALE_KEY_HINT}`
+}

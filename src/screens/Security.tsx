@@ -47,6 +47,28 @@ interface Data {
   events: SecurityEvent[]
 }
 
+/** Совет, если ключ удалили из менеджера паролей: хаб этого не видит и считает ключ живым (решение владельца — предупредить). */
+export const THIS_DEVICE_STALE_HINT = 'Удалил ключ из менеджера паролей (Google, Windows)? Хаб этого не видит — удали его здесь и добавь заново.'
+
+/** «Ключ этого устройства» с кнопкой «Добавить ещё ключ» и подсказкой про устаревший ключ. */
+export function ThisDeviceKey({ canAdd, busy, onAdd }: { canAdd: boolean; busy: boolean; onAdd: () => void }) {
+  return (
+    <div className={own.thisDevice}>
+      <div className={own.keyActions}>
+        <span className={own.state}>
+          <CheckCircle size={18} weight="fill" aria-hidden /> Ключ этого устройства
+        </span>
+        {canAdd && (
+          <button type="button" className={`${css.ghost} ${own.secondary}`} onClick={onAdd} disabled={busy}>
+            <Plus size={18} aria-hidden /> Добавить ещё ключ
+          </button>
+        )}
+      </div>
+      <p className={own.hint}>{THIS_DEVICE_STALE_HINT}</p>
+    </div>
+  )
+}
+
 export function Security() {
   const me = useSession((s) => s.me)
   const signOut = useSession((s) => s.signOut)
@@ -133,16 +155,7 @@ export function Security() {
             <Key size={20} aria-hidden /> Ключи доступа
           </h2>
           {data?.thisDevice ? (
-            <div className={own.keyActions}>
-              <span className={own.state}>
-                <CheckCircle size={18} weight="fill" aria-hidden /> Ключ этого устройства
-              </span>
-              {canAdd && (
-                <button type="button" className={`${css.ghost} ${own.secondary}`} onClick={() => void add()} disabled={busy}>
-                  <Plus size={18} aria-hidden /> Добавить ещё ключ
-                </button>
-              )}
-            </div>
+            <ThisDeviceKey canAdd={canAdd} busy={busy} onAdd={() => void add()} />
           ) : (
             data &&
             canAdd && (
