@@ -1,0 +1,88 @@
+/* Графики «Статистики»: заливки из токенов, уровни тепловой карты — как на «Сегодня». */
+
+.heat {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.heat rect,
+.heatLegend rect {
+  fill: var(--surface-2);
+}
+
+.heat rect[data-level='1'],
+.heatLegend rect[data-level='1'] {
+  fill: color-mix(in srgb, var(--accent) 30%, var(--surface-2));
+}
+
+.heat rect[data-level='2'],
+.heatLegend rect[data-level='2'] {
+  fill: color-mix(in srgb, var(--accent) 52%, var(--surface-2));
+}
+
+.heat rect[data-level='3'],
+.heatLegend rect[data-level='3'] {
+  fill: color-mix(in srgb, var(--accent) 76%, var(--surface-2));
+}
+
+.heat rect[data-level='4'],
+.heatLegend rect[data-level='4'] {
+  fill: var(--accent);
+}
+
+/* Вне периода: место под днём есть, но он не считается. */
+.heat rect[data-out] {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.heatLegend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.stack,
+.meter {
+  display: block;
+  overflow: visible;
+}
+
+.track {
+  fill: var(--surface-2);
+}
+
+.fill {
+  fill: var(--accent);
+}
+
+.stack [data-tone='idea'] {
+  fill: var(--status-idea);
+}
+.stack [data-tone='active'] {
+  fill: var(--status-active);
+}
+.stack [data-tone='paused'] {
+  fill: var(--status-paused);
+}
+.stack [data-tone='done'] {
+  fill: var(--status-done);
+}
+.stack [data-tone='archived'] {
+  fill: var(--status-archived);
+}
+.stack [data-tone='onTime'] {
+  fill: var(--status-active);
+}
+.stack [data-tone='moved'] {
+  fill: var(--status-paused);
+}
+.stack [data-tone='missed'] {
+  fill: var(--magenta);
+}
