@@ -1,7 +1,7 @@
 // «Проекты» по макету 2a: переключатель статусов со счётчиками, поиск за иконкой, сортировка справа, сетка плиток.
 // На телефоне (< 768 px) те же плитки CSS перестраивает в список строк (4-2b). Пустые состояния — по 6-8a/6-8d.
 // Фильтр живёт в адресе, поэтому «назад» из карточки возвращает ту же выборку.
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { ArrowsDownUp, MagnifyingGlass, Plus, PlusCircle, SquaresFour, Warning, X } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
@@ -24,6 +24,7 @@ import {
   type SortKey,
   type Status,
 } from '../data/projects'
+import { useDraft } from '../lib/drafts'
 import { plural } from '../lib/plural'
 import css from './Projects.module.css'
 
@@ -39,6 +40,9 @@ const TABS: { status: Status | null; label: string }[] = [
   { status: 'archived', label: 'Архив' },
 ]
 
+/** Черновик строки поиска по проектам. */
+const SEARCH_DRAFT = 'projects:search'
+
 export function Projects() {
   const files = useSession((s) => s.files)
   const branch = useSession((s) => s.branch)
@@ -48,7 +52,9 @@ export function Projects() {
   const lib = useMemo(() => buildLibrary(files, new Date()), [files])
   const shown = useMemo(() => applyFilter(lib.projects, filter), [lib, filter])
   const counts = useMemo(() => countByStatus(lib.projects), [lib])
-  const [searchOpen, setSearchOpen] = useState(filter.query !== '')
+  // Строка поиска живёт в адресе и возвращается вместе с экраном; черновик нужен, когда экран не вернулся (ADR-011 §4).
+  const { restored: carriedQuery, discard: discardQuery } = useDraft(SEARCH_DRAFT, filter.query === '' ? undefined : filter.query, 'Поиск по проектам')
+  const [searchOpen, setSearchOpen] = useState(filter.query !== '' || carriedQuery !== undefined)
   const [creating, setCreating] = useState(hasNewProjectDraft)
   const titleRef = useRef<HTMLHeadingElement>(null)
 
@@ -56,6 +62,12 @@ export function Projects() {
   const total = lib.projects.length - counts.archived
   const current = filter.statuses.length === 1 ? filter.statuses[0]! : null
   const filtered = filter.query !== '' || filter.statuses.length > 0 || filter.tags.length > 0
+
+  useEffect(() => {
+    if (carriedQuery === undefined) return
+    if (filter.query === '') setParams(filterToParams({ ...filter, query: carriedQuery }), { replace: true })
+    discardQuery()
+  }, [carriedQuery, filter, setParams, discardQuery])
 
   function closeSearch() {
     setSearchOpen(false)

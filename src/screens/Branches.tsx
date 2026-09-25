@@ -15,6 +15,7 @@ import {
   problemFiles,
   type Branch,
 } from '../lib/api'
+import { useDraftText } from '../lib/drafts'
 import { Link } from 'react-router'
 import css from './Panel.module.css'
 import own from './Branches.module.css'
@@ -31,7 +32,7 @@ export function Branches() {
   const refresh = useSession((s) => s.refresh)
   const [branches, setBranches] = useState<Branch[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [name, setName] = useState('')
+  const [name, setName] = useDraftText('branches:new', 'Новая ветка: имя')
   const [outcome, setOutcome] = useState<Outcome | null>(null)
   const fresh = useFreshAction()
   const { busy } = fresh

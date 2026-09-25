@@ -384,9 +384,9 @@ function Tags({ ids, known, settingsProblem, readOnly, save }: { ids: string[]; 
 function Links({ slug, links, readOnly, save }: { slug: string; links: ProjectLink[]; readOnly: boolean; save: Save }) {
   const { run, alert } = useAction(save)
   const [value, setValue] = useDraftText(`project:${slug}:link`, 'Новая ссылка: адрес')
-  const [adding, setAdding] = useState(() => !readOnly && value !== '')
+  const [label, setLabel] = useDraftText(`project:${slug}:link-label`, 'Новая ссылка: подпись')
+  const [adding, setAdding] = useState(() => !readOnly && (value !== '' || label !== ''))
   const [kind, setKind] = useState<LinkKind>('site')
-  const [label, setLabel] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
