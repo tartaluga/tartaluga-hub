@@ -9,6 +9,7 @@ import {
   buildInbox,
   createIdea,
   deleteIdea,
+  deleteProject,
   filterIdeas,
   firstLine,
   makeProjectFromIdea,
@@ -126,6 +127,15 @@ describe('черновики и правки', () => {
     expect(unlinked.ok && 'project' in unlinked.data).toBe(false)
     expect(applyIdeaPatch(prev, { text: '  ' }, now).ok).toBe(false)
     expect(applyIdeaPatch(prev, { project: 'Не slug' }, now)).toEqual({ ok: false, error: 'Идея не прошла проверку схемой — не сохранено' })
+  })
+
+  it('applyIdeaPatch без изменений — changed: false, updatedAt не трогается', () => {
+    const prev = { schemaVersion: 1, id: ID1, text: 'Старое', project: 'hub', createdAt: '2026-09-20T10:00:00+03:00' } as WithUnknown<Idea>
+    for (const patch of [{ text: ' Старое ' }, { project: 'hub' }, { text: 'Старое', project: 'hub' }, {}]) {
+      const r = applyIdeaPatch(prev, patch, now)
+      expect(r).toEqual({ ok: true, changed: false, data: prev })
+    }
+    expect(applyIdeaPatch(prev, { project: null }, now)).toMatchObject({ ok: true, changed: true })
   })
 
   it('rebaseIdeaPatch: переносит, узнаёт уже сделанное, видит конфликт', () => {
@@ -298,6 +308,12 @@ describe('запись идей', () => {
     expect(JSON.parse(repo.text(path)!).text).toBe('Чужой')
   })
 
+  it('saveIdea: правка без изменений — без записи', async () => {
+    const repo = await start([ideaFile(ID1, { project: 'hub' })])
+    await saveIdea(ID1, { text: 'Идея 1', project: 'hub' })
+    expect(repo.log).toEqual([])
+  })
+
   it('saveIdea: идея новее сборки не перезаписывается', async () => {
     const repo = await start([ideaFile(ID1, { schemaVersion: 9 })])
     await expect(saveIdea(ID1, { text: 'x' })).rejects.toMatchObject({ status: 422 })
@@ -313,6 +329,8 @@ describe('запись идей', () => {
   })
 })
 
+const commits = (repo: { log: string[] }) => repo.log.filter((l) => l.startsWith('commit'))
+
 describe('сделать проектом', () => {
   const idea: Idea = { schemaVersion: 1, id: ID1, text: 'Бот расписания', createdAt: '2026-09-20T10:00:00+03:00' }
   const draft = () => {
@@ -321,10 +339,12 @@ describe('сделать проектом', () => {
     return d
   }
 
+  const source = () => ideaFile(ID1, { text: idea.text, createdAt: idea.createdAt })
+
   it('проект и удаление идеи одним коммитом; на экране сразу проект без идеи', async () => {
-    const repo = await start([ideaFile(ID1, { text: idea.text, createdAt: idea.createdAt })])
+    const repo = await start([source()])
     const d = draft()
-    await makeProjectFromIdea(ID1, d)
+    await makeProjectFromIdea(idea, d)
     expect(repo.log.filter((l) => l.startsWith('commit'))).toEqual([`commit h0 ${d.path},ideas/${ID1}.json`])
     expect(JSON.parse(repo.text(d.path)!).fromIdea.ideaId).toBe(ID1)
     expect(repo.text(`ideas/${ID1}.json`)).toBeUndefined()
@@ -333,39 +353,139 @@ describe('сделать проектом', () => {
   })
 
   it('ветку сдвинули — одна повторная попытка от свежего дерева', async () => {
-    const repo = await start([ideaFile(ID1)])
+    const repo = await start([source()])
     repo.external('ideas/' + ID2 + '.json', ideaFile(ID2).text)
-    await makeProjectFromIdea(ID1, draft())
+    await makeProjectFromIdea(idea, draft())
     expect(repo.log.filter((l) => l.startsWith('commit'))).toHaveLength(2)
     expect(repo.text(`ideas/${ID1}.json`)).toBeUndefined()
   })
 
   it('повтор после обрыва: проект уже создан тем же черновиком — успех без второго коммита', async () => {
-    const repo = await start([ideaFile(ID1)])
+    const repo = await start([source()])
     const d = draft()
-    await makeProjectFromIdea(ID1, d)
-    await makeProjectFromIdea(ID1, d)
+    await makeProjectFromIdea(idea, d)
+    await makeProjectFromIdea(idea, d)
     expect(repo.log.filter((l) => l.startsWith('commit'))).toHaveLength(1)
   })
 
   it('slug занят другим проектом — отказ без коммита', async () => {
     const d = draft()
-    const repo = await start([ideaFile(ID1), { path: d.path, sha: 'other', text: projectFile(d.slug).text }])
-    await expect(makeProjectFromIdea(ID1, d)).rejects.toMatchObject({ status: 409, code: 'slug_taken' })
+    const repo = await start([source(), { path: d.path, sha: 'other', text: projectFile(d.slug).text }])
+    await expect(makeProjectFromIdea(idea, d)).rejects.toMatchObject({ status: 409, code: 'slug_taken' })
     expect(repo.log).toEqual([])
     expect(repo.text(`ideas/${ID1}.json`)).toBeDefined()
   })
 
+  it('идею изменили после сборки черновика — отказ без коммита, правка идеи цела', async () => {
+    const repo = await start([source()])
+    repo.external(`ideas/${ID1}.json`, ideaFile(ID1, { text: 'Бот расписания и звонков', createdAt: idea.createdAt }).text)
+    await useSession.getState().refresh()
+    await expect(makeProjectFromIdea(idea, draft())).rejects.toMatchObject({ status: 409, code: 'idea_changed' })
+    expect(commits(repo)).toEqual([])
+    expect(JSON.parse(repo.text(`ideas/${ID1}.json`)!).text).toBe('Бот расписания и звонков')
+  })
+
+  it('идею изменили между попытками (409 → сверка) — повтора нет, правка идеи цела', async () => {
+    const repo = await start([source()])
+    repo.hooks.failCommit = [new ApiError(409, 'conflict', 'Ветку сдвинули')]
+    const commit = repo.remote.commit
+    repo.remote.commit = async (...args) => {
+      if (repo.hooks.failCommit?.length) repo.external(`ideas/${ID1}.json`, ideaFile(ID1, { text: 'Другое', createdAt: idea.createdAt }).text)
+      return commit(...args)
+    }
+    await expect(makeProjectFromIdea(idea, draft())).rejects.toMatchObject({ status: 409, code: 'idea_changed' })
+    expect(commits(repo)).toHaveLength(1)
+    expect(JSON.parse(repo.text(`ideas/${ID1}.json`)!).text).toBe('Другое')
+    expect(repo.text(draft().path)).toBeUndefined()
+  })
+
   it('идею удалили в другом месте — 404 без коммита', async () => {
     const repo = await start([ideaFile(ID2)])
-    await expect(makeProjectFromIdea(ID1, draft())).rejects.toMatchObject({ status: 404 })
+    await expect(makeProjectFromIdea(idea, draft())).rejects.toMatchObject({ status: 404 })
     expect(repo.log).toEqual([])
   })
 
   it('не 409 — ошибка наверх, без повтора', async () => {
-    const repo = await start([ideaFile(ID1)])
+    const repo = await start([source()])
     repo.hooks.failCommit = [new ApiError(422, 'validation', 'схема')]
-    await expect(makeProjectFromIdea(ID1, draft())).rejects.toMatchObject({ status: 422 })
+    await expect(makeProjectFromIdea(idea, draft())).rejects.toMatchObject({ status: 422 })
     expect(repo.log.filter((l) => l.startsWith('commit'))).toHaveLength(1)
+  })
+})
+
+describe('удаление проекта', () => {
+  const project = (path: string) => (JSON.parse(onScreen(path)!.text) as { project?: string }).project
+  const idN = (i: number) => `01J8Z6Y000000000000000${String(i).padStart(4, '0')}`
+
+  it('проект, обложка и отвязка его идей — одним коммитом; чужие идеи и незнакомые поля целы', async () => {
+    const cover = { path: 'covers/a.webp', sha: 'sha-cover', text: '' }
+    const repo = await start([projectFile('a'), cover, ideaFile(ID1, { project: 'a', mood: 'x' }), ideaFile(ID2, { project: 'b' }), ideaFile(ID3)])
+    await deleteProject('a')
+    expect(commits(repo)).toEqual([`commit h0 projects/a.json,covers/a.webp,ideas/${ID1}.json`])
+    expect(repo.text('projects/a.json')).toBeUndefined()
+    const unlinked = JSON.parse(repo.text(`ideas/${ID1}.json`)!)
+    expect(unlinked.project).toBeUndefined()
+    expect(unlinked.mood).toBe('x')
+    expect(JSON.parse(repo.text(`ideas/${ID2}.json`)!).project).toBe('b')
+    expect(onScreen('projects/a.json')).toBeUndefined()
+    expect(project(`ideas/${ID1}.json`)).toBeUndefined()
+    expect(useSession.getState().tree?.head).toBe('h2')
+    const cached = await getCachedFiles('main')
+    expect(JSON.parse(cached.find((f) => f.path === `ideas/${ID1}.json`)!.text).project).toBeUndefined()
+  })
+
+  it('без идей — прежний коммит только с файлами проекта', async () => {
+    const repo = await start([projectFile('a'), ideaFile(ID1)])
+    await deleteProject('a')
+    expect(commits(repo)).toEqual(['commit h0 projects/a.json'])
+  })
+
+  it('ветку сдвинули и привязали ещё идею — отвязка считается заново, одна повторная попытка', async () => {
+    const repo = await start([projectFile('a'), ideaFile(ID1, { project: 'a' })])
+    repo.external(`ideas/${ID2}.json`, ideaFile(ID2, { project: 'a' }).text)
+    await deleteProject('a')
+    expect(commits(repo)).toEqual([`commit h0 projects/a.json,ideas/${ID1}.json`, `commit h2 projects/a.json,ideas/${ID1}.json,ideas/${ID2}.json`])
+    expect(JSON.parse(repo.text(`ideas/${ID2}.json`)!).project).toBeUndefined()
+    expect(repo.text('projects/a.json')).toBeUndefined()
+  })
+
+  it('два конфликта подряд — ошибка, ничего не записано', async () => {
+    const repo = await start([projectFile('a'), ideaFile(ID1, { project: 'a' })])
+    repo.hooks.failCommit = [new ApiError(409, 'conflict', 'x'), new ApiError(409, 'conflict', 'x')]
+    await expect(deleteProject('a')).rejects.toMatchObject({ status: 409 })
+    expect(commits(repo)).toHaveLength(2)
+    expect(repo.text('projects/a.json')).toBeDefined()
+    expect(JSON.parse(repo.text(`ideas/${ID1}.json`)!).project).toBe('a')
+  })
+
+  it('идей больше лимита коммита: удаление и 19 идей первым коммитом, остаток — следующим', async () => {
+    const ideas = Array.from({ length: 25 }, (_, i) => ideaFile(idN(i + 1), { project: 'a' }))
+    const repo = await start([projectFile('a'), ...ideas])
+    await deleteProject('a')
+    const log = commits(repo)
+    expect(log).toHaveLength(2)
+    expect(log[0]!.split(' ')[2]!.split(',')).toHaveLength(20)
+    expect(log[0]).toContain('commit h0 projects/a.json,')
+    expect(log[1]!.split(' ')[2]!.split(',')).toHaveLength(6)
+    expect(log[1]).toMatch(/^commit h\d+ ideas\//)
+    for (const f of ideas) {
+      expect(JSON.parse(repo.text(f.path)!).project).toBeUndefined()
+      expect(project(f.path)).toBeUndefined()
+    }
+    expect(repo.text('projects/a.json')).toBeUndefined()
+  })
+
+  it('повтор после обрыва: проект уже удалён, идеи ещё привязаны — коммит только с отвязкой', async () => {
+    const repo = await start([ideaFile(ID1, { project: 'a' })])
+    await deleteProject('a')
+    expect(commits(repo)).toEqual([`commit h0 ideas/${ID1}.json`])
+    await deleteProject('a')
+    expect(commits(repo)).toHaveLength(1)
+  })
+
+  it('идея новее сборки не трогается, проект удаляется', async () => {
+    const repo = await start([projectFile('a'), ideaFile(ID1, { project: 'a', schemaVersion: 9 })])
+    await deleteProject('a')
+    expect(commits(repo)).toEqual(['commit h0 projects/a.json'])
   })
 })

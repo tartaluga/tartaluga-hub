@@ -344,6 +344,28 @@ describe('запись: создание и удаление файлов', () =
     await expect(useSession.getState().deleteFiles(() => ['projects/a.json'], 'm')).rejects.toMatchObject({ status: 0 })
   })
 
+  it('also: правки других файлов уходят тем же коммитом и сразу видны на экране и в кэше', async () => {
+    const r = fakeRemote(tree, blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    await useSession.getState().deleteFiles(() => ['projects/a.json'], 'm', (files) =>
+      files.some((f) => f.path === 'ideas/x.json') ? [] : [{ path: 'ideas/x.json', text: '{"x":1}' }],
+    )
+    expect(r.writes).toEqual(['commit main head-main-0 projects/a.json,ideas/x.json'])
+    expect(useSession.getState().files.map((f) => f.path)).toEqual(['ideas/x.json'])
+    expect(useSession.getState().tree?.paths).toContain('ideas/x.json')
+    expect((await getCachedFiles('main')).map((f) => f.path)).toEqual(['ideas/x.json'])
+  })
+
+  it('also возвращает уже записанную правку — ошибка вместо бесконечных коммитов', async () => {
+    const r = fakeRemote(tree, blobs)
+    useSession.setState({ remote: r.remote })
+    await useSession.getState().refresh()
+    const many = Array.from({ length: 25 }, (_, i) => ({ path: `ideas/${i}.json`, text: '{}' }))
+    await expect(useSession.getState().deleteFiles(() => ['projects/a.json'], 'm', () => many)).rejects.toMatchObject({ status: 422 })
+    expect(r.writes).toHaveLength(1)
+  })
+
   it('удалять нечего (уже удалили в другом месте) — успех без коммита', async () => {
     const r = fakeRemote([], blobs)
     useSession.setState({ remote: r.remote })
@@ -717,7 +739,15 @@ describe('удаление тега (deleteTag)', () => {
   it('больше файлов, чем сервер принимает за коммит, — отказ до отправки', async () => {
     const r = setup(Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`p${i}`, ['web']])))
     await useSession.getState().refresh()
-    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413 })
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('в 20 проектах — за один раз хаб меняет не больше 19.') })
+    expect(r.commits).toEqual([])
+  })
+
+  it('лимит в тексте отказа: тега в settings.json уже нет — все 20 мест под проекты', async () => {
+    const r = setup(Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`p${i}`, ['web']])))
+    r.blobs.s1 = JSON.stringify({ schemaVersion: 1, tags: [{ id: 'hw', name: 'железо', color: '#8a8fa6' }] })
+    await useSession.getState().refresh()
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('в 21 проектах — за один раз хаб меняет не больше 20.') })
     expect(r.commits).toEqual([])
   })
 
