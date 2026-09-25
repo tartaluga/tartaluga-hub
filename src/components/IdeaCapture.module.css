@@ -1,0 +1,78 @@
+.form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 64px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.bar:focus-within {
+  border-color: var(--accent);
+}
+
+.icon {
+  flex: none;
+  color: var(--magenta);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.save {
+  flex: none;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.save:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error {
+  margin: 0;
+  color: var(--magenta);
+  font-size: 14px;
+}
+
+@media (max-width: 600px) {
+  .bar {
+    padding-left: var(--space-3);
+  }
+
+  .icon {
+    display: none;
+  }
+}
