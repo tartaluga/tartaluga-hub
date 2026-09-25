@@ -118,9 +118,13 @@ export interface Passkey {
   name: string
   createdAt: number
   lastUsedAt: number | null
+  /** Этим ключом здесь вошли или его здесь добавили. */
+  thisDevice: boolean
 }
 
 export interface SessionInfo {
+  /** SHA-256 id сессии (64 hex): по нему можно только завершить сессию, войти с ним нельзя. */
+  id: string
   current: boolean
   device: string
   method: 'github' | 'passkey'
@@ -140,9 +144,16 @@ export interface SecurityEvent {
 export const getMe = () => api<Me>('/api/me')
 export const logout = () => api<{ ok: true }>('/api/auth/logout', { method: 'POST' })
 export const logoutAll = () => api<{ ok: true }>('/api/auth/logout-all', { method: 'POST' })
-export const listPasskeys = () => api<{ passkeys: Passkey[] }>('/api/passkeys')
+/** thisDevice — у этого устройства уже есть ключ (тогда «Добавить ключ» не главное действие). */
+export const listPasskeys = () => api<{ thisDevice: boolean; passkeys: Passkey[] }>('/api/passkeys')
 export const deletePasskey = (id: string) => api<{ ok: true }>(`/api/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const listSessions = () => api<{ sessions: SessionInfo[] }>('/api/sessions')
+export const SESSION_ID = /^[0-9a-f]{64}$/
+/** Завершить вход на другом устройстве; текущую сессию сервер так не завершит (для неё — logout). */
+export function deleteSession(id: string): Promise<{ ok: true }> {
+  if (!SESSION_ID.test(id)) return Promise.reject(new ApiError(400, 'bad_request', 'Неверный id сессии'))
+  return api<{ ok: true }>(`/api/sessions/${id}`, { method: 'DELETE' })
+}
 export const securityLog = () => api<{ events: SecurityEvent[] }>('/api/security')
 export const markSecuritySeen = () => api<{ ok: true }>('/api/security/seen', { method: 'POST' })
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { resetGitHubAppCaches } from '../githubApp'
-import { WEBAUTHN_COOKIE } from '../passkeys'
+import { sha256Hex } from '../crypto'
+import { DEVICE_KEY_COOKIE, WEBAUTHN_COOKIE } from '../passkeys'
 import { SESSION_COOKIE } from '../sessions'
 import { SoftAuthenticator } from './authenticator'
 import { cookieFrom, mutation, ORIGIN, session, setup } from './helpers'
@@ -238,5 +239,103 @@ describe('«Ключи и входы»', () => {
     expect(await me()).toBe(0)
     const log = await (await ctx.send(new Request(`${ORIGIN}/api/security`, { headers: { Cookie: cookie } }), later)).json()
     expect(log.events.map((e: { event: string }) => e.event)).toEqual(['login', 'passkey_added', 'login'])
+  })
+})
+
+describe('ключ этого устройства', () => {
+  const get = (ctx: Ctx, cookie: string) => ctx.send(new Request(`${ORIGIN}/api/passkeys`, { headers: { Cookie: cookie } }))
+  const devCookie = (res: Response) => `${DEVICE_KEY_COOKIE}=${cookieFrom(res, DEVICE_KEY_COOKIE)}`
+
+  it('добавленный здесь ключ помечен; на другом устройстве (без cookie) — нет', async () => {
+    const ctx = await setup()
+    const key = newKey()
+    const res = await registerKey(ctx, key, { name: 'Ноутбук' })
+    expect(res.headers.getSetCookie().find((c) => c.startsWith(DEVICE_KEY_COOKIE))).toMatch(/; Secure; HttpOnly; SameSite=Strict; Max-Age=34560000$/)
+    const here = await (await get(ctx, `${ctx.cookie}; ${devCookie(res)}`)).json()
+    expect(here).toMatchObject({ thisDevice: true, passkeys: [{ id: key.id, thisDevice: true }] })
+    const elsewhere = await (await get(ctx, ctx.cookie)).json()
+    expect(elsewhere).toMatchObject({ thisDevice: false, passkeys: [{ id: key.id, thisDevice: false }] })
+  })
+
+  it('вход ключом ставит cookie устройства; сессия по ключу без cookie тоже считается', async () => {
+    const ctx = await setup()
+    const key = newKey()
+    await registerKey(ctx, key)
+    const res = await loginWith(ctx, key)
+    const sessionCookie = `${SESSION_COOKIE}=${cookieFrom(res, SESSION_COOKIE)}`
+    expect((await (await get(ctx, `${sessionCookie}; ${devCookie(res)}`)).json()).passkeys[0].thisDevice).toBe(true)
+    expect((await (await get(ctx, sessionCookie)).json()).thisDevice).toBe(true)
+  })
+
+  it('подделанная cookie и cookie удалённого ключа не считаются', async () => {
+    const ctx = await setup()
+    const key = newKey()
+    const res = await registerKey(ctx, key)
+    const good = devCookie(res)
+    const forged = good.replace('.', '.AA')
+    expect((await (await get(ctx, `${ctx.cookie}; ${forged}`)).json()).thisDevice).toBe(false)
+    expect((await ctx.send(mutation('DELETE', `/api/passkeys/${key.id}`, ctx.cookie))).status).toBe(200)
+    expect((await (await get(ctx, `${ctx.cookie}; ${good}`)).json()).thisDevice).toBe(false)
+  })
+})
+
+describe('выход на другом устройстве', () => {
+  const hashOf = (cookie: string) => sha256Hex(cookie.split('=')[1]!)
+  async function two() {
+    const ctx = await setup()
+    const other = await session(ctx.env, ctx.gh.fn)
+    return { ctx, other, otherHash: await hashOf(other), mine: await hashOf(ctx.cookie) }
+  }
+  const alive = async (ctx: Ctx, cookie: string) => (await ctx.send(new Request(`${ORIGIN}/api/me`, { headers: { Cookie: cookie } }))).status === 200
+
+  it('список отдаёт хэш сессии; удаление по нему завершает только ту сессию и пишется в журнал', async () => {
+    const { ctx, other, otherHash, mine } = await two()
+    const { sessions } = await (await ctx.send(new Request(`${ORIGIN}/api/sessions`, { headers: { Cookie: ctx.cookie } }))).json()
+    expect(sessions.map((s: { id: string }) => s.id).sort()).toEqual([otherHash, mine].sort())
+    const res = await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}`, ctx.cookie))
+    expect(res.status).toBe(200)
+    expect(await alive(ctx, other)).toBe(false)
+    expect(await alive(ctx, ctx.cookie)).toBe(true)
+    expect(ctx.sql.prepare("SELECT method, detail FROM security_log WHERE event = 'session_revoked'").all()).toEqual([
+      { method: 'github', detail: expect.any(String) },
+    ])
+    // Повторно — уже нет такого входа.
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}`, ctx.cookie))).status).toBe(404)
+  })
+
+  it('текущую сессию так не удалить', async () => {
+    const { ctx, mine } = await two()
+    const res = await ctx.send(mutation('DELETE', `/api/sessions/${mine}`, ctx.cookie))
+    expect(res.status).toBe(400)
+    expect(await alive(ctx, ctx.cookie)).toBe(true)
+    expect(count(ctx, 'SELECT count(*) AS n FROM sessions')).toBe(2)
+  })
+
+  it('несуществующий и чужой по формату id: 404 и 400, ничего не удалено', async () => {
+    const { ctx, other } = await two()
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${'a'.repeat(64)}`, ctx.cookie))).status).toBe(404)
+    // Сама cookie вместо хэша не принимается.
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${other.split('=')[1]}`, ctx.cookie))).status).toBe(400)
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${'A'.repeat(64)}`, ctx.cookie))).status).toBe(400)
+    expect(count(ctx, 'SELECT count(*) AS n FROM sessions')).toBe(2)
+    expect(count(ctx, "SELECT count(*) AS n FROM security_log WHERE event = 'session_revoked'")).toBe(0)
+  })
+
+  it('без свежего входа — 403; без X-Hub или с чужим Origin — 403; не DELETE — 405', async () => {
+    const { ctx, other, otherHash } = await two()
+    const stale = await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}`, ctx.cookie), Date.now() + 6 * 60_000)
+    expect(stale.status).toBe(403)
+    expect((await stale.json()).error.code).toBe('fresh_login_required')
+    const noHeader = new Request(`${ORIGIN}/api/sessions/${otherHash}`, { method: 'DELETE', headers: { Cookie: ctx.cookie, Origin: ORIGIN } })
+    expect((await ctx.send(noHeader)).status).toBe(403)
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}`, ctx.cookie, undefined, { Origin: 'https://evil.example' }))).status).toBe(403)
+    expect((await ctx.send(mutation('POST', `/api/sessions/${otherHash}`, ctx.cookie))).status).toBe(405)
+    expect(await alive(ctx, other)).toBe(true)
+  })
+
+  it('без сессии — 401', async () => {
+    const { ctx, other, otherHash } = await two()
+    expect((await ctx.send(mutation('DELETE', `/api/sessions/${otherHash}`, ''))).status).toBe(401)
+    expect(await alive(ctx, other)).toBe(true)
   })
 })

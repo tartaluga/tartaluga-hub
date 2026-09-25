@@ -15,6 +15,13 @@ import { createSession, logEvent, type Session } from './sessions'
 import { requireFresh } from './write'
 
 export const WEBAUTHN_COOKIE = '__Host-hub_webauthn'
+/**
+ * Подписанная cookie «на этом устройстве есть ключ …»: id ключа, которым здесь вошли или который здесь добавили.
+ * Живёт дольше сессии (выход её не стирает): это подсказка для экрана «Ключи и входы», а не право доступа.
+ * Сервер доверяет ей, только если ключ с таким id ещё есть в базе.
+ */
+export const DEVICE_KEY_COOKIE = '__Host-hub_device_key'
+export const DEVICE_KEY_TTL = 400 * 24 * 60 * 60_000 // предел Max-Age в браузерах
 const CHALLENGE_TTL = 5 * 60_000
 const FAILED_LIMIT = 20 // неудачных проверок ключа за 15 минут — дальше 429
 const FAILED_WINDOW = 15 * 60_000
@@ -41,6 +48,19 @@ async function takeChallenge(request: Request, env: Env, purpose: 'reg' | 'auth'
 }
 
 const withCleared = (res: Response) => (res.headers.append('Set-Cookie', clearCookie(WEBAUTHN_COOKIE)), res)
+
+async function deviceKeyCookie(env: Env, id: string, now: number): Promise<string> {
+  return setCookie(DEVICE_KEY_COOKIE, await signValue(env.COOKIE_SECRET, 'devkey', id, DEVICE_KEY_TTL, now), {
+    maxAge: DEVICE_KEY_TTL / 1000,
+    sameSite: 'Strict',
+  })
+}
+
+/** Id ключа этого устройства из подписанной cookie или null. */
+async function deviceKeyId(request: Request, env: Env, now: number): Promise<string | null> {
+  const id = await verifyValue<unknown>(env.COOKIE_SECRET, 'devkey', getCookie(request, DEVICE_KEY_COOKIE), now)
+  return typeof id === 'string' ? id : null
+}
 
 /** Постоянный id пользователя для ключей: не содержит ничего личного, одинаков на всех устройствах. */
 async function userId(env: Env): Promise<Uint8Array<ArrayBuffer>> {
@@ -121,7 +141,7 @@ export async function register(request: Request, env: Env, session: Session, now
     .run()
   if (!inserted.meta.changes) throw new HttpError(409, 'conflict', 'Этот ключ уже добавлен')
   await logEvent(env.DB, 'passkey_added', { method: session.authMethod, device, detail: name }, now)
-  return withCleared(json({ id: credential.id, name }, 201))
+  return withCleared(json({ id: credential.id, name }, 201, { 'Set-Cookie': await deviceKeyCookie(env, credential.id, now) }))
 }
 
 // ---------- Вход ----------
@@ -169,6 +189,7 @@ export async function authenticate(request: Request, env: Env, now: number): Pro
   await logEvent(env.DB, 'login', { method: 'passkey', device, detail: row.name }, now)
   const res = withCleared(json({ ok: true }))
   res.headers.append('Set-Cookie', sessionCookie)
+  res.headers.append('Set-Cookie', await deviceKeyCookie(env, row.id, now))
   return res
 }
 
@@ -186,10 +207,20 @@ async function failed(env: Env, device: string, detail: string, now: number): Pr
 
 // ---------- «Ключи и входы» ----------
 
-/** GET /api/passkeys */
-export async function listPasskeys(env: Env): Promise<Response> {
+/**
+ * GET /api/passkeys. thisDevice у ключа — им здесь вошли или его здесь добавили (cookie устройства).
+ * thisDevice в ответе — у этого устройства есть ключ: известный по cookie или, если cookie нет,
+ * сама сессия открыта ключом (вход до появления cookie).
+ */
+export async function listPasskeys(request: Request, env: Env, session: Session, now: number): Promise<Response> {
   const { results } = await env.DB.prepare('SELECT id, name, created_at, last_used_at FROM passkeys ORDER BY created_at').all<PasskeyRow>()
-  return json({ passkeys: results.map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, lastUsedAt: r.last_used_at })) })
+  const cookieKey = await deviceKeyId(request, env, now)
+  const known = results.some((r) => r.id === cookieKey)
+  const thisDevice = known || (cookieKey === null && session.authMethod === 'passkey' && results.length > 0)
+  return json({
+    thisDevice,
+    passkeys: results.map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, lastUsedAt: r.last_used_at, thisDevice: r.id === cookieKey })),
+  })
 }
 
 /** DELETE /api/passkeys/:id — при свежем входе. Синхронизируемый ключ удаляется везде, где он есть. */
