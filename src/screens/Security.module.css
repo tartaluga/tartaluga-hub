@@ -18,30 +18,14 @@
   gap: var(--space-3);
 }
 
-.thisDevice {
-  display: grid;
-  gap: var(--space-2);
-  justify-items: end;
-}
-
 /* Подсказка про ключ, удалённый из менеджера паролей: тихая, не тревога. */
 .hint {
+  flex-basis: 100%;
   margin: 0;
-  max-width: 44ch;
+  max-width: 65ch;
   font-size: 12px;
   line-height: 1.45;
   color: var(--text-muted);
-  text-align: right;
-}
-
-@media (max-width: 480px) {
-  .thisDevice {
-    justify-items: start;
-  }
-
-  .hint {
-    text-align: left;
-  }
 }
 
 /* «Ключ этого устройства» — состояние, не кнопка. */

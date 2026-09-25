@@ -53,7 +53,7 @@ export const THIS_DEVICE_STALE_HINT = 'Удалил ключ из менедже
 /** «Ключ этого устройства» с кнопкой «Добавить ещё ключ» и подсказкой про устаревший ключ. */
 export function ThisDeviceKey({ canAdd, busy, onAdd }: { canAdd: boolean; busy: boolean; onAdd: () => void }) {
   return (
-    <div className={own.thisDevice}>
+    <>
       <div className={own.keyActions}>
         <span className={own.state}>
           <CheckCircle size={18} weight="fill" aria-hidden /> Ключ этого устройства
@@ -65,7 +65,7 @@ export function ThisDeviceKey({ canAdd, busy, onAdd }: { canAdd: boolean; busy: 
         )}
       </div>
       <p className={own.hint}>{THIS_DEVICE_STALE_HINT}</p>
-    </div>
+    </>
   )
 }
 
