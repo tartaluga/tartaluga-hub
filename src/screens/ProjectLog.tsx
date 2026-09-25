@@ -4,6 +4,7 @@ import { useState, type FormEvent, type KeyboardEvent } from 'react'
 import { PaperPlaneRight, X } from '@phosphor-icons/react'
 import { LOG_KIND_LABEL, LOG_KINDS, LOG_TEXT_MAX, logKindLabel, logWhen, newLogEntry, sortedLog, type LogKind, type ProjectPatch } from '../data/editProject'
 import type { LogEntry } from '../schema/types'
+import { useDraftText } from '../lib/drafts'
 import css from './ProjectLog.module.css'
 
 const KIND_KEY = 'log.kind'
@@ -20,14 +21,16 @@ function readKind(): LogKind {
 }
 
 interface Props {
+  /** Для ключа черновика: текст записи переживает обновление хаба (ADR-011). */
+  slug: string
   log: LogEntry[]
   readOnly: boolean
   save(patch: ProjectPatch): Promise<string | null>
 }
 
-export function ProjectLog({ log, readOnly, save }: Props) {
+export function ProjectLog({ slug, log, readOnly, save }: Props) {
   const [kind, setKind] = useState<LogKind>(readKind)
-  const [text, setText] = useState('')
+  const [text, setText] = useDraftText(`project:${slug}:log`, 'Запись в лог')
   const [error, setError] = useState<string | null>(null)
   const [shown, setShown] = useState(PAGE)
   const feed = sortedLog(log)

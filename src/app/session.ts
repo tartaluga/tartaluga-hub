@@ -2,6 +2,7 @@
 // вход — HttpOnly cookie, которую ставит сервер. Старт работает офлайн: сначала кэш из IndexedDB, потом сверка.
 // Хаб всегда смотрит на одну ветку репо данных; у каждой ветки свой кэш на устройстве.
 import { create } from 'zustand'
+import { wipeDrafts } from '../lib/drafts'
 import { ApiError, commitChanges, getMe, isNetworkError, listFiles, logout, putFile, readBlobText, type CommitChange, type Me } from '../lib/api'
 import {
   dropBranchCache,
@@ -146,6 +147,7 @@ export const useSession = create<Session>((set, get) => ({
       /* без сети — всё равно стираем устройство; сессия истечёт сама */
     }
     await wipeDevice().catch(() => undefined)
+    await wipeDrafts().catch(() => undefined) // черновики для обновления хаба (ADR-011)
     set({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null })
   },
 

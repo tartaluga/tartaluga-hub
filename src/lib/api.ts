@@ -1,6 +1,7 @@
 // Тонкий клиент к серверу хаба (ADR-007). Токенов в браузере нет: сессия — HttpOnly cookie,
 // изменяющие запросы несут X-Hub: 1 (сервер без него отказывает — защита от подделки запросов).
 import { base64ToBytes } from './base64'
+import { BUILD_HEADER, BUILD_ID, reportStaleBuild, STALE_BUILD } from './update'
 
 export class ApiError extends Error {
   readonly status: number // 0 — нет сети
@@ -27,6 +28,8 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
       cache: 'no-store',
       headers: {
         Accept: 'application/json',
+        // Номер сборки: запись от устаревшей версии сервер отклоняет (ADR-011 §3).
+        [BUILD_HEADER]: BUILD_ID,
         ...(method === 'GET' ? {} : { 'X-Hub': '1' }),
         ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
@@ -43,6 +46,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   if (!res.ok) {
     const err = (body as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error
+    if (err?.code === STALE_BUILD) reportStaleBuild()
     throw new ApiError(res.status, err?.code ?? 'server', err?.message ?? `Сервер ответил ${res.status}`, err?.details)
   }
   return body as T

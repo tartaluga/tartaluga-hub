@@ -1,18 +1,54 @@
 /// <reference types="vitest/config" />
+import { execSync } from 'node:child_process'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // CSP и прочие заголовки безопасности ставит Cloudflare (public/_headers), а не <meta>.
 
+/**
+ * Номер сборки (ADR-011 §1): sha коммита. В Cloudflare Workers Builds — WORKERS_CI_COMMIT_SHA,
+ * локально — git rev-parse HEAD, без git — 'dev'.
+ */
+function buildId(): string {
+  const ok = (v: string | undefined) => (v && /^[0-9a-f]{7,64}$/.test(v) ? v : undefined)
+  const fromCi = ok(process.env.WORKERS_CI_COMMIT_SHA)
+  if (fromCi) return fromCi
+  try {
+    return ok(execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()) ?? 'dev'
+  } catch {
+    return 'dev'
+  }
+}
+
+const BUILD_ID = buildId()
+
+/** /build.json — номер сборки для Worker того же деплоя (worker/build.ts). В кэш service worker не попадает (нет json в globPatterns). */
+function buildJson(): Plugin {
+  return {
+    name: 'hub-build-json',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'build.json', source: JSON.stringify({ build: BUILD_ID }) })
+    },
+  }
+}
+
 export default defineConfig({
   base: '/',
+  define: {
+    'import.meta.env.VITE_HUB_BUILD': JSON.stringify(BUILD_ID),
+  },
   plugins: [
     react(),
+    buildJson(),
     VitePWA({
-      // Новая версия не подменяется молча: пользователь сам жмёт «Обновить» (ADR-006).
+      // Обновление принудительное (ADR-011), но включает его хаб, а не сам service worker:
+      // 'prompt' значит «новая версия ждёт команды SKIP_WAITING». Хаб отдаёт её сразу, как только записал
+      // handoff с черновиками (src/lib/update.ts). 'autoUpdate' перезагрузил бы страницу без handoff,
+      // а старый код под новым service worker не нашёл бы свои ленивые чанки.
       registerType: 'prompt',
-      // Регистрацию делает UpdateBanner (virtual:pwa-register/react), отдельный registerSW.js не нужен.
+      // Регистрацию делает src/lib/update.ts (virtual:pwa-register), отдельный registerSW.js не нужен.
       injectRegister: false,
       includeAssets: ['favicon.svg'],
       manifest: {

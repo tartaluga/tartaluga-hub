@@ -7,6 +7,7 @@ import { ArrowsDownUp, MagnifyingGlass, Plus, PlusCircle, SquaresFour, Warning, 
 import { MAIN, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { NewProjectDialog } from '../components/NewProjectDialog'
+import { hasNewProjectDraft } from '../data/newProject'
 import {
   activityText,
   applyFilter,
@@ -48,7 +49,7 @@ export function Projects() {
   const shown = useMemo(() => applyFilter(lib.projects, filter), [lib, filter])
   const counts = useMemo(() => countByStatus(lib.projects), [lib])
   const [searchOpen, setSearchOpen] = useState(filter.query !== '')
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState(hasNewProjectDraft)
   const titleRef = useRef<HTMLHeadingElement>(null)
 
   const set = (next: Partial<Filter>) => setParams(filterToParams({ ...filter, ...next }), { replace: true })
