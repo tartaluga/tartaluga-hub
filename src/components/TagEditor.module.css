@@ -227,3 +227,65 @@
     color: var(--accent);
   }
 }
+
+/* Подтверждение удаления тега, который стоит на проектах: под строкой, внутри страницы. */
+.confirm {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 var(--space-2) var(--space-2) calc(var(--space-2) + 28px);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--magenta);
+  border-radius: var(--radius-md);
+}
+
+.confirmText {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.confirmActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.confirmDelete,
+.confirmCancel {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.confirmDelete {
+  border: 1px solid var(--magenta);
+  background: var(--magenta);
+  color: var(--bg);
+}
+
+.confirmCancel {
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--text-muted);
+}
+
+.confirmCancel:hover,
+.confirmCancel:focus-visible {
+  color: var(--text);
+}
+
+@media (max-width: 767px) {
+  .confirm {
+    margin-left: var(--space-2);
+  }
+
+  .confirmDelete,
+  .confirmCancel {
+    min-height: 44px;
+  }
+}

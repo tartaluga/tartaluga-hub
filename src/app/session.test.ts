@@ -51,7 +51,14 @@ function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<strin
       const gone = new Set(changes.map((c) => c.path))
       trees[branch] = (trees[branch] ?? []).filter((f) => !gone.has(f.path))
       n++
-      return { head: `head-${branch}-${n}`, shas: {} }
+      const shas: Record<string, string> = {}
+      for (const c of changes) {
+        if (!('text' in c) || c.text === null) continue
+        shas[c.path] = `c${n}-${c.path}`
+        blobs[shas[c.path]!] = c.text
+        trees[branch]!.push({ path: c.path, sha: shas[c.path]! })
+      }
+      return { head: `head-${branch}-${n}`, shas }
     },
   }
   return { remote, reads, writes, trees }
@@ -597,5 +604,125 @@ describe('правка настроек (saveSettings)', () => {
     await useSession.getState().refresh()
     await expect(useSession.getState().saveSettings(recolorTag('web', 'red'))).rejects.toThrow(/схемой/)
     expect(r.writes).toEqual([])
+  })
+})
+
+describe('удаление тега (deleteTag)', () => {
+  const SETTINGS = JSON.stringify({ schemaVersion: 1, tags: [{ id: 'web', name: 'веб', color: '#9184d9' }, { id: 'hw', name: 'железо', color: '#8a8fa6' }] })
+  const proj = (slug: string, tags?: string[]) =>
+    JSON.stringify({ schemaVersion: 1, slug, title: slug, status: 'active', createdAt: '2026-09-01T10:00:00+03:00', updatedAt: '2026-09-01T10:00:00+03:00', ...(tags ? { tags } : {}) })
+  const setup = (projects: Record<string, string[] | undefined>) => {
+    const blobs: Record<string, string> = { s1: SETTINGS }
+    const tree: Entry[] = [{ path: 'settings.json', sha: 's1' }]
+    for (const [slug, tags] of Object.entries(projects)) {
+      blobs[`p-${slug}`] = proj(slug, tags)
+      tree.push({ path: `projects/${slug}.json`, sha: `p-${slug}` })
+    }
+    const r = fakeRemote(tree, blobs)
+    const commits: { changes: { path: string; text: string | null }[]; expectedHead: string }[] = []
+    useSession.setState({
+      remote: {
+        ...r.remote,
+        async commit(branch, changes, expectedHead, message) {
+          commits.push({ changes: changes as { path: string; text: string | null }[], expectedHead })
+          return r.remote.commit(branch, changes, expectedHead, message)
+        },
+      },
+    })
+    return { ...r, blobs, commits }
+  }
+  const file = (path: string) => JSON.parse(useSession.getState().files.find((f) => f.path === path)!.text)
+
+  it('снимает тег с N проектов и из settings.json одним коммитом от известного head', async () => {
+    const r = setup({ a: ['web', 'hw'], b: ['web'], c: ['hw'], d: undefined })
+    await useSession.getState().refresh()
+    await useSession.getState().deleteTag('web')
+    expect(r.commits).toHaveLength(1)
+    expect(r.commits[0]!.expectedHead).toBe('head-main-0')
+    expect(r.commits[0]!.changes.map((c) => c.path)).toEqual(['settings.json', 'projects/a.json', 'projects/b.json'])
+    expect(r.writes.filter((w) => w.startsWith('put'))).toEqual([])
+    expect(file('settings.json').tags.map((t: { id: string }) => t.id)).toEqual(['hw'])
+    expect(file('projects/a.json')).toMatchObject({ schemaVersion: 2, tags: ['hw'] })
+    expect(file('projects/b.json').tags).toEqual([])
+    expect(file('projects/c.json')).toMatchObject({ schemaVersion: 1, tags: ['hw'] })
+    expect(useSession.getState().tree?.head).toBe('head-main-1')
+    expect((await getCachedFiles('main')).find((f) => f.path === 'projects/b.json')!.text).toContain('"tags": []')
+  })
+
+  it('тег без проектов — коммит только settings.json', async () => {
+    const r = setup({ a: ['hw'] })
+    await useSession.getState().refresh()
+    await useSession.getState().deleteTag('web')
+    expect(r.commits.map((c) => c.changes.map((x) => x.path))).toEqual([['settings.json']])
+  })
+
+  it('тега уже нигде нет — ничего не пишется', async () => {
+    const r = setup({ a: ['hw'] })
+    await useSession.getState().refresh()
+    await useSession.getState().deleteTag('nope')
+    expect(r.commits).toEqual([])
+  })
+
+  it('ветку сдвинули — изменения считаются заново по свежим файлам', async () => {
+    const r = setup({ a: ['web'] })
+    await useSession.getState().refresh()
+    // На другом устройстве тег поставили ещё на проект b.
+    r.blobs['p-b'] = proj('b', ['web'])
+    r.trees.main!.push({ path: 'projects/b.json', sha: 'p-b' })
+    let calls = 0
+    const commit = useSession.getState().remote.commit
+    useSession.setState({
+      remote: {
+        ...useSession.getState().remote,
+        async commit(...args) {
+          if (calls++ === 0) throw new ApiError(409, 'conflict', 'Ветку данных уже изменили')
+          return commit(...args)
+        },
+      },
+    })
+    await useSession.getState().deleteTag('web')
+    expect(calls).toBe(2)
+    expect(r.commits.map((c) => c.changes.map((x) => x.path))).toEqual([['settings.json', 'projects/a.json', 'projects/b.json']])
+    expect(file('projects/b.json').tags).toEqual([])
+  })
+
+  it('два конфликта подряд — понятная ошибка, ничего не записано', async () => {
+    const r = setup({ a: ['web'] })
+    await useSession.getState().refresh()
+    let calls = 0
+    useSession.setState({
+      remote: {
+        ...useSession.getState().remote,
+        async commit() {
+          calls++
+          throw new ApiError(409, 'conflict', 'Ветку данных уже изменили')
+        },
+      },
+    })
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('ничего не записано') })
+    expect(calls).toBe(2)
+    expect(file('projects/a.json').tags).toEqual(['web'])
+    expect(r.writes).toEqual([])
+  })
+
+  it('проект новой версии формата с этим тегом — отказ без записи', async () => {
+    const r = setup({ a: ['web'] })
+    r.blobs['p-new'] = JSON.stringify({ ...JSON.parse(proj('new', ['web'])), schemaVersion: 99 })
+    r.trees.main!.push({ path: 'projects/new.json', sha: 'p-new' })
+    await useSession.getState().refresh()
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 422, message: expect.stringContaining('projects/new.json') })
+    expect(r.commits).toEqual([])
+  })
+
+  it('больше файлов, чем сервер принимает за коммит, — отказ до отправки', async () => {
+    const r = setup(Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`p${i}`, ['web']])))
+    await useSession.getState().refresh()
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 413 })
+    expect(r.commits).toEqual([])
+  })
+
+  it('без сети — не уходит и сообщает об этом', async () => {
+    useSession.setState({ remote: fakeRemote([], {}, offline).remote, tree: null })
+    await expect(useSession.getState().deleteTag('web')).rejects.toMatchObject({ status: 0 })
   })
 })

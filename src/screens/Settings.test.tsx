@@ -8,6 +8,7 @@ import { Settings } from './Settings'
 import { Security } from './Security'
 import { Branches } from './Branches'
 import { BranchBanner } from '../components/BranchBanner'
+import { RemoveConfirm } from '../components/TagEditor'
 
 const settingsFile = (over: object = {}) => ({
   path: 'settings.json',
@@ -85,5 +86,23 @@ describe('навигация', () => {
     expect(html).not.toContain('href="/security"')
     expect(html).not.toContain('href="/branches"')
     expect(html).toContain('aria-label="Тема"')
+  })
+})
+
+describe('удаление тега', () => {
+  it('подтверждение внутри страницы: число проектов, кнопки «Удалить тег» и «Отмена»', () => {
+    const html = renderToStaticMarkup(<RemoveConfirm tag={{ id: 'web', name: 'веб', color: '#9184d9' }} count={3} onConfirm={() => {}} onCancel={() => {}} />)
+    expect(html).toContain('aria-label="Удаление тега «веб»"')
+    expect(html).toContain('Тег используется в 3 проектах, он снимется со всех.')
+    expect(html).toContain('Удалить тег')
+    expect(html).toContain('Отмена')
+  })
+
+  it('до нажатия подтверждения на экране нет, кнопка удаления у каждого тега', () => {
+    setState({ files: [settingsFile(), { path: 'projects/a.json', sha: 'p', text: JSON.stringify({ schemaVersion: 1, slug: 'a', title: 'a', status: 'active', createdAt: '2026-09-01T10:00:00+03:00', updatedAt: '2026-09-01T10:00:00+03:00', tags: ['web'] }) }] })
+    const html = render(<Settings />)
+    expect(html).not.toContain('Тег используется')
+    expect(html).toContain('aria-label="Удалить тег «веб»"')
+    expect(html).toContain('aria-label="Удалить тег «железо»"')
   })
 })

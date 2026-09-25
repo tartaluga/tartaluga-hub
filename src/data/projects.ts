@@ -2,7 +2,8 @@
 // Всё здесь — чистые функции: на входе файлы и «сегодня», на выходе то, что рисуют плитки.
 import type { CachedFile } from '../lib/localdb'
 import type { Project, Settings, Tag } from '../schema/types'
-import { parseFile, parseLocalDate, type WithUnknown } from './model'
+import { parseFile, parseLocalDate, serialize, type WithUnknown } from './model'
+import { normalizeProject } from './normalize'
 
 export type Status = Project['status']
 
@@ -144,6 +145,34 @@ export function buildLibrary(files: CachedFile[], today: Date): Library {
     })
   }
   return { projects, broken: broken.sort((a, b) => a.path.localeCompare(b.path)), tags, settingsProblem, abandonedAfterDays }
+}
+
+// ---------- Удаление тега ----------
+
+export interface Untag {
+  /** Новые тексты файлов проектов без тега — каждый прошёл normalizeProject. */
+  changes: { path: string; text: string }[]
+  /** Проекты с тегом, которые хаб править не может (файл новой версии формата). */
+  locked: string[]
+}
+
+/** Снять тег tagId со всех проектов ветки. Незнакомые поля и порядок ключей сохраняются. */
+export function untagProjects(files: CachedFile[], tagId: string, now?: string): Untag {
+  const changes: Untag['changes'] = []
+  const locked: string[] = []
+  for (const f of files) {
+    const parsed = parseFile(f.path, f.sha, f.text)
+    if (!parsed.ok || parsed.kind !== 'project') continue
+    const prev = parsed.data as WithUnknown<Project>
+    if (!Array.isArray(prev.tags) || !prev.tags.includes(tagId)) continue
+    if (parsed.readOnly) {
+      locked.push(f.path)
+      continue
+    }
+    const next = normalizeProject(prev, { ...prev, tags: prev.tags.filter((t) => t !== tagId) }, now)
+    changes.push({ path: f.path, text: serialize(next) })
+  }
+  return { changes: changes.sort((a, b) => a.path.localeCompare(b.path)), locked: locked.sort() }
 }
 
 // ---------- Фильтры ----------
