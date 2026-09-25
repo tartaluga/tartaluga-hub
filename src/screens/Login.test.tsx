@@ -6,7 +6,7 @@ import { Login } from './Login'
 const mockSupported = vi.fn(() => true)
 vi.mock('../lib/passkey', () => ({
   passkeysSupported: () => mockSupported(),
-  passkeyErrorText: () => '',
+  passkeySignInErrorText: () => '',
   signInWithPasskey: vi.fn(),
 }))
 

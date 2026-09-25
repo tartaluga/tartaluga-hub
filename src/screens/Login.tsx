@@ -3,7 +3,7 @@ import { Fingerprint, GithubLogo } from '@phosphor-icons/react'
 import { Visor } from '../components/Visor'
 import { useSession } from '../app/session'
 import { GITHUB_LOGIN_URL } from '../lib/api'
-import { passkeyErrorText, passkeysSupported, signInWithPasskey } from '../lib/passkey'
+import { passkeySignInErrorText, passkeysSupported, signInWithPasskey } from '../lib/passkey'
 import css from './Login.module.css'
 
 /** Коды ошибок, с которыми сервер возвращает с github.com (worker/authGithub.ts). */
@@ -42,7 +42,7 @@ export function Login({ reason }: { reason?: string }) {
       await signInWithPasskey()
       await signedIn()
     } catch (e) {
-      setError(passkeyErrorText(e))
+      setError(passkeySignInErrorText(e))
     } finally {
       setBusy(null)
     }
