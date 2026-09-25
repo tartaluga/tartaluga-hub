@@ -50,6 +50,7 @@ import { ApiError } from '../lib/api'
 import { normalizeProject } from '../data/normalize'
 import type { WithUnknown } from '../data/model'
 import { ProjectTasks } from '../components/ProjectTasks'
+import { CopyContext } from '../components/CopyContext'
 import { restoredDraft, useDraftText } from '../lib/drafts'
 import { ProjectLog } from './ProjectLog'
 import css from './Project.module.css'
@@ -175,6 +176,7 @@ function ProjectCard({ slug }: { slug: string }) {
       {ro && <p className={css.notice}>Файл записан новой версией формата данных — править его может только новая версия хаба. Здесь только чтение.</p>}
 
       <StatusPicker status={d.status as Status} readOnly={ro} save={save} />
+      <CopyContext project={d} />
 
       <div className={css.body}>
         <div className={css.main}>

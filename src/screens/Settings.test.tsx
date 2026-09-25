@@ -43,6 +43,10 @@ describe('экран «Настройки»', () => {
     expect(html).toContain('role="radiogroup" aria-label="Тема"')
   })
 
+  it('над заголовком — моно-надзаголовок, как на других экранах', () => {
+    expect(render(<Settings />)).toMatch(/<div class="eyebrow">Хаб · общие настройки<\/div><h1[^>]*>Настройки<\/h1>/)
+  })
+
   it('нет settings.json — пустой список, править можно (файл создастся), порог по умолчанию', () => {
     setState({ files: [] })
     const html = render(<Settings />)

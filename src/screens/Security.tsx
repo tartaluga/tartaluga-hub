@@ -1,7 +1,7 @@
 // «Ключи и входы» (ADR-007): ключи доступа, где выполнен вход, журнал безопасности.
 // Добавление и удаление ключа, выход на другом устройстве и «Выйти везде» требуют свежего входа — сервер скажет fresh_login_required.
 import { useCallback, useEffect, useState } from 'react'
-import { CheckCircle, DeviceMobile, Fingerprint, GithubLogo, Key, Plus, SignOut, Trash } from '@phosphor-icons/react'
+import { CheckCircle, DeviceMobile, Fingerprint, GithubLogo, Key, ListBullets, Plus, SignOut, Trash } from '@phosphor-icons/react'
 import { useSession } from '../app/session'
 import {
   ApiError,
@@ -230,7 +230,9 @@ export function Security() {
       </div>
 
       <div className={css.block}>
-        <h2 className={css.h2}>Журнал</h2>
+        <h2 className={css.h2}>
+          <ListBullets size={20} aria-hidden /> Журнал
+        </h2>
         <ul className={css.list}>
           {data?.events.map((e, i) => (
             <li key={i} className={css.row} data-warn={WARN.has(e.event) || undefined}>

@@ -31,7 +31,10 @@ export function Settings() {
         <Link to="/" className={css.back} aria-label="Назад">
           <ArrowLeft size={24} aria-hidden />
         </Link>
-        <h1 className={css.title}>Настройки</h1>
+        <div>
+          <div className="eyebrow">Хаб · общие настройки</div>
+          <h1 className={css.title}>Настройки</h1>
+        </div>
       </header>
 
       {settings.problem && (
