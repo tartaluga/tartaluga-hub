@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { resetGitHubAppCaches } from '../githubApp'
+import { COMMIT_BODY_LIMIT, COMMIT_LIMIT } from '../write'
 import { jsonResponse, mutation, on, ORIGIN, setup, type Handler } from './helpers'
 
 const example = (name: string) => readFileSync(new URL(`../../schema/examples/valid/${name}`, import.meta.url), 'utf8')
@@ -100,6 +101,33 @@ describe('POST /api/commit', () => {
     expect(gh.repoCalls().find((c) => c.url.endsWith('/git/commits') && c.method === 'POST')!.body.message).toBe('Идея → проект')
   })
 
+  it('граница: 100 файлов — 99 проектов по ~40 КБ и обложка 2 МБ — одним коммитом', async () => {
+    expect(COMMIT_LIMIT).toBe(100)
+    const { gh, cookie, send } = await setup(...gitData)
+    const padded = (slug: string) => {
+      const p = JSON.parse(PROJECT)
+      return JSON.stringify({ ...p, slug, description: 'Описание проекта. '.repeat(1250) }, null, 2)
+    }
+    const cover = Buffer.concat([WEBP, Buffer.alloc(2 * 1024 * 1024 - WEBP.length)])
+    const changes = [
+      ...Array.from({ length: 99 }, (_, i) => ({ path: `projects/p${i}.json`, text: padded(`p${i}`) })),
+      { path: 'covers/p0.webp', base64: cover.toString('base64') },
+    ]
+    const body = JSON.stringify({ expectedHead: HEAD, changes })
+    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(6 * 1024 * 1024)
+    expect(new TextEncoder().encode(body).byteLength).toBeLessThan(COMMIT_BODY_LIMIT)
+    const res = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes }))
+    expect(res.status).toBe(200)
+    expect(gh.repoCalls().find((c) => c.url.endsWith('/git/trees'))!.body.tree).toHaveLength(100)
+  })
+
+  it('тело коммита больше лимита — 413, в GitHub ничего не пишется', async () => {
+    const { gh, cookie, send } = await setup(...gitData)
+    const changes = [{ path: 'projects/p0.json', text: 'x'.repeat(COMMIT_BODY_LIMIT) }]
+    expect((await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes }))).status).toBe(413)
+    expect(gh.repoCalls().filter((c) => c.method !== 'GET')).toEqual([])
+  })
+
   it('ветку уже сдвинули — 409, ничего не создано', async () => {
     const { gh, cookie, send } = await setup(...gitData)
     const res = await send(mutation('POST', '/api/commit', cookie, { expectedHead: 'd'.repeat(40), changes: [{ path: 'settings.json', text: example('settings.json') }] }))
@@ -110,7 +138,7 @@ describe('POST /api/commit', () => {
   it.each([
     ['без expectedHead', { changes: [{ path: 'settings.json', text: '{}' }] }, 400],
     ['пустой список', { expectedHead: HEAD, changes: [] }, 400],
-    ['больше 20 файлов', { expectedHead: HEAD, changes: Array.from({ length: 21 }, (_, i) => ({ path: `projects/p${i}.json`, text: null })) }, 413],
+    ['больше 100 файлов', { expectedHead: HEAD, changes: Array.from({ length: 101 }, (_, i) => ({ path: `projects/p${i}.json`, text: null })) }, 413],
     ['дважды один путь', { expectedHead: HEAD, changes: [{ path: 'settings.json', text: null }, { path: 'settings.json', text: null }] }, 400],
     ['путь вне данных', { expectedHead: HEAD, changes: [{ path: '.github/workflows/status.yml', text: null }] }, 400],
     ['PNG под видом webp', { expectedHead: HEAD, changes: [{ path: 'covers/x.webp', base64: Buffer.from('\x89PNG\r\n\x1a\n00000000').toString('base64') }] }, 422],

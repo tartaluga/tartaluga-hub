@@ -458,13 +458,24 @@ describe('удаление проекта', () => {
     expect(JSON.parse(repo.text(`ideas/${ID1}.json`)!).project).toBe('a')
   })
 
-  it('идей больше лимита коммита: удаление и 19 идей первым коммитом, остаток — следующим', async () => {
-    const ideas = Array.from({ length: 25 }, (_, i) => ideaFile(idN(i + 1), { project: 'a' }))
+  it('граница: удаление и 99 идей — ровно 100 файлов, одним коммитом', async () => {
+    const ideas = Array.from({ length: 99 }, (_, i) => ideaFile(idN(i + 1), { project: 'a' }))
+    const repo = await start([projectFile('a'), ...ideas])
+    await deleteProject('a')
+    const log = commits(repo)
+    expect(log).toHaveLength(1)
+    expect(log[0]!.split(' ')[2]!.split(',')).toHaveLength(100)
+    for (const f of ideas) expect(JSON.parse(repo.text(f.path)!).project).toBeUndefined()
+    expect(repo.text('projects/a.json')).toBeUndefined()
+  })
+
+  it('идей больше лимита коммита: удаление и 99 идей первым коммитом, остаток — следующим', async () => {
+    const ideas = Array.from({ length: 105 }, (_, i) => ideaFile(idN(i + 1), { project: 'a' }))
     const repo = await start([projectFile('a'), ...ideas])
     await deleteProject('a')
     const log = commits(repo)
     expect(log).toHaveLength(2)
-    expect(log[0]!.split(' ')[2]!.split(',')).toHaveLength(20)
+    expect(log[0]!.split(' ')[2]!.split(',')).toHaveLength(100)
     expect(log[0]).toContain('commit h0 projects/a.json,')
     expect(log[1]!.split(' ')[2]!.split(',')).toHaveLength(6)
     expect(log[1]).toMatch(/^commit h\d+ ideas\//)

@@ -291,7 +291,7 @@ projects/`
 }))
 
 /** Сколько файлов сервер принимает в одном коммите (worker/write.ts, COMMIT_LIMIT). */
-const COMMIT_LIMIT = 20
+export const COMMIT_LIMIT = 100
 
 async function untagAll(branch: string, id: string): Promise<void> {
   const session = () => useSession.getState()

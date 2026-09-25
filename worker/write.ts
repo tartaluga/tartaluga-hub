@@ -11,8 +11,9 @@ import { isFresh, type Session } from './sessions'
 
 const JSON_LIMIT = 1024 * 1024 // файл данных — до 1 МБ
 const IMAGE_LIMIT = 2 * 1024 * 1024 // обложка — до 2 МБ
-const COMMIT_LIMIT = 20 // файлов в одном коммите
-const COMMIT_BODY_LIMIT = 4 * 1024 * 1024 // тело запроса коммита: несколько JSON и одна-две картинки в base64
+export const COMMIT_LIMIT = 100 // файлов в одном коммите (клиент: src/app/session.ts)
+// Тело запроса коммита: до COMMIT_LIMIT JSON обычного размера (десятки КБ) и обложка в base64 (2 МБ → ~2,7 МБ).
+export const COMMIT_BODY_LIMIT = 8 * 1024 * 1024
 const MERGE_FILES_LIMIT = 300 // больше compare API не отдаёт — такое слияние делаем руками на GitHub
 
 type F = typeof fetch | undefined
