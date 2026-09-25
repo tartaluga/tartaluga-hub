@@ -1,7 +1,7 @@
 // Правка проекта на месте: нормализация полей, применение к файлу и слияние по полям при конфликте версий.
 // Чистые функции — сеть и очередь записей в session.ts. Незнакомые поля файла проходят насквозь (ADR-003).
 import { ulid } from 'ulid'
-import type { Link, LogEntry, Project, Task } from '../schema/types'
+import type { Link, LogEntry, Milestone, Project, Task } from '../schema/types'
 import { nowIso, parseLocalDate } from './model'
 import { NEXT_STEP_MAX, TITLE_MAX } from './newProject'
 
@@ -24,6 +24,19 @@ export interface ProjectPatch {
   taskSet?: TaskChange[]
   /** id задач, которые убрать. */
   taskRemove?: string[]
+  /** Новые вехи: встают в конец списка; веха с уже существующим id не дублируется. */
+  milestoneAdd?: Milestone[]
+  /** Правки вех по id: только названные поля, null — убрать поле. */
+  milestoneSet?: MilestoneChange[]
+  /** id вех, которые убрать. Их задачи остаются, с них снимается milestoneId. */
+  milestoneRemove?: string[]
+}
+
+/** Правка одной вехи. */
+export interface MilestoneChange {
+  id: string
+  title?: string
+  due?: string | null
 }
 
 /** Правка одной задачи. doneAt задаётся вместе с done при создании правки, чтобы повтор записи давал тот же файл. */
@@ -33,23 +46,26 @@ export interface TaskChange {
   done?: boolean
   doneAt?: string | null
   due?: string | null
+  /** Перенести задачу в веху; null — задача без вехи. */
+  milestoneId?: string | null
 }
 
 /** Операции над элементами массивов: накладываются по id и с чужими правками других элементов не конфликтуют. */
-const OP_KEYS = ['logAdd', 'logRemove', 'taskAdd', 'taskSet', 'taskRemove'] as const
+const OP_KEYS = ['logAdd', 'logRemove', 'taskAdd', 'taskSet', 'taskRemove', 'milestoneAdd', 'milestoneSet', 'milestoneRemove'] as const
 type OpKey = (typeof OP_KEYS)[number]
 const isOp = (k: string): k is OpKey => (OP_KEYS as readonly string[]).includes(k)
 
-/** Поля файла, которые правка заменяет целиком (лог и задачи правятся отдельными операциями). */
+/** Поля файла, которые правка заменяет целиком (лог, задачи и вехи правятся отдельными операциями). */
 type FieldKey = Exclude<keyof ProjectPatch, OpKey>
-/** Что называется в сообщении о конфликте: поле или задачи. */
-export type ConflictKey = FieldKey | 'tasks'
+/** Что называется в сообщении о конфликте: поле, задачи или вехи. */
+export type ConflictKey = FieldKey | 'tasks' | 'milestones'
 
 export const DESCRIPTION_MAX = 20_000
 export const STACK_ITEM_MAX = 40
 export const LINK_LABEL_MAX = 80
 export const LOG_TEXT_MAX = 2000
 export const TASK_TITLE_MAX = 200
+export const MILESTONE_TITLE_MAX = 120
 
 const oneLine = (s: string) => s.trim().replace(/\s+/g, ' ')
 
@@ -78,6 +94,9 @@ export function normalizePatch(patch: ProjectPatch): ProjectPatch {
   if (patch.taskAdd?.length) out.taskAdd = patch.taskAdd.map((t) => ({ ...t, title: oneLine(t.title) }))
   if (patch.taskSet?.length) out.taskSet = patch.taskSet.map((c) => (c.title === undefined ? c : { ...c, title: oneLine(c.title) }))
   if (patch.taskRemove?.length) out.taskRemove = [...new Set(patch.taskRemove)]
+  if (patch.milestoneAdd?.length) out.milestoneAdd = patch.milestoneAdd.map((m) => ({ ...m, title: oneLine(m.title) }))
+  if (patch.milestoneSet?.length) out.milestoneSet = patch.milestoneSet.map((c) => (c.title === undefined ? c : { ...c, title: oneLine(c.title) }))
+  if (patch.milestoneRemove?.length) out.milestoneRemove = [...new Set(patch.milestoneRemove)]
   return out
 }
 
@@ -98,35 +117,62 @@ export function mergePatch(a: ProjectPatch, b: ProjectPatch): ProjectPatch {
 }
 
 /**
- * Поля b поверх a, операции с задачами склеены: задача, добавленная и тут же убранная до отправки, в файл не попадает;
- * правка ещё не отправленной задачи вливается в неё саму; правки одной задачи сливаются по полям.
+ * Поля b поверх a, операции с задачами и вехами склеены (см. mergeItems). Если веху добавили и тут же убрали
+ * до отправки, задачи, которые успели в неё положить, остаются без вехи.
  */
 function mergeTasks(a: ProjectPatch, b: ProjectPatch): ProjectPatch {
   const out: ProjectPatch = { ...a, ...b }
-  delete out.taskAdd
-  delete out.taskSet
-  delete out.taskRemove
-  const removed = new Set([...(a.taskRemove ?? []), ...(b.taskRemove ?? [])])
-  const adds = new Map<string, Task>()
-  for (const t of [...(a.taskAdd ?? []), ...(b.taskAdd ?? [])]) if (!adds.has(t.id)) adds.set(t.id, t)
-  const sets = new Map<string, TaskChange>()
-  for (const c of [...(a.taskSet ?? []), ...(b.taskSet ?? [])]) {
-    if (removed.has(c.id)) continue
-    const added = adds.get(c.id)
-    if (added) adds.set(c.id, changeTask(added, c) as unknown as Task)
-    else sets.set(c.id, { ...sets.get(c.id), ...c })
-  }
-  const taskAdd = [...adds.values()].filter((t) => !removed.has(t.id))
-  const taskRemove = [...removed].filter((id) => !adds.has(id))
+  for (const k of ['taskAdd', 'taskSet', 'taskRemove', 'milestoneAdd', 'milestoneSet', 'milestoneRemove'] as const) delete out[k]
+  const tasks = mergeItems<Task, TaskChange>([a.taskAdd, b.taskAdd], [a.taskSet, b.taskSet], [a.taskRemove, b.taskRemove])
+  const ms = mergeItems<Milestone, MilestoneChange>([a.milestoneAdd, b.milestoneAdd], [a.milestoneSet, b.milestoneSet], [a.milestoneRemove, b.milestoneRemove])
+  const gone = (id: unknown) => typeof id === 'string' && ms.cancelled.has(id)
+  const taskAdd = tasks.add.map((t) => {
+    if (!gone(t.milestoneId)) return t
+    const rest: Task = { ...t }
+    delete rest.milestoneId
+    return rest
+  })
+  const taskSet = tasks.set.map((c) => (gone(c.milestoneId) ? { ...c, milestoneId: null } : c))
   if (taskAdd.length) out.taskAdd = taskAdd
-  if (sets.size) out.taskSet = [...sets.values()]
-  if (taskRemove.length) out.taskRemove = taskRemove
+  if (taskSet.length) out.taskSet = taskSet
+  if (tasks.remove.length) out.taskRemove = tasks.remove
+  if (ms.add.length) out.milestoneAdd = ms.add
+  if (ms.set.length) out.milestoneSet = ms.set
+  if (ms.remove.length) out.milestoneRemove = ms.remove
   return out
 }
 
-/** Задача после правки: порядок и незнакомые поля сохраняются, null убирает поле, новые поля — в конце. */
-function changeTask(task: object, change: TaskChange): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...task }
+/**
+ * Склейка операций над элементами одного массива: элемент, добавленный и тут же убранный до отправки, в файл не
+ * попадает (его id — в cancelled); правка ещё не отправленного элемента вливается в него самого; правки одного
+ * элемента сливаются по полям.
+ */
+function mergeItems<T extends { id: string }, C extends { id: string }>(
+  addLists: (T[] | undefined)[],
+  setLists: (C[] | undefined)[],
+  removeLists: (string[] | undefined)[],
+): { add: T[]; set: C[]; remove: string[]; cancelled: Set<string> } {
+  const removed = new Set(removeLists.flatMap((l) => l ?? []))
+  const adds = new Map<string, T>()
+  for (const t of addLists.flatMap((l) => l ?? [])) if (!adds.has(t.id)) adds.set(t.id, t)
+  const sets = new Map<string, C>()
+  for (const c of setLists.flatMap((l) => l ?? [])) {
+    if (removed.has(c.id)) continue
+    const added = adds.get(c.id)
+    if (added) adds.set(c.id, changeItem(added, c) as unknown as T)
+    else sets.set(c.id, { ...sets.get(c.id), ...c })
+  }
+  return {
+    add: [...adds.values()].filter((t) => !removed.has(t.id)),
+    set: [...sets.values()],
+    remove: [...removed].filter((id) => !adds.has(id)),
+    cancelled: new Set([...removed].filter((id) => adds.has(id))),
+  }
+}
+
+/** Элемент после правки: порядок и незнакомые поля сохраняются, null убирает поле, новые поля — в конце. */
+function changeItem(item: object, change: object): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...item }
   for (const [k, v] of Object.entries(change)) {
     if (k === 'id' || v === undefined) continue
     if (v === null) delete out[k]
@@ -154,6 +200,15 @@ function taskError(t: { title?: string; due?: string | null }): string | null {
   return null
 }
 
+function milestoneError(m: { title?: string; due?: string | null }): string | null {
+  if (m.title !== undefined) {
+    if (!m.title) return 'Нужно название вехи'
+    if (m.title.length > MILESTONE_TITLE_MAX) return `Веха длиннее ${MILESTONE_TITLE_MAX} символов`
+  }
+  if (m.due != null && !isDate(m.due)) return 'Срок — дата вида ГГГГ-ММ-ДД'
+  return null
+}
+
 /**
  * Правка подтверждена сервером или отклонена — убираем её из неподтверждённых (показанных до ответа сервера).
  * Поле убираем, только если в нём всё ещё наше значение (его могли успеть поправить ещё раз); записи лога и
@@ -167,21 +222,23 @@ export function settledPatch(cur: ProjectPatch, done: ProjectPatch): ProjectPatc
   }
   const logAddIds = new Set(done.logAdd?.map((e) => e.id))
   const logRemoveIds = new Set(done.logRemove)
-  const doneAdds = new Map(done.taskAdd?.map((t) => [t.id, t]))
-  const doneSets = new Map(done.taskSet?.map((c) => [c.id, c]))
-  const taskRemoveIds = new Set(done.taskRemove)
-  const taskSet: TaskChange[] = []
-  const taskAdd: Task[] = []
-  for (const t of next.taskAdd ?? []) {
-    const sent = doneAdds.get(t.id)
-    if (!sent) taskAdd.push(t)
-    else if (!sameValue(sent, t)) taskSet.push({ id: t.id, title: t.title, done: t.done, doneAt: t.doneAt ?? null, due: t.due ?? null })
-  }
-  for (const c of next.taskSet ?? []) {
-    const sent = doneSets.get(c.id)
-    const rest = Object.fromEntries(Object.entries(c).filter(([k, v]) => k === 'id' || !sent || !sameValue(v, sent[k as keyof TaskChange])))
-    if (Object.keys(rest).length > 1) taskSet.push(rest as unknown as TaskChange)
-  }
+  const tasks = settleItems<Task, TaskChange>(next.taskAdd, next.taskSet, next.taskRemove, done.taskAdd, done.taskSet, done.taskRemove, (t) => ({
+    id: t.id,
+    title: t.title,
+    done: t.done,
+    doneAt: t.doneAt ?? null,
+    due: t.due ?? null,
+    milestoneId: t.milestoneId ?? null,
+  }))
+  const ms = settleItems<Milestone, MilestoneChange>(
+    next.milestoneAdd,
+    next.milestoneSet,
+    next.milestoneRemove,
+    done.milestoneAdd,
+    done.milestoneSet,
+    done.milestoneRemove,
+    (m) => ({ id: m.id, title: m.title, due: m.due ?? null }),
+  )
   const out: ProjectPatch = { ...next }
   const put = <K extends OpKey>(k: K, v: NonNullable<ProjectPatch[K]>) => {
     if ((v as unknown[]).length) out[k] = v
@@ -189,10 +246,41 @@ export function settledPatch(cur: ProjectPatch, done: ProjectPatch): ProjectPatc
   }
   put('logAdd', (next.logAdd ?? []).filter((e) => !logAddIds.has(e.id)))
   put('logRemove', (next.logRemove ?? []).filter((id) => !logRemoveIds.has(id)))
-  put('taskAdd', taskAdd)
-  put('taskSet', taskSet)
-  put('taskRemove', (next.taskRemove ?? []).filter((id) => !taskRemoveIds.has(id)))
+  put('taskAdd', tasks.add)
+  put('taskSet', tasks.set)
+  put('taskRemove', tasks.remove)
+  put('milestoneAdd', ms.add)
+  put('milestoneSet', ms.set)
+  put('milestoneRemove', ms.remove)
   return out
+}
+
+/** Операции над элементами массива, которые остаются неподтверждёнными после ответа сервера (см. settledPatch). */
+function settleItems<T extends { id: string }, C extends { id: string }>(
+  add: T[] | undefined,
+  set: C[] | undefined,
+  remove: string[] | undefined,
+  doneAdd: T[] | undefined,
+  doneSet: C[] | undefined,
+  doneRemove: string[] | undefined,
+  toChange: (t: T) => C,
+): { add: T[]; set: C[]; remove: string[] } {
+  const doneAdds = new Map(doneAdd?.map((t) => [t.id, t]))
+  const doneSets = new Map(doneSet?.map((c) => [c.id, c]))
+  const removeIds = new Set(doneRemove)
+  const outSet: C[] = []
+  const outAdd: T[] = []
+  for (const t of add ?? []) {
+    const sent = doneAdds.get(t.id)
+    if (!sent) outAdd.push(t)
+    else if (!sameValue(sent, t)) outSet.push(toChange(t))
+  }
+  for (const c of set ?? []) {
+    const sent = doneSets.get(c.id) as Record<string, unknown> | undefined
+    const rest = Object.fromEntries(Object.entries(c).filter(([k, v]) => k === 'id' || !sent || !sameValue(v, sent[k])))
+    if (Object.keys(rest).length > 1) outSet.push(rest as unknown as C)
+  }
+  return { add: outAdd, set: outSet, remove: (remove ?? []).filter((id) => !removeIds.has(id)) }
 }
 
 /** Ошибка, понятная человеку, или null. Схему файла проверит parseFile перед записью и сервер ещё раз. */
@@ -210,6 +298,10 @@ export function patchError(patch: ProjectPatch): string | null {
     const err = taskError(t)
     if (err) return err
   }
+  for (const m of [...(patch.milestoneAdd ?? []), ...(patch.milestoneSet ?? [])]) {
+    const err = milestoneError(m)
+    if (err) return err
+  }
   return null
 }
 
@@ -220,7 +312,10 @@ export function patchError(patch: ProjectPatch): string | null {
 export function applyEdit<T extends Record<string, unknown>>(data: T, patch: ProjectPatch, now = new Date()): T {
   const set = new Map<string, unknown>(Object.entries(patch).filter(([k, v]) => v !== undefined && !isOp(k)))
   if (patch.logAdd?.length || patch.logRemove?.length) set.set('log', nextLog(data.log, patch))
-  if (patch.taskAdd?.length || patch.taskSet?.length || patch.taskRemove?.length) set.set('tasks', nextTasks(data.tasks, patch))
+  if (patch.taskAdd?.length || patch.taskSet?.length || patch.taskRemove?.length || orphans(data.tasks, patch)) set.set('tasks', nextTasks(data.tasks, patch))
+  if (patch.milestoneAdd?.length || patch.milestoneSet?.length || patch.milestoneRemove?.length) {
+    set.set('milestones', nextItems(data.milestones, patch.milestoneAdd, patch.milestoneSet, patch.milestoneRemove))
+  }
   const out: Record<string, unknown> = {}
   const put = (k: string, v: unknown) => {
     if (v !== null) out[k] = v
@@ -247,21 +342,42 @@ function nextLog(current: unknown, patch: ProjectPatch): LogEntry[] | null {
 
 /**
  * Задачи после правки: убранные вычеркнуты, правки наложены по id, новые — в конце, если такого id ещё нет.
+ * С задач убранных вех снимается milestoneId (задачи остаются).
  * originalDue здесь не ведётся: это делает normalizeProject перед записью (ADR-009).
  */
 function nextTasks(current: unknown, patch: ProjectPatch): unknown[] | null {
-  const remove = new Set(patch.taskRemove ?? [])
-  const changes = new Map((patch.taskSet ?? []).map((c) => [c.id, c]))
+  const tasks = nextItems(current, patch.taskAdd, patch.taskSet, patch.taskRemove) ?? []
+  const gone = new Set(patch.milestoneRemove ?? [])
+  const out = gone.size ? tasks.map((t) => (gone.has(milestoneOf(t) ?? '') ? changeItem(t as object, { milestoneId: null }) : t)) : tasks
+  return out.length ? out : null
+}
+
+/** Есть ли задачи, которые лежат в убираемых вехах. */
+function orphans(current: unknown, patch: ProjectPatch): boolean {
+  if (!patch.milestoneRemove?.length || !Array.isArray(current)) return false
+  const gone = new Set(patch.milestoneRemove)
+  return (current as unknown[]).some((t) => gone.has(milestoneOf(t) ?? ''))
+}
+
+function milestoneOf(t: unknown): string | undefined {
+  const id = t && typeof t === 'object' ? (t as { milestoneId?: unknown }).milestoneId : undefined
+  return typeof id === 'string' ? id : undefined
+}
+
+/** Массив после операций: убранные вычеркнуты, правки наложены по id, новые — в конце, если такого id ещё нет. */
+function nextItems(current: unknown, add: { id: string }[] | undefined, set: { id: string }[] | undefined, remove: string[] | undefined): unknown[] | null {
+  const removed = new Set(remove ?? [])
+  const changes = new Map((set ?? []).map((c) => [c.id, c]))
   const list = Array.isArray(current) ? (current as unknown[]) : []
-  const tasks = list
-    .filter((t) => !remove.has(taskId(t) ?? ''))
+  const items = list
+    .filter((t) => !removed.has(taskId(t) ?? ''))
     .map((t) => {
       const c = changes.get(taskId(t) ?? '')
-      return c ? changeTask(t as object, c) : t
+      return c ? changeItem(t as object, c) : t
     })
-  const ids = new Set(tasks.map(taskId))
-  for (const t of patch.taskAdd ?? []) if (!ids.has(t.id) && !remove.has(t.id)) tasks.push(t)
-  return tasks.length ? tasks : null
+  const ids = new Set(items.map(taskId))
+  for (const t of add ?? []) if (!ids.has(t.id) && !removed.has(t.id)) items.push(t)
+  return items.length ? items : null
 }
 
 function taskId(t: unknown): string | undefined {
@@ -295,24 +411,34 @@ export function rebaseEdit(base: Record<string, unknown>, theirs: Record<string,
   // Записи лога с чужими правками не конфликтуют: добавление и удаление по id накладываются на любую версию.
   const theirLog = Array.isArray(theirs.log) ? (theirs.log as LogEntry[]).map((e) => e?.id) : []
   const logDone = (patch.logAdd ?? []).every((e) => theirLog.includes(e.id)) && (patch.logRemove ?? []).every((id) => !theirLog.includes(id))
-  const tasks = rebaseTasks(base, theirs, patch)
-  if (logDone && tasks === 'already' && keys.every((k) => sameValue(fieldOf(theirs, k), patch[k]))) return { kind: 'already' }
+  const tasks = rebaseItems(base.tasks, theirs.tasks, patch.taskAdd, patch.taskSet, patch.taskRemove)
+  const ms = rebaseItems(base.milestones, theirs.milestones, patch.milestoneAdd, patch.milestoneSet, patch.milestoneRemove)
+  // Задачи, которые на свежей версии всё ещё лежат в убираемой вехе, тоже надо записать.
+  const orphaned = orphans(theirs.tasks, patch)
+  if (logDone && tasks === 'already' && ms === 'already' && !orphaned && keys.every((k) => sameValue(fieldOf(theirs, k), patch[k]))) return { kind: 'already' }
   const fields: ConflictKey[] = keys.filter((k) => !sameValue(fieldOf(theirs, k), fieldOf(base, k)) && !sameValue(fieldOf(theirs, k), patch[k]))
   if (tasks === 'conflict') fields.push('tasks')
+  if (ms === 'conflict') fields.push('milestones')
   return fields.length ? { kind: 'conflict', fields } : { kind: 'apply' }
 }
 
 /**
- * Операции с задачами на свежей версии файла. Добавление и удаление накладываются всегда. Правка поля задачи
- * конфликтует, только если это же поле этой задачи успели поменять на другое значение; задачу, которую успели
- * удалить, править нечего.
+ * Операции с задачами или вехами на свежей версии файла. Добавление и удаление накладываются всегда. Правка поля
+ * элемента конфликтует, только если это же поле этого элемента успели поменять на другое значение; элемент, который
+ * успели удалить, править нечего.
  */
-function rebaseTasks(base: Record<string, unknown>, theirs: Record<string, unknown>, patch: ProjectPatch): 'already' | 'apply' | 'conflict' {
+function rebaseItems(
+  baseList: unknown,
+  theirList: unknown,
+  add: { id: string }[] | undefined,
+  set: { id: string }[] | undefined,
+  remove: string[] | undefined,
+): 'already' | 'apply' | 'conflict' {
   const byId = (v: unknown) => new Map((Array.isArray(v) ? (v as unknown[]) : []).map((t) => [taskId(t), t as Record<string, unknown>]))
-  const mine = byId(base.tasks)
-  const their = byId(theirs.tasks)
-  let already = (patch.taskAdd ?? []).every((t) => their.has(t.id)) && (patch.taskRemove ?? []).every((id) => !their.has(id))
-  for (const c of patch.taskSet ?? []) {
+  const mine = byId(baseList)
+  const their = byId(theirList)
+  let already = (add ?? []).every((t) => their.has(t.id)) && (remove ?? []).every((id) => !their.has(id))
+  for (const c of set ?? []) {
     const t = their.get(c.id)
     if (!t) continue
     for (const [k, v] of Object.entries(c)) {
@@ -336,7 +462,7 @@ export const FIELD_LABEL: Record<FieldKey, string> = {
   links: 'ссылки',
 }
 
-const CONFLICT_LABEL: Record<ConflictKey, string> = { ...FIELD_LABEL, tasks: 'задачи' }
+const CONFLICT_LABEL: Record<ConflictKey, string> = { ...FIELD_LABEL, tasks: 'задачи', milestones: 'вехи' }
 
 /** Правку не удалось наложить: эти поля успели поменять в другом месте. */
 export class EditConflict extends Error {
@@ -468,8 +594,13 @@ export function logWhen(at: string, now = new Date()): string {
 // ---------- Задачи ----------
 
 /** Новая задача из формы; срок необязателен. originalDue при записи поставит normalizeProject. */
-export function newTask(title: string, due?: string): Task {
-  return { id: ulid(), title: oneLine(title), done: false, ...(due ? { due } : {}) }
+export function newTask(title: string, due?: string, milestoneId?: string): Task {
+  return { id: ulid(), title: oneLine(title), done: false, ...(due ? { due } : {}), ...(milestoneId ? { milestoneId } : {}) }
+}
+
+/** Новая веха из формы; срок необязателен. */
+export function newMilestone(title: string, due?: string): Milestone {
+  return { id: ulid(), title: oneLine(title), ...(due ? { due } : {}) }
 }
 
 /** Отметить задачу сделанной или вернуть в работу: doneAt — момент отметки, при возврате поле убирается. */
