@@ -50,4 +50,19 @@ describe('deleteSession', () => {
     await expect(deleteSession(id)).rejects.toBeInstanceOf(ApiError)
     expect(fetch).not.toHaveBeenCalled()
   })
+
+  it('ошибка сервера доходит как ApiError со статусом и кодом', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'not_found', message: 'Такого входа уже нет' } }), { status: 404 })))
+    const err = await deleteSession('0'.repeat(64)).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status: 404, code: 'not_found' })
+  })
+
+  it('id длиннее 64 или с пробелом — без запроса', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    for (const id of ['a'.repeat(65), ` ${'a'.repeat(64)}`, `${'a'.repeat(64)}
+`]) await expect(deleteSession(id)).rejects.toBeInstanceOf(ApiError)
+    expect(fetch).not.toHaveBeenCalled()
+  })
 })
