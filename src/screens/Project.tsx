@@ -38,6 +38,7 @@ import {
   newLink,
   normalizePatch,
   patchError,
+  settledPatch,
   STACK_ITEM_MAX,
   vscodeHref,
   type LinkKind,
@@ -45,6 +46,9 @@ import {
 } from '../data/editProject'
 import type { Link as ProjectLink, Project as ProjectData } from '../schema/types'
 import { ApiError } from '../lib/api'
+import { normalizeProject } from '../data/normalize'
+import type { WithUnknown } from '../data/model'
+import { ProjectTasks } from '../components/ProjectTasks'
 import { ProjectLog } from './ProjectLog'
 import css from './Project.module.css'
 
@@ -108,7 +112,7 @@ function ProjectCard({ slug }: { slug: string }) {
       return errorText(e)
     } finally {
       // Убираем только свои значения: если поле успели поправить ещё раз, его новое значение остаётся.
-      setPending((cur) => settled(cur, patch))
+      setPending((cur) => settledPatch(cur, patch))
     }
   }
 
@@ -136,7 +140,10 @@ function ProjectCard({ slug }: { slug: string }) {
     )
   }
 
-  const d = applyEdit(p.data as ProjectData & Record<string, unknown>, pending)
+  // Неподтверждённые правки показываем так, как они будут записаны: originalDue и прочие инварианты v2
+  // ставит тот же normalizeProject, что и перед записью, — «перенесено с …» видно сразу.
+  const shown = p.data as WithUnknown<ProjectData>
+  const d = normalizeProject(shown, applyEdit(shown, pending))
   const ro = p.readOnly
   return (
     <section className={css.page}>
@@ -169,6 +176,7 @@ function ProjectCard({ slug }: { slug: string }) {
 
       <div className={css.body}>
         <div className={css.main}>
+          <ProjectTasks tasks={d.tasks ?? []} readOnly={ro} save={save} />
           <Description text={d.description ?? ''} readOnly={ro} save={save} />
           <ProjectLog log={d.log ?? []} readOnly={ro} save={save} />
         </div>
@@ -191,26 +199,6 @@ function ProjectCard({ slug }: { slug: string }) {
       </div>
     </section>
   )
-}
-
-/**
- * Правка подтверждена сервером или отклонена — убираем её из неподтверждённых. Поле убираем, только если
- * в нём всё ещё наше значение (его могли успеть поправить ещё раз); записи лога — по id.
- */
-function settled(cur: ProjectPatch, done: ProjectPatch): ProjectPatch {
-  const next: ProjectPatch = { ...cur }
-  for (const k of Object.keys(done) as (keyof ProjectPatch)[]) {
-    if (k !== 'logAdd' && k !== 'logRemove' && next[k] === done[k]) delete next[k]
-  }
-  const addIds = new Set(done.logAdd?.map((e) => e.id))
-  const removeIds = new Set(done.logRemove)
-  const logAdd = next.logAdd?.filter((e) => !addIds.has(e.id))
-  const logRemove = next.logRemove?.filter((id) => !removeIds.has(id))
-  if (logAdd?.length) next.logAdd = logAdd
-  else delete next.logAdd
-  if (logRemove?.length) next.logRemove = logRemove
-  else delete next.logRemove
-  return next
 }
 
 /** Сохранение без поля ввода (кнопки, чипы): ошибка показывается под блоком. */

@@ -1,0 +1,248 @@
+.section {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font: 500 13px/1.3 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.count {
+  color: var(--text-faint);
+}
+
+.muted {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-faint);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+/* Строка как в «Горит» (макет 1a): название, срок моно справа, тонкая линия снизу. */
+.row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.check {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1.5px solid var(--text-faint);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--on-accent);
+  cursor: pointer;
+}
+
+.check:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.check[aria-checked='true'] {
+  border-color: var(--status-done);
+  background: var(--status-done);
+}
+
+.check:disabled {
+  cursor: default;
+}
+
+.main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.taskTitle {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.row[data-done] .taskTitle {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.moved {
+  font: 400 12px/1.4 var(--font-mono);
+  color: var(--status-paused);
+}
+
+.due {
+  padding: 2px var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: 400 13px/1.4 var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+button.due {
+  cursor: pointer;
+}
+
+button.due:hover {
+  background: var(--surface-2);
+}
+
+.due[data-empty] {
+  color: var(--text-faint);
+}
+
+.row[data-today] .due {
+  color: var(--accent);
+}
+
+.row[data-overdue] .due {
+  color: var(--magenta);
+}
+
+.row[data-done] .due {
+  color: var(--text-faint);
+}
+
+.remove {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.row:hover .remove,
+.remove:focus-visible {
+  opacity: 1;
+}
+
+/* На сенсорных экранах наведения нет — крестик виден всегда. */
+@media (hover: none) {
+  .remove {
+    opacity: 1;
+  }
+}
+
+.remove:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.dueForm {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.date {
+  min-height: 36px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: 400 13px/1 var(--font-mono);
+  color-scheme: inherit;
+}
+
+.date:focus-visible,
+.add input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.small {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.small[type='submit'] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.small:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.add input:not(.date) {
+  flex: 1 1 12rem;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.add .date {
+  min-height: 42px;
+}
+
+.addButton {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+}
+
+.addButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--magenta-soft);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
