@@ -75,9 +75,9 @@ export async function deleteOtherSession(idHash: string, env: Env, session: Sess
   requireFresh(session, now)
   if (!/^[0-9a-f]{64}$/.test(idHash)) throw new HttpError(400, 'bad_request', 'Неверный id сессии')
   if (idHash === session.idHash) throw new HttpError(400, 'bad_request', 'Это устройство — для него кнопка «Выйти»')
-  const row = await env.DB.prepare('SELECT device FROM sessions WHERE id_hash = ? AND expires_at > ?').bind(idHash, now).first<{ device: string }>()
+  // Одним запросом: два одновременных DELETE не пройдут оба и не запишут событие дважды.
+  const row = await env.DB.prepare('DELETE FROM sessions WHERE id_hash = ? AND expires_at > ? RETURNING device').bind(idHash, now).first<{ device: string }>()
   if (!row) throw new HttpError(404, 'not_found', 'Такого входа уже нет')
-  await env.DB.prepare('DELETE FROM sessions WHERE id_hash = ?').bind(idHash).run()
   await logEvent(env.DB, 'session_revoked', { method: session.authMethod, device: session.device, detail: row.device }, now)
   return json({ ok: true })
 }
