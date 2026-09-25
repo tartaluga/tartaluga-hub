@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { DotsSixVertical, Plus, Trash } from '@phosphor-icons/react'
 import { InlineText } from './InlineText'
+import { restoredDraft } from '../lib/drafts'
 import { errorText } from '../app/session'
 import {
   addTag,
@@ -33,6 +34,9 @@ interface Props {
   onRemove(id: string): Promise<void>
 }
 
+/** Черновик названия нового тега (ADR-011): переживает обновление хаба. */
+const NEW_TAG_DRAFT = 'settings:new-tag'
+
 interface Drag {
   id: string
   from: number
@@ -46,7 +50,7 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange, onRemove }: Pr
   const [optimistic, setOptimistic] = useState<Tag[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [paletteFor, setPaletteFor] = useState<string | null>(null)
-  const [adding, setAdding] = useState(false)
+  const [adding, setAdding] = useState(() => !readOnly && restoredDraft(NEW_TAG_DRAFT) !== undefined)
   const [drag, setDrag] = useState<Drag | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
   const pending = useRef(0)
@@ -189,6 +193,7 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange, onRemove }: Pr
                     placeholder="Название"
                     maxLength={TAG_NAME_MAX}
                     readOnly={readOnly}
+                    draftKey={`settings:tag:${tag.id}:name`}
                     onSave={async (text) => tagNameError(text, view, tag.id) ?? run(renameTag(tag.id, text), true)}
                   />
                 </div>
@@ -252,6 +257,7 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange, onRemove }: Pr
               placeholder="Название тега"
               maxLength={TAG_NAME_MAX}
               autoOpen
+              draftKey={NEW_TAG_DRAFT}
               onClose={() => setAdding(false)}
               onSave={async (text) => tagNameError(text, view) ?? run(addTag(text, nextColor(view)), true)}
             />
