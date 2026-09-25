@@ -98,3 +98,12 @@ describe('Security: выход на другом устройстве', () => {
     expect(html).not.toContain('<img src=x')
   })
 })
+
+describe('Security: заголовки блоков', () => {
+  it('у каждого блока, включая «Журнал», есть иконка перед названием', () => {
+    const html = render({ passkeys: [pk()] })
+    const heads = html.match(/<h2[^>]*>.*?<\/h2>/g) ?? []
+    expect(heads.some((h) => h.includes('Журнал'))).toBe(true)
+    for (const h of heads) expect(h).toMatch(/^<h2[^>]*><svg[^>]*aria-hidden="true"/)
+  })
+})
