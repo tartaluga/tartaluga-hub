@@ -17,7 +17,8 @@ import { parseFile, SCHEMA_VERSIONS, serialize, type WithUnknown } from '../data
 import type { Project } from '../schema/types'
 import { normalizeProject } from '../data/normalize'
 import { validateSettings } from '../schema/validators.js'
-import type { SettingsChange, SettingsData } from '../components/TagEditor.model'
+import { removeTag, type SettingsChange, type SettingsData } from '../components/TagEditor.model'
+import { untagProjects } from '../data/projects'
 import { applyEdit, EditConflict, mergePatch, rebaseEdit, type ProjectPatch } from '../data/editProject'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
@@ -82,6 +83,11 @@ interface Session {
    * а если файл успели изменить — к свежей версии, один раз. Файла нет — он создаётся.
    */
   saveSettings(change: SettingsChange): Promise<void>
+  /**
+   * Удалить тег: из settings.json и со всех проектов ветки — одним коммитом. Если ветку успели сдвинуть,
+   * изменения считаются заново по свежим файлам и отправляются ещё раз, один раз; иначе ничего не пишется.
+   */
+  deleteTag(id: string): Promise<void>
 }
 
 // Идущие сверки по веткам: повторный refresh той же ветки ждёт текущий, другой ветки — идёт параллельно.
@@ -246,7 +252,66 @@ ${SETTINGS}`
     done.then(cleanup, cleanup)
     return done
   },
+
+  deleteTag(id) {
+    const branch = get().branch
+    const key = `${branch}
+${SETTINGS}`
+    // В очереди настроек, после правок проектов этой ветки, которые уже идут: считаем от записанного.
+    const prefix = `${branch}
+projects/`
+    const before = [...saving.entries()].filter(([k]) => k === key || k.startsWith(prefix)).map(([, p]) => p.catch(() => undefined))
+    const done = Promise.all(before).then(() => untagAll(branch, id))
+    saving.set(key, done)
+    const cleanup = () => {
+      if (saving.get(key) === done) saving.delete(key)
+    }
+    done.then(cleanup, cleanup)
+    return done
+  },
 }))
+
+/** Сколько файлов сервер принимает в одном коммите (worker/write.ts, COMMIT_LIMIT). */
+const COMMIT_LIMIT = 20
+
+async function untagAll(branch: string, id: string): Promise<void> {
+  const session = () => useSession.getState()
+  for (let attempt = 0; ; attempt++) {
+    if (!session().tree) await session().refresh()
+    const tree = session().tree
+    if (!tree || session().branch !== branch) throw new ApiError(0, 'network', 'Нет связи с сервером хаба — тег не удалён')
+
+    const changes: { path: string; text: string }[] = []
+    const settings = currentSettings(branch)
+    if (settings.sha !== undefined) {
+      const next = removeTag(id)(structuredClone(settings.data))
+      if (!validateSettings(next)) throw new ApiError(422, 'validation', 'Настройки не прошли проверку схемой — тег не удалён')
+      const text = serialize(next)
+      if (text !== serialize(settings.data)) changes.push({ path: SETTINGS, text })
+    }
+    const untag = untagProjects(session().files, id)
+    if (untag.locked.length) {
+      throw new ApiError(422, 'validation', `Тег не удалён: ${untag.locked.join(', ')} — в новой версии формата, хаб такие файлы не правит`)
+    }
+    changes.push(...untag.changes)
+    if (!changes.length) return // тега уже нет нигде (например, удалили на другом устройстве)
+    if (changes.length > COMMIT_LIMIT) {
+      throw new ApiError(413, 'payload_too_large', `Тег стоит в ${untag.changes.length} проектах — за один раз хаб меняет не больше ${COMMIT_LIMIT - 1}. Сними его с части проектов вручную.`)
+    }
+
+    try {
+      const res = await session().remote.commit(branch, changes, tree.head, `Хаб: удалить тег ${id}`)
+      await applyWrite(branch, changes.map((c) => ({ path: c.path, sha: res.shas[c.path] ?? '', text: c.text })), [], res.head)
+      void session().refresh()
+      return
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 409)) throw e
+      if (attempt > 0) throw new ApiError(409, 'conflict', 'Данные успели измениться на другом устройстве — тег не удалён, ничего не записано. Попробуй ещё раз.')
+      // Ветку сдвинули после нашей сверки: дочитываем свежие файлы и считаем изменения заново.
+      useSession.setState({ tree: null })
+    }
+  }
+}
 
 const SETTINGS = 'settings.json'
 

@@ -15,6 +15,7 @@ export function Settings() {
   const branch = useSession((s) => s.branch)
   const unseen = useSession((s) => s.me?.unseenSecurityEvents ?? 0)
   const saveSettings = useSession((s) => s.saveSettings)
+  const deleteTag = useSession((s) => s.deleteTag)
   const file = files.find((f) => f.path === 'settings.json')
   const settings = useMemo(() => readSettings(file), [file])
   const usage = useMemo(() => {
@@ -45,7 +46,7 @@ export function Settings() {
             <h2 id="set-tags" className={css.label}>
               Теги <span className={css.hint}>порядок здесь = порядок в карточках</span>
             </h2>
-            <TagEditor tags={settings.tags} readOnly={readOnly} usage={usage} onChange={saveSettings} />
+            <TagEditor tags={settings.tags} readOnly={readOnly} usage={usage} onChange={saveSettings} onRemove={deleteTag} />
           </section>
 
           <section className={css.section} aria-labelledby="set-abandoned">

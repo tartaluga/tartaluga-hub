@@ -4,6 +4,7 @@
 import { parseFile, slugify, type WithUnknown } from '../data/model'
 import { DEFAULT_ABANDONED_DAYS } from '../data/projects'
 import { ApiError } from '../lib/api'
+import { plural } from '../lib/plural'
 import type { Settings } from '../schema/types'
 
 export type SettingsData = WithUnknown<Settings>
@@ -68,6 +69,12 @@ export const renameTag = (id: string, name: string): SettingsChange => (s) => {
 export const recolorTag = (id: string, color: string): SettingsChange => mapTag(id, (t) => ({ ...t, color }))
 
 export const removeTag = (id: string): SettingsChange => (s) => ({ ...s, tags: s.tags.filter((t) => t.id !== id) })
+
+/** Текст подтверждения удаления тега, которым помечены count проектов. */
+export function removeWarning(count: number): string {
+  if (count === 1) return 'Тег используется в 1 проекте, он снимется с него.'
+  return `Тег используется в ${count} ${plural(count, 'проекте', 'проектах', 'проектах')}, он снимется со всех.`
+}
 
 /**
  * Новый тег в конец списка. id выбирается при каждом применении по свежему файлу:

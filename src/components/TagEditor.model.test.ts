@@ -10,6 +10,7 @@ import {
   readSettings,
   recolorTag,
   removeTag,
+  removeWarning,
   renameTag,
   setAbandonedDays,
   tagNameError,
@@ -130,5 +131,14 @@ describe('readSettings', () => {
     expect(ok).toEqual({ tags: [{ id: 'a', name: 'а', color: '#9184d9' }], days: 9, problem: null })
     expect(readSettings({ sha: 's', text: '{' }).problem).toMatch(/не читается/)
     expect(readSettings({ sha: 's', text: JSON.stringify({ schemaVersion: 2, tags: [] }) }).problem).toMatch(/v2/)
+  })
+})
+
+describe('removeWarning', () => {
+  it('число проектов со склонением', () => {
+    expect(removeWarning(1)).toBe('Тег используется в 1 проекте, он снимется с него.')
+    expect(removeWarning(2)).toBe('Тег используется в 2 проектах, он снимется со всех.')
+    expect(removeWarning(5)).toBe('Тег используется в 5 проектах, он снимется со всех.')
+    expect(removeWarning(21)).toBe('Тег используется в 21 проекте, он снимется со всех.')
   })
 })

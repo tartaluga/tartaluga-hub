@@ -11,6 +11,7 @@ import {
   filterToParams,
   isHot,
   type Filter,
+  untagProjects,
 } from './projects'
 import { coverSpec } from '../components/Cover'
 import { plural } from '../lib/plural'
@@ -264,4 +265,45 @@ describe('plural', () => {
     [22, 'проекта'],
     [0, 'проектов'],
   ])('%i %s', (num, word) => expect(plural(num, 'проект', 'проекта', 'проектов')).toBe(word))
+})
+
+describe('untagProjects', () => {
+  const NOW = '2026-09-25T12:00:00+03:00'
+
+  it('снимает тег со всех помеченных проектов; остальные теги, незнакомые поля и порядок ключей остаются', () => {
+    const files = [
+      project('b', { tags: ['web', 'hw'], future: { x: 1 } }),
+      project('a', { tags: ['web'] }),
+      project('c', { tags: ['hw'] }),
+      project('d'),
+      settings([{ id: 'web', name: 'веб', color: '#9184d9' }]),
+    ]
+    const r = untagProjects(files, 'web', NOW)
+    expect(r.locked).toEqual([])
+    expect(r.changes.map((c) => c.path)).toEqual(['projects/a.json', 'projects/b.json'])
+    const b = JSON.parse(r.changes[1]!.text)
+    expect(b.tags).toEqual(['hw'])
+    expect(b.future).toEqual({ x: 1 })
+    expect(Object.keys(b)).toEqual(Object.keys(JSON.parse(files[0]!.text)))
+    expect(JSON.parse(r.changes[0]!.text).tags).toEqual([])
+    expect(r.changes[0]!.text).toMatch(/\}\n$/)
+  })
+
+  it('каждый проект проходит normalizeProject: schemaVersion 2, originalDue у задач с due', () => {
+    const [c] = untagProjects([project('a', { tags: ['web'], tasks: [{ id: id('A'), title: 'т', done: false, due: '2026-10-01' }] })], 'web', NOW).changes
+    const data = JSON.parse(c!.text)
+    expect(data.schemaVersion).toBe(2)
+    expect(data.tasks[0].originalDue).toBe('2026-10-01')
+  })
+
+  it('тег никто не носит — изменений нет', () => {
+    expect(untagProjects([project('a', { tags: ['hw'] }), project('b')], 'web', NOW)).toEqual({ changes: [], locked: [] })
+  })
+
+  it('проект новой версии формата не правится, а попадает в locked; битые файлы пропускаются', () => {
+    const files = [project('new', { schemaVersion: 99, tags: ['web'] }), { path: 'projects/bad.json', sha: 'x', text: '{' }, project('a', { tags: ['web'] })]
+    const r = untagProjects(files, 'web', NOW)
+    expect(r.locked).toEqual(['projects/new.json'])
+    expect(r.changes.map((c) => c.path)).toEqual(['projects/a.json'])
+  })
 })

@@ -13,6 +13,7 @@ import {
   PALETTE,
   recolorTag,
   removeTag,
+  removeWarning,
   renameTag,
   TAG_NAME_MAX,
   tagNameError,
@@ -28,6 +29,8 @@ interface Props {
   /** Сколько проектов помечено каждым тегом (id → число) — для предупреждения при удалении. */
   usage?: Record<string, number>
   onChange(change: SettingsChange): Promise<void>
+  /** Удалить тег из настроек и снять его со всех проектов (одним коммитом). */
+  onRemove(id: string): Promise<void>
 }
 
 interface Drag {
@@ -39,12 +42,13 @@ interface Drag {
   index: number
 }
 
-export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
+export function TagEditor({ tags, readOnly, usage = {}, onChange, onRemove }: Props) {
   const [optimistic, setOptimistic] = useState<Tag[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [paletteFor, setPaletteFor] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [drag, setDrag] = useState<Drag | null>(null)
+  const [confirming, setConfirming] = useState<string | null>(null)
   const pending = useRef(0)
   const list = useRef<HTMLUListElement>(null)
   // Куда вернуть фокус после перерисовки: перестановка переносит строку в DOM, и браузер снимает с неё фокус.
@@ -67,12 +71,12 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
    * Применить правку к экрану сразу и отправить; null — получилось, строка — ошибка.
    * inline — ошибку покажет поле ввода, под списком её не дублируем.
    */
-  async function run(change: SettingsChange, inline = false): Promise<string | null> {
+  async function run(change: SettingsChange, inline = false, send: () => Promise<void> = () => onChange(change)): Promise<string | null> {
     setError(null)
     setOptimistic((prev) => change({ schemaVersion: 1, tags: prev ?? tags }).tags)
     pending.current++
     try {
-      await onChange(change)
+      await send()
       return null
     } catch (e) {
       const text = errorText(e)
@@ -83,11 +87,20 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
     }
   }
 
-  function remove(tag: Tag) {
-    const n = usage[tag.id] ?? 0
-    const warn = n ? `\n\nИм помечено проектов: ${n}. В проектах метка останется, но без названия и цвета.` : ''
-    if (!window.confirm(`Удалить тег «${tag.name}»?${warn}`)) return
-    void run(removeTag(tag.id))
+  /** Тег стоит на проектах — сначала подтверждение внутри страницы; без проектов — сразу. */
+  function remove(tag: Tag, confirmed = false) {
+    if (!confirmed && (usage[tag.id] ?? 0) > 0) {
+      setPaletteFor(null)
+      setConfirming(tag.id)
+      return
+    }
+    setConfirming(null)
+    void run(removeTag(tag.id), false, () => onRemove(tag.id))
+  }
+
+  function cancelRemove(id: string) {
+    setConfirming(null)
+    refocus.current = { id, target: 'swatch' }
   }
 
   function startDrag(e: PointerEvent<HTMLButtonElement>, id: string, from: number) {
@@ -180,11 +193,21 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
                   />
                 </div>
                 {!readOnly && (
-                  <button type="button" className={css.remove} aria-label={`Удалить тег «${tag.name}»`} title="Удалить тег" onClick={() => remove(tag)}>
+                  <button
+                    type="button"
+                    className={css.remove}
+                    aria-label={`Удалить тег «${tag.name}»`}
+                    aria-expanded={confirming === tag.id}
+                    title="Удалить тег"
+                    onClick={() => remove(tag)}
+                  >
                     <Trash size={16} aria-hidden />
                   </button>
                 )}
               </div>
+              {confirming === tag.id && !readOnly && (
+                <RemoveConfirm tag={tag} count={usage[tag.id] ?? 0} onConfirm={() => remove(tag, true)} onCancel={() => cancelRemove(tag.id)} />
+              )}
               {paletteFor === tag.id && !readOnly && (
                 <div
                   className={css.palette}
@@ -245,6 +268,30 @@ export function TagEditor({ tags, readOnly, usage = {}, onChange }: Props) {
           {error}
         </p>
       )}
+    </div>
+  )
+}
+
+/** Подтверждение удаления тега, который стоит на проектах. Escape — отмена. */
+export function RemoveConfirm({ tag, count, onConfirm, onCancel }: { tag: Tag; count: number; onConfirm(): void; onCancel(): void }) {
+  return (
+    <div
+      className={css.confirm}
+      role="group"
+      aria-label={`Удаление тега «${tag.name}»`}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onCancel()
+      }}
+    >
+      <p className={css.confirmText}>{removeWarning(count)}</p>
+      <div className={css.confirmActions}>
+        <button type="button" className={css.confirmDelete} autoFocus onClick={onConfirm}>
+          Удалить тег
+        </button>
+        <button type="button" className={css.confirmCancel} onClick={onCancel}>
+          Отмена
+        </button>
+      </div>
     </div>
   )
 }

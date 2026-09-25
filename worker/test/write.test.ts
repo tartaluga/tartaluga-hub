@@ -129,6 +129,51 @@ describe('POST /api/commit', () => {
     const res = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes: [{ path: 'covers/x.jpg', base64: big.toString('base64') }] }))
     expect(res.status).toBe(413)
   })
+
+  describe('удаление тега: settings.json и несколько проектов одним коммитом', () => {
+    const project = (slug: string, tags: string[]) => JSON.stringify({ ...JSON.parse(PROJECT), slug, tags }, null, 2) + '\n'
+    const untag = (extra: object[] = []) => ({
+      expectedHead: HEAD,
+      message: 'Хаб: удалить тег web',
+      changes: [
+        { path: 'settings.json', text: example('settings.json') },
+        { path: 'projects/a.json', text: project('a', []) },
+        { path: 'projects/b.json', text: project('b', ['hw']) },
+        ...extra,
+      ],
+    })
+
+    it('успех: один блоб на файл, одно дерево, один коммит, ref без force', async () => {
+      const { gh, cookie, send } = await setup(...gitData)
+      const res = await send(mutation('POST', '/api/commit', cookie, untag()))
+      expect(res.status).toBe(200)
+      expect(Object.keys((await res.json()).shas)).toEqual(['settings.json', 'projects/a.json', 'projects/b.json'])
+      const posts = gh.repoCalls().filter((c) => c.method === 'POST')
+      expect(posts.filter((c) => c.url.endsWith('/git/blobs'))).toHaveLength(3)
+      expect(posts.filter((c) => c.url.endsWith('/git/trees'))).toHaveLength(1)
+      expect(posts.filter((c) => c.url.endsWith('/git/commits'))).toHaveLength(1)
+      expect(gh.repoCalls().filter((c) => c.method === 'PATCH')).toHaveLength(1)
+    })
+
+    it('ветку сдвинули между шагами (GitHub: не fast forward) — 409, ветка не сдвинута', async () => {
+      const refusal = on('PATCH', '/git/refs/heads/main', () => jsonResponse({ message: 'Update is not a fast forward' }, 422))
+      const { gh, cookie, send } = await setup(refusal, ...gitData)
+      const res = await send(mutation('POST', '/api/commit', cookie, untag()))
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe('conflict')
+      expect(gh.repoCalls().filter((c) => c.method === 'PATCH')).toHaveLength(1)
+    })
+
+    it.each([
+      ['один проект не проходит схему', [{ path: 'projects/c.json', text: JSON.stringify({ schemaVersion: 2, slug: 'c' }) }], 422],
+      ['один путь вне правил', [{ path: 'README.md', text: 'x' }], 400],
+      ['путь с обходом каталога', [{ path: 'projects/../.github/x.json', text: '{}' }], 400],
+    ])('%s → %i, ничего не пишется', async (_name, extra, status) => {
+      const { gh, cookie, send } = await setup(...gitData)
+      expect((await send(mutation('POST', '/api/commit', cookie, untag(extra)))).status).toBe(status)
+      expect(gh.repoCalls().filter((c) => c.method !== 'GET')).toEqual([])
+    })
+  })
 })
 
 describe('ветки', () => {
