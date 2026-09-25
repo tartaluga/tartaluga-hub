@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { applyEdit, linkHref, linkText, logKindLabel, logWhen, mergePatch, newLink, newLogEntry, normalizePatch, patchError, rebaseEdit, sortedLog, vscodeHref, webUrl } from './editProject'
-import { parseFile, serialize } from './model'
+import { EditConflict, isDate, newTask, settledPatch, TASK_TITLE_MAX, taskDue, taskProgress, toggleTask, type ProjectPatch } from './editProject'
+import { parseFile, serialize, type WithUnknown } from './model'
+import type { Project, Task } from '../schema/types'
+import { normalizeProject } from './normalize'
 
 const NOW = new Date(2026, 8, 23, 15, 0, 0)
 const base = {
@@ -194,5 +197,134 @@ describe('лог', () => {
     expect(entry).toMatchObject({ kind: 'decision', text: 'Берём Визор' })
     expect(entry.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/)
     expect(parseFile('projects/bot.json', '', serialize(applyEdit(base, { logAdd: [entry] }, NOW)))).toMatchObject({ ok: true, readOnly: false })
+  })
+})
+
+describe('задачи', () => {
+  const A = '01K5Y0000000000000000000AA'
+  const B = '01K5Y0000000000000000000BB'
+  const C = '01K5Y0000000000000000000CC'
+  const tasks: Task[] = [
+    { id: A, title: 'Сдать главу', done: false, due: '2026-09-21', future: 1 } as Task,
+    { id: B, title: 'Макет', done: true, doneAt: '2026-09-20T10:00:00+03:00' },
+  ]
+  const withTasks = { ...base, schemaVersion: 2, tasks } as WithUnknown<Project> & { tasks: Task[] }
+  // Путь записи как в session.writeProject: правка, затем normalizeProject от версии до правки.
+  const write = (data: WithUnknown<Project>, patch: ProjectPatch) => normalizeProject(data, applyEdit(data, patch, NOW))
+
+  it('newTask и toggleTask: чистая задача, doneAt ставится при отметке и убирается при снятии', () => {
+    const t = newTask('  Карта   подземелья ', '2026-09-24')
+    expect(t).toMatchObject({ title: 'Карта подземелья', done: false, due: '2026-09-24' })
+    expect(t.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/)
+    expect(newTask('Без срока')).not.toHaveProperty('due')
+    expect(toggleTask(A, true, NOW)).toEqual({ id: A, done: true, doneAt: expect.stringMatching(/^2026-09-23T15:00:00/) })
+    expect(toggleTask(A, false, NOW)).toEqual({ id: A, done: false, doneAt: null })
+  })
+
+  it('добавление встаёт в конец, повтор не дублирует; результат проходит схему', () => {
+    const t = { id: C, title: 'Релиз', done: false, due: '2026-09-26' }
+    const out = write(withTasks, { taskAdd: [t] })
+    expect(out.tasks?.map((x) => x.id)).toEqual([A, B, C])
+    expect(out.tasks?.[2]).toEqual({ ...t, originalDue: '2026-09-26' })
+    expect(write(out, { taskAdd: [t] }).tasks).toHaveLength(3)
+    expect(parseFile('projects/bot.json', '', serialize(out))).toMatchObject({ ok: true, readOnly: false })
+  })
+
+  it('отметка и правка названия: незнакомые поля задачи и порядок ключей сохраняются', () => {
+    const out = applyEdit(withTasks, { taskSet: [toggleTask(A, true, NOW), { id: A, title: 'Глава 2' }] }, NOW)
+    // Две правки одной задачи в одном patch — последняя по id выигрывает: так их склеивает mergePatch.
+    const merged = applyEdit(withTasks, mergePatch({ taskSet: [toggleTask(A, true, NOW)] }, { taskSet: [{ id: A, title: 'Глава 2' }] }), NOW)
+    expect(out.tasks?.[0]).toMatchObject({ id: A, title: 'Глава 2' })
+    expect(merged.tasks?.[0]).toMatchObject({ id: A, title: 'Глава 2', done: true, future: 1 })
+    expect(Object.keys(merged.tasks![0]!)).toEqual(['id', 'title', 'done', 'due', 'future', 'doneAt'])
+    const undone = applyEdit(withTasks, { taskSet: [toggleTask(B, false)] }, NOW)
+    expect(undone.tasks?.[1]).toEqual({ id: B, title: 'Макет', done: false })
+  })
+
+  it('перенос срока: originalDue ставит normalizeProject на пути записи и дальше не трогает', () => {
+    const moved = write(withTasks, { taskSet: [{ id: A, due: '2026-09-28' }] })
+    expect(moved.tasks?.[0]).toMatchObject({ due: '2026-09-28', originalDue: '2026-09-21' })
+    const again = write(moved, { taskSet: [{ id: A, due: '2026-10-01' }] })
+    expect(again.tasks?.[0]).toMatchObject({ due: '2026-10-01', originalDue: '2026-09-21' })
+    expect(parseFile('projects/bot.json', '', serialize(again))).toMatchObject({ ok: true, readOnly: false })
+  })
+
+  it('снятие срока убирает due, а с ним и originalDue (схема: originalDue только при due)', () => {
+    const moved = write(withTasks, { taskSet: [{ id: A, due: '2026-09-28' }] })
+    const cleared = write(moved, { taskSet: [{ id: A, due: null }] })
+    expect(cleared.tasks?.[0]).not.toHaveProperty('due')
+    expect(cleared.tasks?.[0]).not.toHaveProperty('originalDue')
+    expect(parseFile('projects/bot.json', '', serialize(cleared))).toMatchObject({ ok: true, readOnly: false })
+  })
+
+  it('удаление по id; последняя задача — поле tasks уходит из файла; правка удалённой задачи её не воскрешает', () => {
+    expect(applyEdit(withTasks, { taskRemove: [A] }, NOW).tasks?.map((t) => t.id)).toEqual([B])
+    expect(applyEdit(withTasks, { taskRemove: [A, B] }, NOW)).not.toHaveProperty('tasks')
+    expect(applyEdit(withTasks, { taskRemove: [A], taskSet: [{ id: A, title: 'x' }] }, NOW).tasks?.map((t) => t.id)).toEqual([B])
+    expect(applyEdit(withTasks, { taskSet: [{ id: C, title: 'x' }] }, NOW).tasks?.map((t) => t.id)).toEqual([A, B])
+  })
+
+  it('normalizePatch и patchError: пробелы в названии, пустое название, длина, битый срок', () => {
+    expect(normalizePatch({ taskSet: [{ id: A, title: '  a  b ' }], taskRemove: [A, A] })).toEqual({ taskSet: [{ id: A, title: 'a b' }], taskRemove: [A] })
+    expect(patchError(normalizePatch({ taskAdd: [{ id: C, title: '   ', done: false }] }))).toBe('Нужно название задачи')
+    expect(patchError({ taskSet: [{ id: A, title: 'x'.repeat(TASK_TITLE_MAX + 1) }] })).toMatch(/Задача длиннее/)
+    expect(patchError({ taskSet: [{ id: A, title: 'x'.repeat(TASK_TITLE_MAX) }] })).toBeNull()
+    expect(patchError({ taskSet: [{ id: A, due: '2026-02-31' }] })).toMatch(/Срок/)
+    expect(patchError({ taskAdd: [{ id: C, title: 'a', done: false, due: '26.09.2026' }] })).toMatch(/Срок/)
+    expect(patchError({ taskSet: [{ id: A, due: null }] })).toBeNull()
+    expect(isDate('2028-02-29')).toBe(true)
+    expect(isDate('2027-02-29')).toBe(false)
+  })
+
+  it('mergePatch: добавленная и тут же удалённая задача не пишется, правка неотправленной задачи вливается в неё', () => {
+    const t = newTask('Релиз')
+    expect(mergePatch({ taskAdd: [t] }, { taskRemove: [t.id] })).toEqual({})
+    expect(mergePatch({ taskAdd: [t] }, { taskSet: [toggleTask(t.id, true, NOW)] })).toEqual({
+      taskAdd: [{ ...t, done: true, doneAt: expect.stringMatching(/^2026-09-23T15/) }],
+    })
+    expect(mergePatch({ taskSet: [{ id: A, title: 'x' }] }, { taskRemove: [A] })).toEqual({ taskRemove: [A] })
+    expect(mergePatch({ title: 'a', taskRemove: [A] }, { taskRemove: [B] })).toEqual({ title: 'a', taskRemove: [A, B] })
+  })
+
+  it('rebaseEdit: задачи накладываются по id и конфликтуют только на том же поле той же задачи', () => {
+    const theirs = { ...withTasks, tasks: [...withTasks.tasks, { id: C, title: 'Чужая', done: false }] }
+    expect(rebaseEdit(withTasks, theirs, { taskSet: [toggleTask(A, true, NOW)] })).toEqual({ kind: 'apply' })
+    expect(rebaseEdit(withTasks, theirs, { taskAdd: [newTask('Моя')] })).toEqual({ kind: 'apply' })
+    expect(rebaseEdit(withTasks, theirs, { taskAdd: [theirs.tasks[2]!] })).toEqual({ kind: 'already' })
+    expect(rebaseEdit(withTasks, { ...withTasks, tasks: [withTasks.tasks[1]!] }, { taskRemove: [A] })).toEqual({ kind: 'already' })
+    // Задачу успели удалить — править нечего, но и конфликта нет.
+    expect(rebaseEdit(withTasks, { ...withTasks, tasks: [withTasks.tasks[1]!] }, { taskSet: [{ id: A, title: 'x' }] })).toEqual({ kind: 'already' })
+    const retitled = { ...withTasks, tasks: [{ ...withTasks.tasks[0]!, title: 'Другое' }, withTasks.tasks[1]!] }
+    expect(rebaseEdit(withTasks, retitled, { taskSet: [{ id: A, due: '2026-09-30' }] })).toEqual({ kind: 'apply' })
+    expect(rebaseEdit(withTasks, retitled, { taskSet: [{ id: A, title: 'Глава 2' }] })).toEqual({ kind: 'conflict', fields: ['tasks'] })
+    expect(rebaseEdit(withTasks, retitled, { taskSet: [{ id: A, title: 'Другое' }] })).toEqual({ kind: 'already' })
+    expect(new EditConflict(['title', 'tasks']).message).toMatch(/название, задачи/)
+  })
+
+  it('settledPatch: подтверждённое уходит, более свежие правки остаются', () => {
+    const t = newTask('Релиз')
+    const sent: ProjectPatch = { taskAdd: [t], taskSet: [{ id: A, title: 'x', due: '2026-09-30' }], taskRemove: [B], logRemove: ['L'] }
+    expect(settledPatch(sent, sent)).toEqual({})
+    // Пока шла запись, у задачи A поменяли срок ещё раз, а в новую задачу влили отметку.
+    const cur = mergePatch(sent, { taskSet: [{ id: A, due: '2026-10-01' }, toggleTask(t.id, true, NOW)] })
+    expect(settledPatch(cur, sent)).toEqual({
+      taskSet: [
+        { id: t.id, title: 'Релиз', done: true, doneAt: expect.stringMatching(/^2026-09-23T15/), due: null },
+        { id: A, due: '2026-10-01' },
+      ],
+    })
+    expect(settledPatch({ title: 'a', nextStep: 'b' }, { title: 'a' })).toEqual({ nextStep: 'b' })
+  })
+
+  it('taskDue: подписи как в «Горит», просрочка, сегодня, перенос', () => {
+    const today = new Date(2026, 8, 23, 12)
+    expect(taskDue({ done: false }, today)).toBeNull()
+    expect(taskDue({ done: false, due: '2026-09-21' }, today)).toEqual({ text: '−2 дн · 21.09', overdue: true, today: false, movedFrom: null })
+    expect(taskDue({ done: false, due: '2026-09-23' }, today)).toMatchObject({ text: 'сегодня', today: true, overdue: false })
+    expect(taskDue({ done: false, due: '2026-09-24' }, today)).toMatchObject({ text: 'завтра' })
+    expect(taskDue({ done: false, due: '2027-01-05', originalDue: '2026-09-21' }, today)).toEqual({ text: '05.01.2027', overdue: false, today: false, movedFrom: '21.09' })
+    expect(taskDue({ done: true, due: '2026-09-21', originalDue: '2026-09-21' }, today)).toEqual({ text: '21.09', overdue: false, today: false, movedFrom: null })
+    expect(taskDue({ done: false, due: 'мусор' }, today)).toEqual({ text: 'мусор', overdue: false, today: false, movedFrom: null })
+    expect(taskProgress([{ done: true }, { done: false }])).toEqual({ done: 1, total: 2 })
   })
 })
