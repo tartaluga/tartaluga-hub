@@ -161,7 +161,7 @@ function ProjectCard({ slug }: { slug: string }) {
         {STATUS_LABEL[d.status as Status]} · {activityText(p.activityDays)}
       </div>
       <h1 className={css.title}>
-        <InlineText value={d.title} placeholder="Без названия" label="Название" maxLength={TITLE_MAX} readOnly={ro} draftKey={`project:${d.slug}:title`} onSave={(title) => save({ title })} />
+        <InlineText value={d.title} placeholder="Без названия" label="Название" maxLength={TITLE_MAX} readOnly={ro} trigger="pencil" draftKey={`project:${d.slug}:title`} onSave={(title) => save({ title })} />
       </h1>
       <div className={css.next}>
         <InlineText
@@ -171,6 +171,7 @@ function ProjectCard({ slug }: { slug: string }) {
           label="Следующий шаг"
           maxLength={NEXT_STEP_MAX}
           readOnly={ro}
+          trigger="pencil"
           draftKey={`project:${d.slug}:nextStep`}
           onSave={(nextStep) => save({ nextStep })}
         />

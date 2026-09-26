@@ -1,6 +1,8 @@
 // Правка текста на месте: нажал — поле ввода; Enter или уход из поля — сохранить, Esc — отменить.
+// trigger="pencil": поле открывает только кнопка-карандаш рядом, сам текст можно выделять и ходить по ссылкам.
 // Если сохранить не вышло, поле остаётся открытым с введённым текстом и причиной — ввод не теряется.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { PencilSimple } from '@phosphor-icons/react'
 import { restoredDraft, useDraft } from '../lib/drafts'
 import css from './InlineText.module.css'
 
@@ -25,9 +27,13 @@ interface Props {
    * пришёл черновик с этим ключом, поле открывается сразу с ним.
    */
   draftKey?: string
+  /** row (по умолчанию) — поле открывает нажатие на текст; pencil — только кнопка-карандаш рядом. */
+  trigger?: 'row' | 'pencil'
+  /** Подпись карандаша для чтения с экрана; по умолчанию «Изменить <label>». */
+  editLabel?: string
 }
 
-export function InlineText({ value, display, placeholder, label, maxLength, multiline, readOnly, className, autoOpen, onClose, onSave, draftKey }: Props) {
+export function InlineText({ value, display, placeholder, label, maxLength, multiline, readOnly, className, autoOpen, onClose, onSave, draftKey, trigger = 'row', editLabel }: Props) {
   // Черновик прошлой версии в поле только для чтения не открываем: он остаётся в реестре и едет дальше.
   const [carried] = useState(() => (draftKey === undefined || readOnly ? undefined : restoredDraft(draftKey)))
   const [editing, setEditing] = useState((!!autoOpen || carried !== undefined) && !readOnly)
@@ -36,6 +42,8 @@ export function InlineText({ value, display, placeholder, label, maxLength, mult
   const [error, setError] = useState<string | null>(null)
   const saving = useRef(false)
   const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
+  const pencil = useRef<HTMLButtonElement>(null)
+  const wasEditing = useRef(editing)
   // В handoff уходит только изменённый текст открытого поля.
   const { discard } = useDraft(draftKey ?? null, editing && draft !== value ? draft : undefined, label)
 
@@ -46,6 +54,16 @@ export function InlineText({ value, display, placeholder, label, maxLength, mult
     el.focus()
     el.setSelectionRange(el.value.length, el.value.length)
   }, [editing])
+
+  // Поле закрылось (сохранили или отменили) — фокус обратно на карандаш. Если человек ушёл из поля
+  // на другую кнопку или поле, фокус уже там — не отнимаем.
+  useEffect(() => {
+    const closed = wasEditing.current && !editing
+    wasEditing.current = editing
+    if (!closed || trigger !== 'pencil') return
+    const active = document.activeElement
+    if (!active || active === document.body) pencil.current?.focus()
+  }, [editing, trigger])
 
   function open() {
     if (readOnly) return
@@ -91,6 +109,18 @@ export function InlineText({ value, display, placeholder, label, maxLength, mult
   }
 
   if (!editing) {
+    const shown = value ? (display ?? value) : <span className={css.placeholder}>{placeholder}</span>
+    if (trigger === 'pencil' && !readOnly) {
+      const name = editLabel ?? `Изменить ${label.charAt(0).toLowerCase()}${label.slice(1)}`
+      return (
+        <div className={`${css.view} ${css.withPencil} ${className ?? ''}`}>
+          <span className={css.text}>{shown}</span>
+          <button ref={pencil} type="button" className={css.pencil} onClick={open} aria-label={name} title={name}>
+            <PencilSimple size={16} aria-hidden />
+          </button>
+        </div>
+      )
+    }
     if (readOnly) return <div className={`${css.view} ${className ?? ''}`}>{value ? (display ?? value) : <span className={css.placeholder}>{placeholder}</span>}</div>
     return (
       <button type="button" className={`${css.view} ${css.editable} ${className ?? ''}`} onClick={open} aria-label={`${label}: ${value || 'не задано'}. Изменить`}>

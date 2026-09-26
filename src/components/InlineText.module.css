@@ -81,3 +81,53 @@
   letter-spacing: 0;
   overflow-wrap: anywhere;
 }
+
+/* Режим «карандаш»: текст обычный (выделяется, ссылки работают), править — только кнопкой рядом. */
+.withPencil {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pencil {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.pencil:hover {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.pencil:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  color: var(--accent);
+}
+
+/* С мышью карандаш приглушён до наведения или фокуса; на сенсорных экранах виден всегда. */
+@media (hover: hover) {
+  .pencil {
+    opacity: 0.35;
+  }
+
+  .withPencil:hover .pencil,
+  .withPencil:focus-within .pencil {
+    opacity: 1;
+  }
+}
