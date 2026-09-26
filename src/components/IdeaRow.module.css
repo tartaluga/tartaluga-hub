@@ -295,3 +295,11 @@
     padding-left: 0;
   }
 }
+
+/* Текст идеи совпадает с заголовком — вместо повтора только приглашение изменить. */
+.editText {
+  color: var(--text-faint);
+  font: 500 11px/1.4 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}

@@ -62,7 +62,7 @@ describe('карточка проекта: задачи', () => {
     let finish: () => void = () => {}
     const saveProject = vi.fn((_slug: string, _patch: ProjectPatch) => new Promise<void>((r) => (finish = r)))
     await open(saveProject)
-    expect(host.querySelector('h2')?.textContent).toBe('Задачи · 0/1')
+    expect([...host.querySelectorAll('h2')].find((h) => h.textContent?.startsWith('Задачи'))?.textContent).toBe('Задачи · 0/1')
     expect(host.textContent).not.toContain('перенесено')
 
     await act(async () => byLabel('Срок: 21.09.2099. Изменить срок').click())
@@ -85,5 +85,18 @@ describe('карточка проекта: задачи', () => {
     await act(async () => byLabel('Сделано: Сдать главу').click())
     expect(byLabel('Сделано: Сдать главу').getAttribute('aria-checked')).toBe('false')
     expect(host.querySelector('section section [role="alert"]')?.textContent).toBe('Что-то пошло не так. Попробуй ещё раз.')
+  })
+})
+
+describe('карточка проекта: описание', () => {
+  it('описание — сразу под названием, выше задач; правка на месте открывается', async () => {
+    await open(async () => {})
+    const titles = [...host.querySelectorAll('h1, h2')].map((h) => h.textContent)
+    expect(titles[0]).toContain('Бот')
+    expect(titles.indexOf('Описание')).toBeGreaterThan(0)
+    expect(titles.indexOf('Описание')).toBeLessThan(titles.findIndex((t) => t?.startsWith('Задачи')))
+    const add = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Добавить описание'))!
+    await act(async () => add.click())
+    expect(byLabel('Описание').tagName).toBe('TEXTAREA')
   })
 })

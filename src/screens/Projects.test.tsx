@@ -80,13 +80,49 @@ describe('Projects: ничего не нашлось по фильтру', () =>
 
   it('поиск при непустом архиве — подсказка про вкладку «Архив»', () => {
     setState({ files: [project('a'), project('b', { status: 'archived' })] })
-    const html = render('/projects?q=zzz')
+    const html = render('/projects?q=zzz&status=all')
     expect(html).toContain('Архив в поиск не входит — открой вкладку «Архив».')
+  })
+
+  it('поиск во вкладке по умолчанию — подсказка открыть «Все»', () => {
+    setState({ files: [project('a'), project('b', { status: 'archived' })] })
+    expect(render('/projects?q=zzz')).toContain('Поиск идёт только по выбранному статусу — открой вкладку «Все».')
   })
 
   it('поиск без архива — общая подсказка', () => {
     setState({ files: [project('a')] })
-    expect(render('/projects?q=zzz')).toContain('Попробуй другой запрос или сбрось фильтры.')
+    expect(render('/projects?q=zzz&status=all')).toContain('Попробуй другой запрос или сбрось фильтры.')
+  })
+})
+
+describe('Projects: фильтр по умолчанию', () => {
+  const files = () => [project('a'), project('b', { status: 'paused' })]
+  const pressed = (html: string, label: string) => new RegExp(`aria-pressed="true"[^>]*>${label}<`).test(html)
+
+  it('без status в адресе — вкладка «В работе», только проекты в работе, без «Сбросить фильтры»', () => {
+    setState({ files: files() })
+    const html = render()
+    expect(pressed(html, 'В работе')).toBe(true)
+    expect(pressed(html, 'Все')).toBe(false)
+    expect(html).toContain('Проект a')
+    expect(html).not.toContain('Проект b')
+    expect(html).not.toContain('Сбросить фильтры')
+  })
+
+  it('явно выбранная «Все» (status=all) сохраняется в адресе и показывает все', () => {
+    setState({ files: files() })
+    const html = render('/projects?status=all')
+    expect(pressed(html, 'Все')).toBe(true)
+    expect(html).toContain('Проект a')
+    expect(html).toContain('Проект b')
+    expect(html).not.toContain('Сбросить фильтры')
+  })
+
+  it('в работе нет ни одного — «Ничего не нашлось» со сбросом', () => {
+    setState({ files: [project('b', { status: 'paused' })] })
+    const html = render()
+    expect(html).toContain('Проектов с этим статусом нет.')
+    expect(html).toContain('Сбросить фильтры')
   })
 })
 

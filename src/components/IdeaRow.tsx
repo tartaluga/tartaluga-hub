@@ -1,9 +1,10 @@
 // Строка идеи: дата, первая строка текста, справа — проект или «В проект».
-// Раскрытая строка: правка текста на месте, привязка к проекту, «Сделать проектом», удаление.
+// Раскрытая строка: полный текст (если он длиннее первой строки) с правкой на месте, привязка к проекту,
+// «Сделать проектом» (только для идеи без проекта), удаление.
 import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ArrowBendUpRight, LockSimple } from '@phosphor-icons/react'
-import { deleteIdea, IDEA_MAX, ideaErrorText, saveIdea, shortDate, type IdeaView, type ProjectRef } from '../data/ideas'
+import { deleteIdea, IDEA_MAX, ideaErrorText, saveIdea, shortDate, textExtendsTitle, type IdeaView, type ProjectRef } from '../data/ideas'
 import { InlineText } from './InlineText'
 import { IdeaToProject } from './IdeaToProject'
 import css from './IdeaRow.module.css'
@@ -61,6 +62,7 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
   }
 
   // Проект, к которому привязана идея, может быть удалён мимо хаба — тогда он всё равно в списке, чтобы select не врал.
+  const hasMore = textExtendsTitle(idea.data.text)
   const options = idea.project && !idea.projectTitle ? [{ slug: idea.project, title: `${idea.project} (проект удалён)` }, ...projects] : projects
 
   return (
@@ -98,7 +100,7 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
         <div id={panelId} className={css.panel}>
           {idea.readOnly ? (
             <>
-              <p className={css.text}>{idea.data.text}</p>
+              {hasMore && <p className={css.text}>{idea.data.text}</p>}
               <p className={css.note}>{idea.reason}</p>
             </>
           ) : (
@@ -106,6 +108,7 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
               <InlineText
                 className={css.text}
                 value={idea.data.text}
+                display={hasMore ? undefined : <span className={css.editText}>Изменить текст</span>}
                 placeholder="Текст идеи"
                 label="Текст идеи"
                 maxLength={IDEA_MAX}
@@ -137,9 +140,12 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
                       ))}
                     </select>
                   </label>
-                  <button type="button" className={css.primary} disabled={busy} onClick={() => setMaking(true)}>
-                    Сделать проектом
-                  </button>
+                  {/* Уже привязанную к проекту идею проектом не делаем: сначала «— без проекта —». */}
+                  {!idea.project && (
+                    <button type="button" className={css.primary} disabled={busy} onClick={() => setMaking(true)}>
+                      Сделать проектом
+                    </button>
+                  )}
                   <button ref={removeButton} type="button" className={css.danger} disabled={busy} onClick={() => setConfirming(true)}>
                     Удалить
                   </button>
