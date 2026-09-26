@@ -35,11 +35,11 @@ afterEach(async () => {
   host.remove()
 })
 
-async function open(saveProject: (slug: string, patch: ProjectPatch) => Promise<void>) {
-  useSession.setState({ files: [{ path: 'projects/bot.json', sha: 's1', text: JSON.stringify(project) }], saveProject })
+async function open(saveProject: (slug: string, patch: ProjectPatch) => Promise<void>, state?: unknown, data: object = project) {
+  useSession.setState({ files: [{ path: 'projects/bot.json', sha: 's1', text: JSON.stringify(data) }], saveProject })
   await act(async () =>
     root.render(
-      <MemoryRouter initialEntries={['/projects/bot']}>
+      <MemoryRouter initialEntries={[{ pathname: '/projects/bot', state }]}>
         <Routes>
           <Route path="/projects/:slug" element={<Project />} />
         </Routes>
@@ -98,5 +98,26 @@ describe('карточка проекта: описание', () => {
     const add = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Добавить описание'))!
     await act(async () => add.click())
     expect(byLabel('Описание').tagName).toBe('TEXTAREA')
+  })
+})
+
+describe('карточка проекта: шапка', () => {
+  const backHref = () => host.querySelector('a')!.getAttribute('href')
+
+  it('«Проекты» ведёт на фильтр списка, с которого открыли карточку', async () => {
+    await open(async () => {}, { listSearch: '?status=all' })
+    expect(backHref()).toBe('/projects?status=all')
+  })
+
+  it('без фильтра или с чужим state — просто список', async () => {
+    await open(async () => {}, { listSearch: '//evil.example' })
+    expect(backHref()).toBe('/projects')
+  })
+
+  it('плашка «только чтение» — выше описания', async () => {
+    await open(async () => {}, undefined, { ...project, schemaVersion: 99 })
+    const html = host.innerHTML
+    expect(html).toContain('Здесь только чтение.')
+    expect(html.indexOf('Здесь только чтение.')).toBeLessThan(html.indexOf('>Описание<'))
   })
 })

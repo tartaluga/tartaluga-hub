@@ -10,6 +10,7 @@ import {
   EMPTY_FILTER,
   filterFromParams,
   filterToParams,
+  listSearchFromState,
   isHot,
   type Filter,
   untagProjects,
@@ -227,11 +228,31 @@ describe('фильтр в адресе', () => {
   it('по умолчанию — «в работе» и пустой адрес; «Все» — явное status=all', () => {
     expect(filterFromParams(new URLSearchParams(''))).toEqual(DEFAULT_FILTER)
     expect(DEFAULT_FILTER.statuses).toEqual(['active'])
-    expect(filterToParams(DEFAULT_FILTER).toString()).toBe('')
+    expect(filterToParams(DEFAULT_FILTER, true).toString()).toBe('')
+    expect(filterToParams(DEFAULT_FILTER).toString()).toBe('status=active')
+    expect(filterFromParams(new URLSearchParams('status=active'))).toEqual(DEFAULT_FILTER)
     expect(filterToParams(EMPTY_FILTER).toString()).toBe('status=all')
     expect(filterFromParams(filterToParams(EMPTY_FILTER))).toEqual(EMPTY_FILTER)
     expect(filterFromParams(new URLSearchParams('status=paused'))).toEqual(f({ statuses: ['paused'] }))
     expect(filterFromParams(filterToParams(f({ statuses: ['active', 'done'] })))).toEqual(f({ statuses: ['active', 'done'] }))
+  })
+
+  it('поиск при статусе по умолчанию — по всем, кроме архива; явный статус поиск сужает', () => {
+    expect(filterFromParams(new URLSearchParams('q=бот'))).toEqual(f({ query: 'бот' }))
+    expect(filterFromParams(new URLSearchParams('q=%20%20'))).toEqual(f({ query: '  ', statuses: ['active'] }))
+    expect(filterFromParams(new URLSearchParams('q=бот&status=active'))).toEqual(f({ query: 'бот', statuses: ['active'] }))
+    // Статус не выбран явно — в адрес не попадает, и после очистки поиска снова «в работе».
+    expect(filterToParams(f({ query: 'бот' }), true).toString()).toBe('q=%D0%B1%D0%BE%D1%82')
+  })
+
+  it('listSearchFromState: только строка поиска списка, остальное — пусто', () => {
+    expect(listSearchFromState({ listSearch: '?status=all&q=x' })).toBe('?status=all&q=x')
+    expect(listSearchFromState({ listSearch: '' })).toBe('')
+    expect(listSearchFromState({ listSearch: '/evil' })).toBe('')
+    expect(listSearchFromState({ listSearch: '?a#b' })).toBe('')
+    expect(listSearchFromState({ listSearch: 1 })).toBe('')
+    expect(listSearchFromState(null)).toBe('')
+    expect(listSearchFromState('?x')).toBe('')
   })
 
   it('мусор в адресе игнорируется', () => {

@@ -84,9 +84,22 @@ describe('Projects: ничего не нашлось по фильтру', () =>
     expect(html).toContain('Архив в поиск не входит — открой вкладку «Архив».')
   })
 
-  it('поиск во вкладке по умолчанию — подсказка открыть «Все»', () => {
+  it('поиск во вкладке, выбранной явно, — подсказка открыть «Все»', () => {
     setState({ files: [project('a'), project('b', { status: 'archived' })] })
-    expect(render('/projects?q=zzz')).toContain('Поиск идёт только по выбранному статусу — открой вкладку «Все».')
+    expect(render('/projects?q=zzz&status=active')).toContain('Поиск идёт только по выбранному статусу — открой вкладку «Все».')
+  })
+
+  it('поиск при вкладке по умолчанию идёт по всем, кроме архива (подсказка про архив)', () => {
+    setState({ files: [project('a'), project('b', { status: 'archived' })] })
+    expect(render('/projects?q=zzz')).toContain('Архив в поиск не входит — открой вкладку «Архив».')
+  })
+
+  it('поиск при вкладке по умолчанию находит проект на паузе', () => {
+    setState({ files: [project('a'), project('p', { status: 'paused' }), project('x', { status: 'archived' })] })
+    const html = render('/projects?q=%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82')
+    expect(html).toContain('Проект p')
+    expect(html).toContain('Проект a')
+    expect(html).not.toContain('Проект x')
   })
 
   it('поиск без архива — общая подсказка', () => {

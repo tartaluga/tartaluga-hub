@@ -1,6 +1,6 @@
 // Строка идеи: дата, первая строка текста, справа — проект или «В проект».
 // Раскрытая строка: полный текст (если он длиннее первой строки) с правкой на месте, привязка к проекту,
-// «Сделать проектом» (только для идеи без проекта), удаление.
+// «Сделать проектом» (если нет живого проекта), удаление.
 import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ArrowBendUpRight, LockSimple } from '@phosphor-icons/react'
@@ -140,8 +140,8 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
                       ))}
                     </select>
                   </label>
-                  {/* Уже привязанную к проекту идею проектом не делаем: сначала «— без проекта —». */}
-                  {!idea.project && (
+                  {/* Идею, привязанную к живому проекту, проектом не делаем; если проект удалён — снова можно. */}
+                  {!(idea.project && idea.projectTitle) && (
                     <button type="button" className={css.primary} disabled={busy} onClick={() => setMaking(true)}>
                       Сделать проектом
                     </button>

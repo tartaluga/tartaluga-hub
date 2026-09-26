@@ -64,6 +64,19 @@ describe('IdeaRow раскрытая', () => {
     expect(openRow(view('Идея'))).toContain('Сделать проектом')
   })
 
+  it('длинная однострочная идея: в раскрытой строке заголовок целиком и без обрезки', () => {
+    const long = 'Очень длинная идея '.repeat(20).trim()
+    for (const ro of [false, true]) {
+      const html = openRow(view(long, null, ro))
+      expect(html).toMatch(new RegExp(`aria-expanded="true"[^>]*>${long}<`))
+    }
+  })
+
+  it('«Сделать проектом» снова есть, если привязанный проект удалён', () => {
+    const html = openRow({ ...view('Идея', 'gone'), projectTitle: null })
+    expect(html).toContain('Сделать проектом')
+  })
+
   it('«Сделать проектом» скрыто, если идея уже привязана к проекту', () => {
     const html = openRow(view('Идея', 'hub'))
     expect(html).toMatch(/<option value="hub" selected="">Хаб<\/option>/)

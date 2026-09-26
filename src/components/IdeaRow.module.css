@@ -39,6 +39,8 @@
 }
 
 .row[data-open] .title {
+  overflow: visible;
+  text-overflow: clip;
   white-space: normal;
   overflow-wrap: anywhere;
 }
