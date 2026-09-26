@@ -1,0 +1,306 @@
+/* «Входящие конфликты» по макету 5-6a: карточка на спорное место, две версии рядом; на телефоне — одна под другой. */
+.page {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 1300px;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.kicker {
+  color: var(--magenta);
+}
+
+.title {
+  margin: var(--space-2) 0 0;
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.lead {
+  max-width: 660px;
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.bulk {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-self: start;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--status-paused) 45%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--status-paused);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-paused);
+}
+
+.error {
+  margin: 0;
+  color: var(--magenta);
+}
+
+.empty {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.cardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.project {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.side {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.mine {
+  border-color: var(--accent);
+}
+
+.value {
+  max-width: 100%;
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  font-size: 16px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.button,
+.ghost,
+.primary {
+  padding: 6px var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: 500 14px/1.3 var(--font-sans);
+  cursor: pointer;
+}
+
+.mine .button {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.button:hover:not(:disabled),
+.ghost:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.ghost {
+  background: none;
+}
+
+.button:disabled,
+.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.link {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: 500 14px/1.3 var(--font-sans);
+  cursor: pointer;
+}
+
+.reason {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.details summary {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.pre {
+  margin: 0;
+  font: 400 13px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.details .pre {
+  max-height: 320px;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  overflow: auto;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* Окно выбора кусков. */
+.dialog {
+  width: min(880px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.45);
+}
+
+.dialog::backdrop {
+  background: rgb(10 11 20 / 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.dialogBody {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.dialogHead {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.chunks {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.same {
+  padding: var(--space-1) var(--space-3);
+  color: var(--text-muted);
+}
+
+.chunk {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.hot {
+  color: var(--magenta);
+}
+
+.chunkSides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.chunkPick {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chunkPick[aria-checked='true'] {
+  border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.result {
+  max-height: 200px;
+  padding: var(--space-3);
+  overflow: auto;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 720px) {
+  .sides,
+  .chunkSides {
+    grid-template-columns: 1fr;
+  }
+
+  .bulk {
+    width: 100%;
+  }
+
+  .dialogBody {
+    padding: var(--space-4);
+  }
+}

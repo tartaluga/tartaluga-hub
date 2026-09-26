@@ -40,6 +40,24 @@
   box-shadow: none;
 }
 
+.sync[data-state='queued'] {
+  color: var(--status-paused);
+}
+
+.sync[data-state='queued'] .dot {
+  background: var(--status-paused);
+  box-shadow: none;
+}
+
+.sync[data-state='sessionExpired'] {
+  color: var(--magenta);
+}
+
+.sync[data-state='sessionExpired'] .dot {
+  background: var(--magenta);
+  box-shadow: none;
+}
+
 @keyframes pulse {
   to {
     opacity: 0.3;
@@ -50,4 +68,30 @@
   .sync[data-state='syncing'] .dot {
     animation: none;
   }
+}
+
+.wrap {
+  display: grid;
+  gap: 2px;
+}
+
+/* «Входящие конфликты»: маджента, как всё, что требует решения (ADR-004). */
+.conflicts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--magenta);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.conflicts:hover {
+  background: color-mix(in srgb, var(--magenta) 12%, transparent);
+}
+
+.conflicts .dot {
+  background: var(--magenta);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--magenta) 60%, transparent);
 }

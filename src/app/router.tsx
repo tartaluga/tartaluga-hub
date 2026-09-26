@@ -9,6 +9,7 @@ import { NotFound } from '../screens/NotFound'
 import { Security } from '../screens/Security'
 import { Branches } from '../screens/Branches'
 import { Settings } from '../screens/Settings'
+import { Conflicts } from '../screens/Conflicts'
 
 export const routes: RouteObject[] = [
   {
@@ -19,6 +20,7 @@ export const routes: RouteObject[] = [
       { path: 'projects/:slug', element: <Project /> },
       { path: 'ideas', element: <Ideas /> },
       { path: 'stats', element: <Stats /> },
+      { path: 'conflicts', element: <Conflicts /> },
       { path: 'settings', element: <Settings /> },
       { path: 'settings/security', element: <Security /> },
       { path: 'settings/branches', element: <Branches /> },

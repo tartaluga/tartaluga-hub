@@ -1,8 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { COMMIT_LIMIT, useSession, type Remote } from './session'
+import { COMMIT_LIMIT, QueueConflict, resetQueueMemory, useSession, type Remote } from './session'
 import { ApiError, type Me } from '../lib/api'
-import { EditConflict } from '../data/editProject'
 import { addTag, moveTag, recolorTag, renameTag, setAbandonedDays } from '../components/TagEditor.model'
 import { getCachedFiles, getCurrentBranch, putCachedFiles, wipeDevice } from '../lib/localdb'
 
@@ -64,10 +63,26 @@ function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<strin
   return { remote, reads, writes, trees }
 }
 
+/** Задержать записи: inFlight — первая запись ушла на сервер, release — сервер отвечает. */
+function gatePuts(remote: Remote) {
+  let release!: () => void
+  let started!: () => void
+  const gate = new Promise<void>((res) => (release = res))
+  const inFlight = new Promise<void>((res) => (started = res))
+  const put = remote.putFile
+  remote.putFile = async (...a) => {
+    started()
+    await gate
+    return put(...a)
+  }
+  return { release: () => release(), inFlight }
+}
+
 const offline = new ApiError(0, 'network', 'нет сети')
 const expired = new ApiError(401, 'unauthorized', 'Нужно войти')
 
 beforeEach(async () => {
+  resetQueueMemory()
   await wipeDevice()
   useSession.setState({ phase: 'ready', me: ME, branch: 'main', branchNotice: null, files: [], sync: 'idle', syncError: null, lastSync: null })
 })
@@ -419,17 +434,10 @@ describe('правка проекта (saveProject)', () => {
   it('правки, пришедшие во время записи, уходят следующим одним коммитом', async () => {
     const r = setup()
     await useSession.getState().refresh()
-    let release!: () => void
-    const gate = new Promise<void>((res) => (release = res))
-    const put = r.remote.putFile
-    r.remote.putFile = async (...a) => {
-      await gate
-      return put(...a)
-    }
+    const { release, inFlight } = gatePuts(r.remote)
     const s = useSession.getState()
     const first = s.saveProject('a', { title: 'Б' })
-    await Promise.resolve()
-    await Promise.resolve()
+    await inFlight
     const second = s.saveProject('a', { title: 'В' })
     const third = s.saveProject('a', { nextStep: 'новый' })
     release()
@@ -450,7 +458,7 @@ describe('правка проекта (saveProject)', () => {
     expect(data()).toMatchObject({ title: 'Б', nextStep: 'с телефона' })
   })
 
-  it('то же поле поменяли по-другому — EditConflict, второй записи нет, на экране свежая версия', async () => {
+  it('то же поле поменяли по-другому — конфликт во «Входящих», второй записи нет, на экране версия из репо', async () => {
     const blobs: Record<string, string> = { a1: file() }
     const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], blobs)
     useSession.setState({ remote: r.remote })
@@ -458,10 +466,12 @@ describe('правка проекта (saveProject)', () => {
     blobs.ext = file({ title: 'С телефона' })
     r.trees.main = [{ path: 'projects/a.json', sha: 'ext' }]
     const err = await useSession.getState().saveProject('a', { title: 'Б' }).catch((e) => e)
-    expect(err).toBeInstanceOf(EditConflict)
-    expect(err.fields).toEqual(['title'])
+    expect(err).toBeInstanceOf(QueueConflict)
+    expect(err.message).toContain('название')
     expect(r.writes).toEqual(['put main projects/a.json'])
     expect(data().title).toBe('С телефона')
+    expect(useSession.getState().conflicts).toHaveLength(1)
+    expect(useSession.getState().queued).toBe(0)
   })
 
   it('в свежей версии уже наша правка (ответ прошлой попытки потерялся) — второй записи нет', async () => {
@@ -483,7 +493,7 @@ describe('правка проекта (saveProject)', () => {
     expect(r.writes).toEqual([])
   })
 
-  it('ошибка одной записи не блокирует следующие', async () => {
+  it('сетевая ошибка не теряет правку: она ждёт и уходит со следующей', async () => {
     const r = setup()
     await useSession.getState().refresh()
     const put = r.remote.putFile
@@ -495,9 +505,14 @@ describe('правка проекта (saveProject)', () => {
       }
       return put(...a)
     }
-    await expect(useSession.getState().saveProject('a', { title: 'Б' })).rejects.toBe(offline)
-    await useSession.getState().saveProject('a', { title: 'В' })
-    expect(data().title).toBe('В')
+    await useSession.getState().saveProject('a', { title: 'Б' }) // не ошибка: правка в очереди
+    expect(useSession.getState().queued).toBe(1)
+    expect(useSession.getState().sync).toBe('offline')
+    expect(data().title).toBe('Б')
+    await useSession.getState().saveProject('a', { nextStep: 'дальше' })
+    expect(useSession.getState().queued).toBe(0)
+    expect(data()).toMatchObject({ title: 'Б', nextStep: 'дальше' })
+    expect(JSON.parse(r.writes.length ? (await getCachedFiles('main')).find((f) => f.path === 'projects/a.json')!.text : '{}')).toMatchObject({ title: 'Б', nextStep: 'дальше' })
   })
 })
 
@@ -522,12 +537,13 @@ describe('лог через saveProject', () => {
     const r = fakeRemote([{ path: 'projects/a.json', sha: 'a1' }], { a1: file([]) })
     useSession.setState({ remote: r.remote })
     await useSession.getState().refresh()
+    const { release, inFlight } = gatePuts(r.remote)
     const s = useSession.getState()
     const first = s.saveProject('a', { logAdd: [entry('C', 'один')] })
-    await Promise.resolve()
-    await Promise.resolve()
+    await inFlight
     const second = s.saveProject('a', { logAdd: [entry('D', 'два')] })
     const third = s.saveProject('a', { logAdd: [entry('E', 'три')] })
+    release()
     await Promise.all([first, second, third])
     expect(r.writes).toHaveLength(2)
     expect(data().log.map((e: { text: string }) => e.text)).toEqual(['один', 'два', 'три'])
