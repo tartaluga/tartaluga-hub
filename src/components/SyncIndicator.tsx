@@ -39,6 +39,7 @@ export function SyncIndicator() {
   const queued = useSession((s) => s.queued)
   const syncNow = useSession((s) => s.syncNow)
   const conflictList = useSession((s) => s.conflicts)
+  const deviceError = useSession((s) => s.deviceError)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -58,6 +59,12 @@ export function SyncIndicator() {
         <span className={css.dot} aria-hidden />
         <span className="mono">{text}</span>
       </button>
+      {deviceError && (
+        <p className={css.device} role="alert">
+          <span className={css.dot} aria-hidden />
+          <span>{deviceError}</span>
+        </p>
+      )}
       {conflicts && (
         <Link to="/conflicts" className={css.conflicts}>
           <span className={css.dot} aria-hidden />

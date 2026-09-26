@@ -29,6 +29,7 @@ export function Branches() {
   const current = useSession((s) => s.branch)
   const switchBranch = useSession((s) => s.switchBranch)
   const branchDeleted = useSession((s) => s.branchDeleted)
+  const settleBranch = useSession((s) => s.settleBranch)
   const refresh = useSession((s) => s.refresh)
   const [branches, setBranches] = useState<Branch[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -74,6 +75,8 @@ export function Branches() {
     if (!window.confirm(`Влить «${branch}» в main?\n\nСервер сначала проверит каждый изменённый файл. Если что-то не так, ничего не изменится.`)) return
     setOutcome(null)
     void fresh.run(async () => {
+      // Неотправленные правки и конфликты ветки — сначала на сервер или разобрать: иначе в main уйдёт не всё.
+      await settleBranch(branch)
       try {
         const res = await mergeBranch(branch)
         setOutcome({ kind: res.merged ? 'merged' : 'nothing', branch })
@@ -93,6 +96,7 @@ export function Branches() {
     const warn = merged ? '' : '\n\nПравки, которые не влиты в main, пропадут.'
     if (!window.confirm(`Удалить ветку «${branch}»?${warn}`)) return
     void fresh.run(async () => {
+      await settleBranch(branch) // правки и конфликты ветки пропали бы вместе с ней
       await deleteBranch(branch)
       setOutcome(null)
       await branchDeleted(branch)

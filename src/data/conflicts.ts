@@ -112,6 +112,34 @@ export function opsFor(item: MergeConflict, pick: ConflictPick): ConflictOp[] {
   return deleteWins ? [{ path: item.path, value: undefined }] : []
 }
 
+/** Значение по пути (как у applyOps): имена полей, в массиве с id — id элемента. undefined — такого места нет. */
+export function valueAt(doc: JsonObject, path: MergePath): Json | undefined {
+  let cur: Json | undefined = doc
+  for (const seg of path) {
+    if (Array.isArray(cur)) cur = cur.find((e) => isObject(e) && e.id === seg)
+    else if (isObject(cur)) cur = hasOwn(cur, seg) ? cur[seg] : undefined
+    else return undefined
+    if (cur === undefined) return undefined
+  }
+  return cur
+}
+
+/**
+ * Что лежит на спорном месте в файле в репо после слияния (ADR-004: слившееся записано): у поля — версия из репо,
+ * у элемента, удалённого с одной стороны, — изменённый элемент с другой.
+ */
+export function heldValue(item: MergeConflict): Json | undefined {
+  if (item.kind === 'field') return item.remote
+  return item.deletedBy === 'remote' ? item.local : item.remote
+}
+
+/** То же ли значение на спорном месте: без служебных меток времени (их проставляет нормализация). */
+export function sameValue(a: Json | undefined, b: Json | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  const wrap = (v: Json): JsonObject => (isObject(v) ? v : { v })
+  return sameContent(wrap(a), wrap(b))
+}
+
 /** Поставить значение по пути: имена полей, в массиве с id — id элемента. Возвращает новый объект. */
 export function applyOps(doc: JsonObject, ops: readonly ConflictOp[]): JsonObject {
   const out = structuredClone(doc)
