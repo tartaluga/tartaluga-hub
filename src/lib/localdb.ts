@@ -30,6 +30,11 @@ export interface QueuedEdit {
   /** Моя версия файла: базовая копия с правкой. Её видно на экране до отправки. */
   text: string
   queuedAt: string
+  /**
+   * Версия записи: новая при каждой записи в базу. По ней вкладка видит, что запись переписала другая вкладка,
+   * и после отправки удаляет только ту запись, которую отправила.
+   */
+  id?: string
 }
 
 /** Входящий конфликт файла (ADR-004, ADR-010): одна запись на [ветка, путь], в ней все спорные места. */
@@ -59,9 +64,36 @@ interface HubDB extends DBSchema {
 const DB_NAME = 'tartaluga-hub'
 const BRANCH_KEY = 'branch'
 let dbPromise: Promise<IDBPDatabase<HubDB>> | null = null
+const blockedListeners = new Set<(blocked: boolean) => void>()
+
+/**
+ * Подписка на «обновление базы ждёт другие вкладки»: true — другая вкладка держит старую версию базы открытой,
+ * false — дождались, база открылась. Возвращает отписку.
+ */
+export function onDbBlocked(fn: (blocked: boolean) => void): () => void {
+  blockedListeners.add(fn)
+  return () => blockedListeners.delete(fn)
+}
+
+const tellBlocked = (blocked: boolean) => blockedListeners.forEach((fn) => fn(blocked))
 
 function db() {
-  dbPromise ??= openDB<HubDB>(DB_NAME, 3, {
+  if (dbPromise) return dbPromise
+  let wasBlocked = false
+  const opening: Promise<IDBPDatabase<HubDB>> = openDB<HubDB>(DB_NAME, 3, {
+    // Другая вкладка со старой версией не закрывает базу: обновление ждёт, пока её закроют.
+    blocked() {
+      wasBlocked = true
+      tellBlocked(true)
+    },
+    // Другой вкладке нужна новая версия базы (или «Выйти» стирает её): уступаем, следующий запрос откроет заново.
+    blocking() {
+      if (dbPromise === opening) dbPromise = null
+      void opening.then((d) => d.close())
+    },
+    terminated() {
+      if (dbPromise === opening) dbPromise = null
+    },
     async upgrade(d, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) d.createObjectStore('kv')
       if (oldVersion < 2) {
@@ -81,7 +113,16 @@ function db() {
       }
     },
   })
-  return dbPromise
+  dbPromise = opening
+  opening.then(
+    () => {
+      if (wasBlocked) tellBlocked(false)
+    },
+    () => {
+      if (dbPromise === opening) dbPromise = null // следующий запрос попробует открыть снова
+    },
+  )
+  return opening
 }
 
 export async function getCachedFiles(branch: string): Promise<CachedFile[]> {
@@ -112,6 +153,10 @@ export async function dropBranchCache(branch: string): Promise<void> {
 /** Все ожидающие правки устройства, по всем веткам. */
 export async function getQueue(): Promise<QueuedEdit[]> {
   return (await db()).getAll('queue')
+}
+
+export async function getQueued(branch: string, path: string): Promise<QueuedEdit | undefined> {
+  return (await db()).get('queue', [branch, path])
 }
 
 export async function putQueued(edit: QueuedEdit): Promise<void> {
@@ -147,8 +192,10 @@ export async function setCurrentBranch(branch: string): Promise<void> {
 
 /** «Выйти»: стереть с устройства кэш данных. */
 export async function wipeDevice(): Promise<void> {
-  if (dbPromise) (await dbPromise).close()
+  // Не ждать открытия: если оно ждёт другие вкладки (blocked), «Выйти» зависло бы. Закроется, как только откроется.
+  const opening = dbPromise
   dbPromise = null
+  if (opening) void opening.then((d) => d.close(), () => undefined)
   await new Promise<void>((resolve, reject) => {
     const req = indexedDB.deleteDatabase(DB_NAME)
     req.onsuccess = () => resolve()

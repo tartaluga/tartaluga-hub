@@ -12,6 +12,8 @@ import {
   getConflicts,
   getCurrentBranch,
   getQueue,
+  getQueued,
+  onDbBlocked,
   putCachedFiles,
   putConflict,
   putQueued,
@@ -24,14 +26,15 @@ import {
 } from '../lib/localdb'
 import { STALE_BUILD } from '../lib/update'
 import { nowIso, parseFile, SCHEMA_VERSIONS, serialize, type WithUnknown } from '../data/model'
-import { merge, MergeRefused, type JsonObject, type MergeConflict } from '../data/merge'
-import { applyOps, conflictLabel, opsFor, sameContent, type ConflictPick } from '../data/conflicts'
+import { merge, MergeRefused, type Json, type JsonObject, type MergeConflict } from '../data/merge'
+import { applyOps, conflictLabel, heldValue, opsFor, sameContent, sameValue, valueAt, type ConflictOp, type ConflictPick } from '../data/conflicts'
 import type { Project } from '../schema/types'
 import { normalizeProject } from '../data/normalize'
 import { validateSettings } from '../schema/validators.js'
 import { removeTag, type SettingsChange, type SettingsData } from '../components/TagEditor.model'
 import { untagProjects } from '../data/projects'
 import { applyEdit, mergePatch, type ProjectPatch } from '../data/editProject'
+import { plural } from '../lib/plural'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
 /** sessionExpired: сессия кончилась, пока данные на экране — нужен вход, кэш и очередь правок ждут (ADR-010 §4). */
@@ -73,6 +76,8 @@ interface Session {
   queued: number
   /** Входящие конфликты по всем веткам. */
   conflicts: StoredConflict[]
+  /** Беда с хранилищем устройства: правка не легла в IndexedDB или обновление базы ждёт другие вкладки. */
+  deviceError: string | null
   remote: Remote
   boot(): Promise<void>
   /** После входа (ключом) — перечитать сессию и данные. */
@@ -86,6 +91,11 @@ interface Session {
   refreshMe(): Promise<void>
   /** Открыть другую ветку: сразу её кэш с устройства, потом сверка с сервером. */
   switchBranch(name: string, notice?: string): Promise<void>
+  /**
+   * Перед «Влить» и удалением ветки: отправить очередь. Если у ветки остались неотправленные правки или
+   * входящие конфликты — ошибка с понятным текстом: вливать и удалять нельзя, пока их не разберут.
+   */
+  settleBranch(name: string): Promise<void>
   /** Ветку удалили: стереть её кэш; если она была открыта — вернуться на main. */
   branchDeleted(name: string): Promise<void>
   dismissBranchNotice(): void
@@ -148,11 +158,12 @@ export const useSession = create<Session>((set, get) => ({
   lastSync: null,
   queued: 0,
   conflicts: [],
+  deviceError: null,
   remote: serverRemote,
 
   async boot() {
     const branch = await getCurrentBranch().catch(() => MAIN)
-    await loadQueue()
+    await reloadFromDevice()
     const files = overlay(branch, await getCachedFiles(branch).catch(() => []))
     set({ branch })
     try {
@@ -181,7 +192,7 @@ export const useSession = create<Session>((set, get) => ({
     forgetQueue()
     await wipeDevice().catch(() => undefined)
     await wipeDrafts().catch(() => undefined) // черновики для обновления хаба (ADR-011)
-    set({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [] })
+    set({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [], deviceError: null })
   },
 
   async refreshMe() {
@@ -203,7 +214,7 @@ export const useSession = create<Session>((set, get) => ({
   },
 
   flush() {
-    running ??= drain()
+    running ??= drainLocked()
     return running
   },
 
@@ -218,6 +229,22 @@ export const useSession = create<Session>((set, get) => ({
     const files = overlay(name, await getCachedFiles(name).catch(() => []))
     set({ branch: name, files, tree: null, branchNotice: notice ?? null, sync: 'idle', syncError: null, lastSync: null })
     await get().refresh()
+  },
+
+  async settleBranch(name) {
+    await reloadFromDevice() // правки и конфликты ветки, записанные другой вкладкой, тоже считаются
+    await get().flush()
+    const edits = [...queue.values()].filter((l) => l.edit.branch === name).length
+    const disputes = [...conflictMap.values()]
+      .filter((c) => c.branch === name)
+      .reduce((n, c) => n + c.items.length + (c.refused || c.deleted ? 1 : 0), 0)
+    if (!edits && !disputes) return
+    const parts = [
+      ...(edits ? [`${edits} ${plural(edits, 'неотправленная правка', 'неотправленные правки', 'неотправленных правок')}`] : []),
+      ...(disputes ? [`${disputes} ${plural(disputes, 'конфликт', 'конфликта', 'конфликтов')}`] : []),
+    ]
+    const how = [...(edits ? ['правки уйдут, когда будет связь и вход'] : []), ...(disputes ? ['конфликты — во «Входящих конфликтах»'] : [])]
+    throw new ApiError(423, 'queue_pending', `В ветке «${name}» ещё ${parts.join(' и ')} — разбери сначала: ${how.join(', ')}.`)
   },
 
   async branchDeleted(name) {
@@ -290,30 +317,57 @@ export const useSession = create<Session>((set, get) => ({
     const k = key(branch, path)
     const rec = conflictMap.get(k)
     if (!rec) return
-    const done = new Set(picks.map((p) => p.index))
-    if (rec.deleted) {
+    if (rec.deleted || rec.refused) {
       // Файл удалили в репо: «моя» — вернуть его с моей правкой, «из репо» — согласиться с удалением.
-      if (picks.some((p) => p.pick === 'mine')) {
-        const { sha } = await get().remote.putFile(branch, path, rec.deleted.mine)
-        await applyWrite(branch, [{ path, sha, text: rec.deleted.mine }], [])
+      // Мою версию, которую не удалось слить или записать, записать нельзя — можно только отказаться от неё.
+      const restore = !!rec.deleted && picks.some((p) => p.pick === 'mine')
+      if (restore) {
+        const { sha } = await get().remote.putFile(branch, path, rec.deleted!.mine)
+        await applyWrite(branch, [{ path, sha, text: rec.deleted!.mine }], [])
       }
-      return dropConflict(k)
+      const left = conflictMap.get(k)
+      if (!left) return
+      // Выбор снимает только удаление или отказ: спорные места файла остаются. Согласились с удалением — файла нет, выбирать не в чем.
+      if (rec.deleted && !restore) return dropConflict(k)
+      if (!left.items.length) return dropConflict(k)
+      const { deleted: _deleted, refused: _refused, ...rest } = left
+      const next: StoredConflict = rest
+      conflictMap.set(k, next)
+      publishConflicts()
+      await persist(() => putConflict(next))
+      return
     }
-    // Мою версию, которую не удалось слить или записать, записать нельзя — можно только отказаться от неё.
-    if (rec.refused) return dropConflict(k)
-    const ops = picks.flatMap((p) => {
+    const chosen = picks.flatMap((p) => {
       const item = rec.items[p.index]
-      return item ? opsFor(item, p.pick) : []
+      return item ? [{ index: p.index, item, pick: p.pick }] : []
     })
-    if (ops.length) await writeOps(branch, path, ops)
+    const stale = chosen.some((c) => opsFor(c.item, c.pick).length) ? await writeOps(branch, path, chosen) : new Map<number, Json | undefined>()
+    const done = new Set(chosen.map((c) => c.index))
     const left = conflictMap.get(k)
     if (!left) return
-    const items = left.items.filter((_, i) => !done.has(i))
-    if (!items.length) return dropConflict(k)
-    const next: StoredConflict = { ...left, items, labels: left.labels.filter((_, i) => !done.has(i)) }
-    conflictMap.set(k, next)
-    publishConflicts()
-    await persist(() => putConflict(next))
+    const items: MergeConflict[] = []
+    const labels: string[] = []
+    left.items.forEach((it, i) => {
+      const label = left.labels[i] ?? ''
+      if (stale.has(i)) {
+        const again = changedAgain(it, label, stale.get(i))
+        if (again) {
+          items.push(again.item)
+          labels.push(again.label)
+        }
+      } else if (!done.has(i)) {
+        items.push(it)
+        labels.push(label)
+      }
+    })
+    if (!items.length) await dropConflict(k)
+    else {
+      const next: StoredConflict = { ...left, items, labels }
+      conflictMap.set(k, next)
+      publishConflicts()
+      await persist(() => putConflict(next))
+    }
+    if (stale.size) throw new QueueConflict('Пока ты выбирал, это место в репо изменили ещё раз. Ничего не записано: на экране новое значение — выбери снова.')
   },
 
   saveSettings(change) {
@@ -510,10 +564,29 @@ interface Live {
   edit: QueuedEdit
   /** Растёт с каждой правкой, влитой в ожидающую: так видно, что во время отправки пришло новое. */
   rev: number
+  /** Правки с базовой копии по порядку (edit.patch — их слияние). Первые saved уже лежат в IndexedDB. */
+  patches: ProjectPatch[]
+  saved: number
+  /** В памяти есть то, чего ещё нет в IndexedDB. */
+  dirty: boolean
+  /** Растёт, когда правку целиком заменили записью другой вкладки: тогда patches считаются заново. */
+  epoch: number
+}
+
+/** Снимок правки перед отправкой: по нему после записи видно, что пришло за это время. */
+interface Snap {
+  rev: number
+  epoch: number
+  /** Сколько правок было в patches. */
+  n: number
+  /** Какая запись IndexedDB отправляется: после записи удаляем только её. */
+  id: string | undefined
 }
 
 const key = (branch: string, path: string) => `${branch}\n${path}`
 const queue = new Map<string, Live>()
+/** id записи очереди в IndexedDB, которую эта вкладка записала или прочла последней. Другой id — запись переписала другая вкладка. */
+const storedIds = new Map<string, string>()
 const conflictMap = new Map<string, StoredConflict>()
 /** Последняя проблема с файлом: seq — номер правки на момент проблемы (saveProject сообщает только о своих). */
 const problems = new Map<string, { seq: number; error: QueueConflict }>()
@@ -528,18 +601,165 @@ let autoRetry = false
 let retryDelay = RETRY_FIRST
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 
-function persist(op: () => Promise<void>): Promise<void> {
-  dbChain = dbChain.then(op).catch(() => undefined)
+// Несколько вкладок хаба на одном устройстве (ADR-004): у каждой очередь в памяти, общая — в IndexedDB.
+// Запись в очередь и разбор после отправки идут под блокировкой; другие вкладки узнают о переменах по BroadcastChannel.
+const QUEUE_LOCK = 'hub-queue'
+/** Отдельная блокировка на отправку: под ней берётся QUEUE_LOCK (Web Locks не повторно входимы). */
+const SEND_LOCK = 'hub-queue-send'
+let channel: BroadcastChannel | null = null
+
+export const DEVICE_WRITE_FAILED = 'Правка не сохранилась на устройстве — не закрывай хаб, пока она не отправится.'
+export const DB_BLOCKED = 'Хаб обновляется: закрой другие вкладки хаба, чтобы продолжить.'
+
+onDbBlocked((blocked) => {
+  if (blocked) useSession.setState({ deviceError: DB_BLOCKED })
+  else if (useSession.getState().deviceError === DB_BLOCKED) useSession.setState({ deviceError: null })
+})
+
+/** Под блокировкой очереди, если браузер умеет Web Locks; иначе как есть (одна вкладка). */
+function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator === 'undefined' ? undefined : (navigator as Partial<Navigator>).locks
+  return locks?.request ? (locks.request(QUEUE_LOCK, fn) as Promise<T>) : fn()
+}
+
+/**
+ * Отправляет одна вкладка за раз. Если отправку держит другая вкладка, дождаться её и сперва перечитать очередь
+ * с устройства: то, что та вкладка уже отправила, второй раз не уходит.
+ */
+function drainLocked(): Promise<void> {
+  const locks = typeof navigator === 'undefined' ? undefined : (navigator as Partial<Navigator>).locks
+  if (!locks?.request) return drain()
+  return locks.request(SEND_LOCK, { ifAvailable: true }, async (lock) => {
+    if (lock) return drain()
+    return locks.request(SEND_LOCK, async () => {
+      await reloadFromDevice()
+      return drain()
+    })
+  }) as Promise<void>
+}
+
+const idOf = (edit: QueuedEdit) => edit.id ?? ''
+const newId = () => crypto.randomUUID()
+
+/**
+ * Записи в базу идут одной цепочкой, чтобы порядок сохранения совпадал с порядком правок. Ошибку записи не глотаем
+ * молча: правка остаётся в памяти и уходит на сервер, а индикатор говорит, что на устройстве её нет.
+ * op возвращает false, если ничего не записал, — тогда другим вкладкам сообщать не о чем.
+ */
+function persist(op: () => Promise<void | boolean>): Promise<void> {
+  dbChain = dbChain.then(op).then(
+    (wrote) => {
+      if (wrote !== false) channel?.postMessage('queue')
+      if (useSession.getState().deviceError === DEVICE_WRITE_FAILED && ![...queue.values()].some((l) => l.dirty)) useSession.setState({ deviceError: null })
+    },
+    () => useSession.setState({ deviceError: DEVICE_WRITE_FAILED }),
+  )
   return dbChain
 }
 
-/** Сохранить в базу текущее состояние правки файла (или её отсутствие). */
-function persistEntry(k: string): Promise<void> {
-  return persist(() => {
-    const live = queue.get(k)
-    const [branch = '', path = ''] = k.split('\n')
-    return live ? putQueued(live.edit) : deleteQueued(branch, path)
-  })
+/** Свести правку файла в памяти с записью в IndexedDB. sentId — запись, которую только что отправили. */
+function persistEntry(k: string, sentId?: string): Promise<void> {
+  return persist(() => withLock(() => reconcile(k, sentId)))
+}
+
+/**
+ * Под блокировкой: запись в IndexedDB — общая для вкладок. Если её переписала другая вкладка, в ней уже всё, что
+ * эта вкладка записала раньше: мои ещё не записанные правки ложатся поверх неё, база — самая ранняя.
+ * Иначе запись приводится к памяти; удаляется только та запись, которую эта вкладка знает (или отправила).
+ */
+async function reconcile(k: string, sentId?: string): Promise<boolean> {
+  const [branch = '', path = ''] = k.split('\n')
+  const stored = await getQueued(branch, path)
+  const live = queue.get(k)
+  const known = stored !== undefined && (idOf(stored) === storedIds.get(k) || (sentId !== undefined && idOf(stored) === sentId))
+  if (!stored || known) {
+    if (!live) {
+      if (!stored) return false
+      await deleteQueued(branch, path)
+      storedIds.delete(k)
+      return true
+    }
+    if (!live.dirty) {
+      if (stored) return false
+      // Запись убрала другая вкладка: правку она уже отправила (или ветку удалили).
+      queue.delete(k)
+      storedIds.delete(k)
+      publish()
+      return false
+    }
+    return write(k, live)
+  }
+  const pending = live ? live.patches.slice(live.saved) : []
+  const from = live && !storedIds.has(k) && live.edit.queuedAt < stored.queuedAt ? live.edit : stored
+  const patch = pending.reduce((a, p) => mergePatch(a, p), stored.patch)
+  const changed = pending.length > 0 || from !== stored
+  const edit: QueuedEdit = changed
+    ? { ...stored, baseSha: from.baseSha, baseText: from.baseText, queuedAt: from.queuedAt, patch, text: render(path, from.baseSha, from.baseText, patch), id: newId() }
+    : stored
+  if (changed) await putQueued(edit)
+  storedIds.set(k, idOf(edit))
+  // Правки, пришедшие в эту вкладку, пока шла запись, остаются сверху.
+  const now = queue.get(k)
+  const later = live && now === live ? now.patches.slice(live.saved + pending.length) : []
+  const mine = later.reduce((a, p) => mergePatch(a, p), edit.patch)
+  const next: Live = {
+    edit: later.length ? { ...edit, patch: mine, text: render(path, edit.baseSha, edit.baseText, mine) } : edit,
+    rev: (now?.rev ?? 0) + 1,
+    patches: [edit.patch, ...later],
+    saved: 1,
+    dirty: later.length > 0,
+    epoch: (now?.epoch ?? 0) + 1,
+  }
+  if (now) Object.assign(now, next)
+  else queue.set(k, next)
+  publish()
+  showEdit(branch)
+  return changed
+}
+
+async function write(k: string, live: Live): Promise<boolean> {
+  const n = live.patches.length
+  const { rev, epoch } = live
+  const edit: QueuedEdit = { ...live.edit, id: newId() }
+  await putQueued(edit)
+  storedIds.set(k, edit.id!)
+  if (queue.get(k) === live && live.epoch === epoch) {
+    live.saved = n
+    if (live.rev === rev) live.dirty = false
+  }
+  return true
+}
+
+/**
+ * Поднять очередь и конфликты с устройства: старт, вход, сообщение другой вкладки. Правки, которых ещё нет
+ * в базе, не теряются — ложатся поверх записанного.
+ */
+function reloadFromDevice(): Promise<void> {
+  return persist(() =>
+    withLock(async () => {
+      const records = await getQueue()
+      const keys = new Set([...queue.keys(), ...records.map((r) => key(r.branch, r.path))])
+      let wrote = false
+      for (const k of keys) if (await reconcile(k)) wrote = true
+      const conflicts = await getConflicts()
+      conflictMap.clear()
+      for (const c of conflicts) conflictMap.set(key(c.branch, c.path), c)
+      publish()
+      publishConflicts()
+      void showDevice()
+      return wrote
+    }),
+  )
+}
+
+/** Показать файлы открытой ветки с устройства: другая вкладка могла записать правку или разрешить конфликт. */
+async function showDevice(): Promise<void> {
+  const { branch, phase } = useSession.getState()
+  if (phase !== 'ready') return
+  const cached = await getCachedFiles(branch).catch(() => null)
+  const state = useSession.getState()
+  if (!cached?.length || state.branch !== branch || state.phase !== 'ready') return
+  useSession.setState({ files: overlay(branch, cached) })
 }
 
 function publish() {
@@ -550,24 +770,10 @@ function publishConflicts() {
   useSession.setState({ conflicts: [...conflictMap.values()].sort((a, b) => a.at.localeCompare(b.at)) })
 }
 
-/** Поднять очередь и конфликты с устройства (старт, вход). Правки, которые уже в памяти, не затираются. */
-async function loadQueue(): Promise<void> {
-  await dbChain
-  for (const edit of await getQueue().catch(() => [] as QueuedEdit[])) {
-    const k = key(edit.branch, edit.path)
-    if (!queue.has(k)) queue.set(k, { edit, rev: 0 })
-  }
-  for (const c of await getConflicts().catch(() => [] as StoredConflict[])) {
-    const k = key(c.branch, c.path)
-    if (!conflictMap.has(k)) conflictMap.set(k, c)
-  }
-  publish()
-  publishConflicts()
-}
-
 /** «Выйти»: очередь и конфликты стираются вместе с устройством. */
 function forgetQueue() {
   queue.clear()
+  storedIds.clear()
   conflictMap.clear()
   problems.clear()
   if (retryTimer) clearTimeout(retryTimer)
@@ -578,18 +784,21 @@ function forgetQueue() {
 /** Ветку удалили: её кэш, очередь и конфликты больше некуда писать. */
 async function forgetBranch(branch: string): Promise<void> {
   for (const [k, live] of queue) if (live.edit.branch === branch) queue.delete(k)
+  for (const k of storedIds.keys()) if (k.startsWith(`${branch}\n`)) storedIds.delete(k)
   for (const [k, c] of conflictMap) if (c.branch === branch) conflictMap.delete(k)
   publish()
   publishConflicts()
-  await persist(() => dropBranchCache(branch))
+  await persist(() => withLock(() => dropBranchCache(branch)))
 }
 
 /** Файлы удалили из ветки: их правки и конфликты больше не нужны. */
 async function forgetFiles(branch: string, paths: string[]): Promise<void> {
   for (const path of paths) {
     const k = key(branch, path)
-    const had = queue.delete(k)
-    if (had) await persistEntry(k)
+    if (queue.delete(k) || storedIds.has(k)) {
+      storedIds.delete(k)
+      await persist(() => withLock(() => deleteQueued(branch, path)))
+    }
     if (conflictMap.delete(k)) await persist(() => deleteConflict(branch, path))
   }
   publish()
@@ -637,14 +846,16 @@ function enqueue(branch: string, path: string, patch: ProjectPatch): number {
   if (live) {
     const merged = mergePatch(live.edit.patch, patch)
     live.edit = { ...live.edit, patch: merged, text: render(path, live.edit.baseSha, live.edit.baseText, merged) }
+    live.patches.push(patch)
     live.rev++
+    live.dirty = true
   } else {
     const state = useSession.getState()
     if (state.branch !== branch) throw new ApiError(0, 'network', 'Открыта другая ветка — правка не сохранена')
     const file = state.files.find((f) => f.path === path)
     if (!file) throw new ApiError(404, 'not_found', 'Проекта больше нет в этой ветке')
     const text = render(path, file.sha, file.text, patch)
-    queue.set(k, { edit: { branch, path, baseSha: file.sha, baseText: file.text, patch, text, queuedAt: nowIso() }, rev: 0 })
+    queue.set(k, { edit: { branch, path, baseSha: file.sha, baseText: file.text, patch, text, queuedAt: nowIso() }, rev: 0, patches: [patch], saved: 0, dirty: true, epoch: 0 })
   }
   showEdit(branch)
   publish()
@@ -686,10 +897,14 @@ function scheduleRetry() {
 
 type SendResult = 'next' | 'later' | 'auth'
 
+const snapOf = (live: Live): Snap => ({ rev: live.rev, epoch: live.epoch, n: live.patches.length, id: storedIds.get(key(live.edit.branch, live.edit.path)) })
+
 async function send(live: Live): Promise<SendResult> {
   const { branch, path } = live.edit
+  // Что успела сделать с этой правкой другая вкладка, сообщает BroadcastChannel; если она уже отправила правку,
+  // повтор получит 409 и слияние увидит, что писать нечего.
   const { remote } = useSession.getState()
-  const rev = live.rev
+  const snap = snapOf(live)
   const sent = live.edit
   let sha: string
   try {
@@ -706,22 +921,40 @@ async function send(live: Live): Promise<SendResult> {
     }
     return failed(live, e)
   }
-  await written(live, rev, sha, sent.text)
+  await written(live, snap, sha, sent.text)
   return 'next'
 }
 
 /** Правка записана как есть. Если за это время пришли новые правки, они остаются ждать — уже от записанной версии. */
-async function written(live: Live, rev: number, sha: string, text: string): Promise<void> {
+async function written(live: Live, snap: Snap, sha: string, text: string): Promise<void> {
   const { branch, path } = live.edit
   const k = key(branch, path)
-  if (queue.get(k) === live) {
-    if (live.rev === rev) queue.delete(k)
-    else live.edit = { ...live.edit, baseSha: sha, baseText: text, text: render(path, sha, text, live.edit.patch) }
-  }
+  settle(live, snap, { path, sha, text })
   retryDelay = RETRY_FIRST
-  await persistEntry(k)
+  await persistEntry(k, snap.id)
   publish()
   await applyWrite(branch, [{ path, sha, text }], [])
+}
+
+/**
+ * После записи: правки нет — убрать из очереди; пришли новые правки — они ждут от записанной версии, и в правке
+ * остаются только они. Иначе уже записанное (в том числе спорные места, отданные репо) легло бы поверх ещё раз.
+ */
+function settle(live: Live, snap: Snap, saved: CachedFile): void {
+  const k = key(live.edit.branch, live.edit.path)
+  if (queue.get(k) !== live) return
+  if (live.rev === snap.rev) {
+    queue.delete(k)
+    return
+  }
+  // Правку целиком заменила запись другой вкладки — какие правки новые, не знаем: берём все.
+  const same = live.epoch === snap.epoch
+  const later = same ? live.patches.slice(snap.n) : live.patches
+  const patch = later.slice(1).reduce((a, p) => mergePatch(a, p), later[0] ?? live.edit.patch)
+  live.edit = { ...live.edit, baseSha: saved.sha, baseText: saved.text, patch, text: render(saved.path, saved.sha, saved.text, patch) }
+  live.saved = same ? Math.max(0, live.saved - snap.n) : live.saved
+  live.patches = later.length ? later : [patch]
+  live.dirty = true
 }
 
 /** Свежая версия файла ветки с сервера; null — файла в ветке нет. */
@@ -764,7 +997,7 @@ async function mergeAndSend(live: Live): Promise<void> {
   const k = key(branch, path)
   const { remote } = useSession.getState()
   for (let attempt = 0; attempt < 3; attempt++) {
-    const rev = live.rev
+    const snap = snapOf(live)
     const mine = live.edit
     const fresh = await readFresh(branch, path)
     if (!fresh) return recordDeleted(live)
@@ -772,7 +1005,7 @@ async function mergeAndSend(live: Live): Promise<void> {
       // Ветку сдвинул коммит в другой файл: наш файл тот же, повторяем запись как есть.
       try {
         const { sha } = await remote.putFile(branch, path, mine.text, mine.baseSha)
-        return written(live, rev, sha, mine.text)
+        return written(live, snap, sha, mine.text)
       } catch (e) {
         if (e instanceof ApiError && e.status === 409 && e.code !== STALE_BUILD) continue
         throw e
@@ -794,10 +1027,10 @@ async function mergeAndSend(live: Live): Promise<void> {
       }
     }
     if (conflicts.length) await recordConflict(branch, path, { items: conflicts, local, remote: theirs })
-    // Новые правки, пришедшие за это время, остаются в очереди от прежней базы: следующая отправка сольёт их снова.
-    if (queue.get(k) === live && live.rev === rev) queue.delete(k)
+    // Новые правки, пришедшие за это время, ждут от сохранённой версии: разобранные места не всплывут снова.
+    settle(live, snap, saved)
     retryDelay = RETRY_FIRST
-    await persistEntry(k)
+    await persistEntry(k, snap.id)
     publish()
     await applyWrite(branch, [saved], [])
     return
@@ -833,8 +1066,9 @@ async function failed(live: Live, e: unknown): Promise<SendResult> {
 async function refuse(live: Live, reason: string): Promise<void> {
   const { branch, path } = live.edit
   const k = key(branch, path)
+  const id = storedIds.get(k)
   if (queue.get(k) === live) queue.delete(k)
-  await persistEntry(k)
+  await persistEntry(k, id)
   publish()
   await recordConflict(branch, path, { refused: { reason, mine: live.edit.text } })
   await showCached(branch, path)
@@ -844,8 +1078,9 @@ async function refuse(live: Live, reason: string): Promise<void> {
 async function recordDeleted(live: Live): Promise<void> {
   const { branch, path } = live.edit
   const k = key(branch, path)
+  const id = storedIds.get(k)
   if (queue.get(k) === live) queue.delete(k)
-  await persistEntry(k)
+  await persistEntry(k, id)
   publish()
   await recordConflict(branch, path, { deleted: { mine: live.edit.text } })
   await applyWrite(branch, [], [path])
@@ -918,13 +1153,32 @@ async function dropConflict(k: string): Promise<void> {
   await persist(() => deleteConflict(rec.branch, rec.path))
 }
 
-/** Записать выбор в свежую версию файла. Если файл успели изменить ещё раз — перечитать и повторить. */
-async function writeOps(branch: string, path: string, ops: Parameters<typeof applyOps>[1]): Promise<void> {
+interface Chosen {
+  index: number
+  item: MergeConflict
+  pick: ConflictPick
+}
+
+/**
+ * Записать выбор в свежую версию файла. Если файл успели изменить ещё раз — перечитать и повторить.
+ * Место, которое в репо изменили снова (там уже не то, что было при слиянии), не пишется: возвращается его новое значение.
+ */
+async function writeOps(branch: string, path: string, chosen: Chosen[]): Promise<Map<number, Json | undefined>> {
   const { remote } = useSession.getState()
   for (let attempt = 0; attempt < 3; attempt++) {
     const fresh = await readFresh(branch, path)
     if (!fresh) throw new ApiError(404, 'not_found', 'Файла уже нет в репо — выбор некуда записать')
     const doc = parseDoc(fresh.text, 'Файл в репо')
+    const stale = new Map<number, Json | undefined>()
+    const ops: ConflictOp[] = []
+    for (const c of chosen) {
+      const own = opsFor(c.item, c.pick)
+      if (!own.length) continue
+      const now = valueAt(doc, c.item.path)
+      if (sameValue(now, heldValue(c.item))) ops.push(...own)
+      else stale.set(c.index, now)
+    }
+    if (!ops.length) return stale
     const changed = applyOps(doc, ops)
     if (typeof doc.updatedAt === 'string') changed.updatedAt = nowIso()
     let next: JsonObject
@@ -933,18 +1187,29 @@ async function writeOps(branch: string, path: string, ops: Parameters<typeof app
     } catch (e) {
       throw new ApiError(422, 'validation', e instanceof Error ? e.message : 'Файл не проходит проверку')
     }
-    if (sameContent(next, asWritten(doc))) return
+    if (sameContent(next, asWritten(doc))) return stale
     const text = serialize(next)
     try {
       const { sha } = await remote.putFile(branch, path, text, fresh.sha)
       await applyWrite(branch, [{ path, sha, text }], [])
-      return
+      return stale
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.code !== STALE_BUILD) continue
       throw e
     }
   }
   throw new ApiError(409, 'conflict', 'Файл снова изменился — попробуй ещё раз')
+}
+
+/**
+ * Спорное место изменили в репо ещё раз: показать новое значение из репо. Элемент, удалённый с обеих сторон, —
+ * спорить не о чем (null). Элемент, который я оставил, а в репо снова поменяли, — теперь спор о нём целиком.
+ */
+function changedAgain(item: MergeConflict, label: string, now: Json | undefined): { item: MergeConflict; label: string } | null {
+  if (item.kind === 'field') return { item: { ...item, remote: now }, label }
+  if (item.deletedBy === 'local') return now === undefined ? null : { item: { ...item, remote: now }, label }
+  const what = label.split(' · ')[0] ?? label
+  return { item: { kind: 'field', path: item.path, base: item.base, local: item.local, remote: now }, label: `${what} · ${now === undefined ? 'удалена в репо' : 'изменена в репо'}` }
 }
 
 /**
@@ -962,7 +1227,15 @@ export function installSyncTriggers(
   doc.addEventListener('visibilitychange', onVisible)
   win.addEventListener('online', run)
   autoRetry = true
+  // Другая вкладка хаба изменила очередь или конфликты — перечитать их с устройства.
+  if (typeof BroadcastChannel !== 'undefined') {
+    channel?.close()
+    channel = new BroadcastChannel(QUEUE_LOCK)
+    channel.onmessage = () => void reloadFromDevice()
+  }
   return () => {
+    channel?.close()
+    channel = null
     doc.removeEventListener('visibilitychange', onVisible)
     win.removeEventListener('online', run)
     autoRetry = false
@@ -977,5 +1250,5 @@ export function resetQueueMemory(): void {
   persistAsked = false
   running = null
   seq = 0
-  useSession.setState({ queued: 0, conflicts: [] })
+  useSession.setState({ queued: 0, conflicts: [], deviceError: null })
 }
