@@ -187,8 +187,9 @@ describe('ProjectTasks: вехи', () => {
 
   it('с вехами — подпись «Вехи · N» перед группами', async () => {
     await renderMs(grouped, milestones)
-    const label = host.querySelector('section > h3')!
+    const label = host.querySelector('section > p')!
     expect(label.textContent).toBe(`Вехи · ${milestones.length}`)
+    expect(host.querySelector('section > h3')).toBeNull()
     expect(label.nextElementSibling).toBe(groups()[0]!)
   })
 

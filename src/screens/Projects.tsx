@@ -2,7 +2,7 @@
 // На телефоне (< 768 px) те же плитки CSS перестраивает в список строк (4-2b). Пустые состояния — по 6-8a/6-8d.
 // Фильтр живёт в адресе, поэтому «назад» из карточки возвращает ту же выборку.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { Link, useLocation, useSearchParams } from 'react-router'
 import { ArrowsDownUp, MagnifyingGlass, Plus, PlusCircle, SquaresFour, Warning, X } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
@@ -50,6 +50,8 @@ export function Projects() {
   const branch = useSession((s) => s.branch)
   const [params, setParams] = useSearchParams()
   const filter = useMemo(() => filterFromParams(params), [params])
+  // Статус не выбран явно — вкладка по умолчанию; правка поиска или тегов её не фиксирует в адресе.
+  const implicitStatus = !params.has('status')
   // «Сегодня» для сроков берём один раз на набор файлов: плитки не пересчитываются на каждый ввод в поиск.
   const lib = useMemo(() => buildLibrary(files, new Date()), [files])
   const shown = useMemo(() => applyFilter(lib.projects, filter), [lib, filter])
@@ -60,7 +62,10 @@ export function Projects() {
   const [creating, setCreating] = useState(hasNewProjectDraft)
   const titleRef = useRef<HTMLHeadingElement>(null)
 
-  const set = (next: Partial<Filter>) => setParams(filterToParams({ ...filter, ...next }), { replace: true })
+  const set = (next: Partial<Filter>) => {
+    const implicit = implicitStatus && !('statuses' in next)
+    setParams(filterToParams({ ...filter, ...next }, implicit), { replace: true })
+  }
   const total = lib.projects.length - counts.archived
   const current = filter.statuses.length === 1 ? filter.statuses[0]! : null
   // «В работе» по умолчанию и «Все» — не фильтр: кнопки сброса при них нет.
@@ -68,9 +73,9 @@ export function Projects() {
 
   useEffect(() => {
     if (carriedQuery === undefined) return
-    if (filter.query === '') setParams(filterToParams({ ...filter, query: carriedQuery }), { replace: true })
+    if (filter.query === '') setParams(filterToParams({ ...filter, query: carriedQuery }, implicitStatus), { replace: true })
     discardQuery()
-  }, [carriedQuery, filter, setParams, discardQuery])
+  }, [carriedQuery, filter, implicitStatus, setParams, discardQuery])
 
   function closeSearch() {
     setSearchOpen(false)
@@ -266,10 +271,12 @@ export function NothingFound({ filter, archived, onReset }: { filter: Filter; ar
 
 function Tile({ p }: { p: ProjectView }) {
   const d = p.data
+  // Фильтр списка едет в карточку, чтобы «Проекты» вернули на ту же вкладку.
+  const { search } = useLocation()
   const pct = p.progress === null ? 0 : Math.round(p.progress * 100)
   const hot = p.deadline && isHot(p.deadline) ? p.deadline : null
   return (
-    <Link to={`/projects/${d.slug}`} className={css.tile} data-status={d.status} viewTransition>
+    <Link to={`/projects/${d.slug}`} state={{ listSearch: search }} className={css.tile} data-status={d.status} viewTransition>
       <div className={css.coverWrap} style={{ viewTransitionName: `cover-${d.slug}` }}>
         <Cover slug={d.slug} muted={d.status === 'paused' || d.status === 'done' || d.status === 'archived'} />
         <span className={css.pill}>

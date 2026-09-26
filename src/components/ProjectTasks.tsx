@@ -101,7 +101,7 @@ export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = n
       ) : (
         <>
           {/* Подпись и разделители между группами: вехи и задачи не сливаются в один список. */}
-          <h3 className={css.groupsLabel}>Вехи · {milestones.length}</h3>
+          <p className={css.groupsLabel}>Вехи · {milestones.length}</p>
           {milestones.map((m) => {
             const own = tasks.filter((t) => t.milestoneId === m.id)
             return (

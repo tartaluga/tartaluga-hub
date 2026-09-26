@@ -255,20 +255,30 @@ export function filterFromParams(params: URLSearchParams): Filter {
   const raw = params.getAll('status')
   return {
     query: params.get('q') ?? '',
-    statuses: raw.length === 0 ? [...DEFAULT_STATUSES] : raw.filter((s): s is Status => (STATUSES as string[]).includes(s)),
+    // Статус не выбран явно: без поиска — «в работе», с поиском — по всем, кроме архива.
+    statuses: raw.length === 0 ? ((params.get('q') ?? '').trim() ? [] : [...DEFAULT_STATUSES]) : raw.filter((s): s is Status => (STATUSES as string[]).includes(s)),
     tags: params.getAll('tag'),
     sort: sort && sort in SORT_LABEL ? (sort as SortKey) : 'activity',
   }
 }
 
-export function filterToParams(f: Filter): URLSearchParams {
+/** implicitStatus — статус не выбран явно (вкладка по умолчанию): в адрес его не пишем. */
+export function filterToParams(f: Filter, implicitStatus = false): URLSearchParams {
   const p = new URLSearchParams()
   if (f.query) p.set('q', f.query)
-  if (f.statuses.length === 0) p.set('status', ALL_STATUSES)
-  else if (!isDefaultStatuses(f.statuses)) for (const s of f.statuses) p.append('status', s)
+  if (!implicitStatus) {
+    if (f.statuses.length === 0) p.set('status', ALL_STATUSES)
+    else for (const s of f.statuses) p.append('status', s)
+  }
   for (const t of f.tags) p.append('tag', t)
   if (f.sort !== 'activity') p.set('sort', f.sort)
   return p
+}
+
+/** Строка фильтра списка, с которой открыли карточку (location.state), — для ссылки «назад». Чужое — пустая строка. */
+export function listSearchFromState(state: unknown): string {
+  const s = state && typeof state === 'object' ? (state as { listSearch?: unknown }).listSearch : undefined
+  return typeof s === 'string' && s.length <= 2000 && /^\?[^#]*$/.test(s) ? s : ''
 }
 
 /** Подпись срока: «-2 дн · 21.09», «сегодня», «завтра», «26.09». */

@@ -2,7 +2,7 @@
 // склеиваются в следующий (session.saveProject). До ответа сервера на экране уже новое значение; при ошибке оно
 // откатывается, а причина видна рядом с полем.
 import { lazy, Suspense, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import {
   ArrowLeft,
   Code,
@@ -22,7 +22,7 @@ import {
 import { errorText, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { InlineText } from '../components/InlineText'
-import { activityText, buildLibrary, STATUS_LABEL, type Status } from '../data/projects'
+import { activityText, buildLibrary, listSearchFromState, STATUS_LABEL, type Status } from '../data/projects'
 import { NEXT_STEP_MAX, TITLE_MAX } from '../data/newProject'
 import { deleteProject } from '../data/ideas'
 import {
@@ -72,6 +72,8 @@ export function Project() {
 
 function ProjectCard({ slug }: { slug: string }) {
   const navigate = useNavigate()
+  // «Проекты» возвращают на тот фильтр списка, с которого открыли карточку.
+  const back = `/projects${listSearchFromState(useLocation().state)}`
   const files = useSession((s) => s.files)
   const sync = useSession((s) => s.sync)
   const saveProject = useSession((s) => s.saveProject)
@@ -121,7 +123,7 @@ function ProjectCard({ slug }: { slug: string }) {
   if (!p) {
     return (
       <section className={css.page}>
-        <Link to="/projects" className={css.back}>
+        <Link to={back} className={css.back}>
           <ArrowLeft size={16} aria-hidden /> Проекты
         </Link>
         {broken ? (
@@ -149,7 +151,7 @@ function ProjectCard({ slug }: { slug: string }) {
   const ro = p.readOnly
   return (
     <section className={css.page}>
-      <Link to="/projects" className={css.back} viewTransition>
+      <Link to={back} className={css.back} viewTransition>
         <ArrowLeft size={16} aria-hidden /> Проекты
       </Link>
       <div className={css.cover} data-status={d.status} style={{ viewTransitionName: `cover-${d.slug}` }}>
@@ -173,11 +175,11 @@ function ProjectCard({ slug }: { slug: string }) {
           onSave={(nextStep) => save({ nextStep })}
         />
       </div>
+      {ro && <p className={css.notice}>Файл записан новой версией формата данных — править его может только новая версия хаба. Здесь только чтение.</p>}
       {/* Описание — сразу под названием и следующим шагом, а не под задачами. */}
       <div className={css.lead}>
         <Description slug={d.slug} text={d.description ?? ''} readOnly={ro} save={save} />
       </div>
-      {ro && <p className={css.notice}>Файл записан новой версией формата данных — править его может только новая версия хаба. Здесь только чтение.</p>}
 
       <StatusPicker status={d.status as Status} readOnly={ro} save={save} />
       <CopyContext project={d} />
