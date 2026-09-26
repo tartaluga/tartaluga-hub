@@ -1,14 +1,14 @@
 // Очередь правок (ADR-004) и входящие конфликты (ADR-004 шаг 5, ADR-010): сессия с поддельным сервером.
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DB_BLOCKED, DEVICE_WRITE_FAILED, installSyncTriggers, QueueConflict, resetQueueMemory, useSession, type Remote } from './session'
+import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, resetQueueMemory, useSession, type Remote } from './session'
 import { ApiError, type Me } from '../lib/api'
 import { getCachedFiles, getConflicts, getQueue, putQueued, wipeDevice } from '../lib/localdb'
 
 // Запись в очередь на устройстве настоящая, но её можно уронить в отдельном тесте.
 vi.mock('../lib/localdb', async (importOriginal) => {
   const real = await importOriginal<typeof import('../lib/localdb')>()
-  return { ...real, putQueued: vi.fn(real.putQueued) }
+  return { ...real, putQueued: vi.fn(real.putQueued), getQueue: vi.fn(real.getQueue) }
 })
 import { STALE_BUILD } from '../lib/update'
 
@@ -515,7 +515,22 @@ describe('конфликт при отправке (ADR-004 шаги 1–5)', ()
 async function secondTab(srv: ReturnType<typeof server>) {
   vi.resetModules()
   const tab = await import('./session')
-  tab.useSession.setState({ remote: srv.remote })
+  // У вкладки свой экземпляр модулей: ошибки сервера — её ApiError, иначе instanceof в ней не сработает.
+  const { ApiError: TabApiError } = await import('../lib/api')
+  const remote = new Proxy(srv.remote, {
+    get(target, prop, receiver) {
+      const v: unknown = Reflect.get(target, prop, receiver)
+      if (typeof v !== 'function') return v
+      return async (...args: unknown[]) => {
+        try {
+          return await (v as (...a: unknown[]) => Promise<unknown>).apply(target, args)
+        } catch (e) {
+          throw e instanceof ApiError ? new TabApiError(e.status, e.code, e.message) : e
+        }
+      }
+    },
+  })
+  tab.useSession.setState({ remote })
   await tab.useSession.getState().boot()
   await tab.useSession.getState().syncNow()
   return tab
@@ -624,6 +639,74 @@ describe('запись на устройство не удалась', () => {
   })
 })
 
+describe('конфликты из двух вкладок', () => {
+  it('вкладки записывают спорные места одного файла — оба места остаются', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    const b = await secondTab(srv) // B о будущем конфликте A не знает
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Моё' })
+    srv.edit('main', PATH, project({ title: 'С телефона' }))
+    srv.state.down = false
+    await useSession.getState().flush()
+    expect(await getConflicts()).toHaveLength(1)
+    srv.state.down = true
+    await b.useSession.getState().saveProject('a', { nextStep: 'шаг из B' }).catch(() => undefined)
+    srv.edit('main', PATH, project({ title: 'С телефона', nextStep: 'шаг с телефона' }))
+    srv.state.down = false
+    await b.useSession.getState().flush()
+    const [c] = await getConflicts()
+    expect(c!.items.map((it) => it.path.join('.')).sort()).toEqual(['nextStep', 'title'])
+    expect(c!.items.find((it) => it.path[0] === 'title')).toMatchObject({ local: 'Моё' })
+  })
+
+  it('ветку удалили в одной вкладке — другая не возвращает её правки в базу', async () => {
+    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
+    await start(srv)
+    await useSession.getState().switchBranch('feat')
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'С ветки' })
+    const b = await secondTab(srv) // B открыла ту же ветку и держит правку в памяти
+    expect(b.useSession.getState().queued).toBe(1)
+    const t = () => Object.assign(new EventTarget(), { visibilityState: 'hidden' })
+    const stopA = installSyncTriggers(new EventTarget(), t())
+    const stopB = b.installSyncTriggers(new EventTarget(), t())
+    try {
+      await useSession.getState().branchDeleted('feat')
+      await vi.waitFor(() => expect(b.useSession.getState().queued).toBe(0))
+      await vi.waitFor(() => expect(b.useSession.getState().branch).toBe('main'))
+      expect(await getQueue()).toEqual([])
+    } finally {
+      stopA()
+      stopB()
+    }
+  })
+
+  it('вкладка, не слышавшая об удалении ветки, дописала её правку — удалившая вкладка стирает её при перечитывании', async () => {
+    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
+    await start(srv)
+    await useSession.getState().switchBranch('feat')
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'С ветки' })
+    const b = await secondTab(srv) // без BroadcastChannel: об удалении B не узнает
+    await useSession.getState().branchDeleted('feat')
+    await b.useSession.getState().saveProject('a', { nextStep: 'из B' })
+    expect(await getQueue()).toHaveLength(1)
+    await useSession.getState().settleBranch('main')
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('очередь не читается с устройства — своё сообщение, не «правка не сохранилась»', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    vi.mocked(getQueue).mockRejectedValueOnce(new Error('UnknownError'))
+    await useSession.getState().settleBranch('main')
+    expect(useSession.getState().deviceError).toBe(DEVICE_READ_FAILED)
+    await useSession.getState().settleBranch('main')
+    expect(useSession.getState().deviceError).toBeNull()
+  })
+})
+
 describe('база на устройстве ждёт другие вкладки', () => {
   it('старая вкладка держит базу — индикатор просит её закрыть; закрыли — сообщение уходит, хаб стартует', async () => {
     const old = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -711,6 +794,32 @@ describe('разбор конфликтов: гонки', () => {
     await useSession.getState().resolveConflict('main', PATH, [{ index: 0, pick: 'mine' }])
     expect(JSON.parse(srv.text('main', PATH)).title).toBe('Моё')
     expect(useSession.getState().conflicts).toEqual([])
+  })
+
+  it('перечитывание с устройства посреди разбора не возвращает разобранное место', async () => {
+    await conflicted()
+    const reload = useSession.getState().settleBranch('main').catch(() => undefined) // встаёт в очередь раньше разбора
+    await useSession.getState().resolveConflict('main', PATH, [{ index: 0, pick: 'repo' }])
+    await reload
+    expect(useSession.getState().conflicts).toEqual([])
+    expect(await getConflicts()).toEqual([])
+  })
+
+  it('часть выбора записана, другое место изменили ещё раз — сообщение об этом, а не «ничего не записано»', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Моё', nextStep: 'мой шаг' })
+    srv.edit('main', PATH, project({ title: 'С телефона', nextStep: 'шаг с телефона' }))
+    srv.state.down = false
+    await useSession.getState().flush()
+    expect(useSession.getState().conflicts[0]!.items).toHaveLength(2)
+    srv.edit('main', PATH, project({ title: 'С телефона', nextStep: 'ещё раз' }))
+    const picks = useSession.getState().conflicts[0]!.items.map((_, index) => ({ index, pick: 'mine' as const }))
+    await expect(useSession.getState().resolveConflict('main', PATH, picks)).rejects.toThrow(PARTLY_WRITTEN)
+    const doc = JSON.parse(srv.text('main', PATH))
+    expect(doc).toMatchObject({ title: 'Моё', nextStep: 'ещё раз' })
+    expect(useSession.getState().conflicts[0]!.items).toMatchObject([{ path: ['nextStep'], remote: 'ещё раз' }])
   })
 
   it('отказ от правки, которую не удалось записать, не снимает спорные места файла', async () => {
