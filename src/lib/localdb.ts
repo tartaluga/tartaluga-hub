@@ -172,6 +172,10 @@ export async function getConflicts(): Promise<StoredConflict[]> {
   return (await db()).getAll('conflicts')
 }
 
+export async function getConflict(branch: string, path: string): Promise<StoredConflict | undefined> {
+  return (await db()).get('conflicts', [branch, path])
+}
+
 export async function putConflict(conflict: StoredConflict): Promise<void> {
   await (await db()).put('conflicts', conflict)
 }
