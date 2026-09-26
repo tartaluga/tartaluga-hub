@@ -192,7 +192,7 @@ describe('GitHubClient: атомарный коммит', () => {
     )
   }
 
-  it('создаёт blobs → tree → commit → двигает ветку без force', async () => {
+  it('текст — прямо в дереве, blob только для бинарного → tree → commit → ветка без force', async () => {
     const f = gitRoutes()
     const res = await client(f.fn).commitFiles(
       [
@@ -202,11 +202,17 @@ describe('GitHubClient: атомарный коммит', () => {
       ],
       'Сделать проектом',
     )
-    expect(res).toEqual({ commitSha: 'C1', shas: { 'projects/x.json': 'BLOB1', 'covers/x.webp': 'BLOB2' } })
+    // sha текста — как у git: printf '{"title":"Икс"}' | git hash-object --stdin
+    expect(res).toEqual({ commitSha: 'C1', shas: { 'projects/x.json': '8f13f3e5cf65684144c532cb40600ea47a193f63', 'covers/x.webp': 'BLOB1' } })
+    expect(f.calls.filter((c) => c.url.endsWith('/git/blobs'))).toHaveLength(1)
 
     const tree = f.calls.find((c) => c.method === 'POST' && c.url.endsWith('/git/trees'))!.body
     expect(tree.base_tree).toBe('TREE0')
-    expect(tree.tree).toContainEqual({ path: 'ideas/OLD.json', mode: '100644', type: 'blob', sha: null })
+    expect(tree.tree).toEqual([
+      { path: 'projects/x.json', mode: '100644', type: 'blob', content: '{"title":"Икс"}' },
+      { path: 'covers/x.webp', mode: '100644', type: 'blob', sha: 'BLOB1' },
+      { path: 'ideas/OLD.json', mode: '100644', type: 'blob', sha: null },
+    ])
 
     const commit = f.calls.find((c) => c.method === 'POST' && c.url.endsWith('/git/commits'))!.body
     expect(commit.parents).toEqual(['HEAD'])

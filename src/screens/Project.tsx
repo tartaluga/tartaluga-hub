@@ -180,7 +180,7 @@ function ProjectCard({ slug }: { slug: string }) {
 
       <div className={css.body}>
         <div className={css.main}>
-          <ProjectTasks tasks={d.tasks ?? []} milestones={d.milestones ?? []} readOnly={ro} save={save} />
+          <ProjectTasks tasks={d.tasks ?? []} milestones={d.milestones ?? []} readOnly={ro} save={save} draftKey={`project:${d.slug}`} />
           <Description slug={d.slug} text={d.description ?? ''} readOnly={ro} save={save} />
           <ProjectLog slug={d.slug} log={d.log ?? []} readOnly={ro} save={save} />
         </div>

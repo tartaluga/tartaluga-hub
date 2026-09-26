@@ -44,6 +44,18 @@ export interface FileContent {
 /** null — удалить файл. */
 export type FileChange = { path: string; content: string | Uint8Array | null }
 
+type TreeChange = { path: string; mode: '100644'; type: 'blob' } & ({ sha: string | null } | { content: string })
+
+/** SHA-1 git-объекта blob — то же, что вернёт GitHub для этого содержимого. */
+export async function gitBlobSha(bytes: Uint8Array): Promise<string> {
+  const header = new TextEncoder().encode(`blob ${bytes.length}\0`)
+  const all = new Uint8Array(header.length + bytes.length)
+  all.set(header)
+  all.set(bytes, header.length)
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', all))
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export interface ClientOptions {
   token: string
   owner: string
@@ -212,19 +224,23 @@ export class GitHubClient {
       const { body: commit } = await this.request<{ tree: { sha: string } }>(`/git/commits/${head}`)
 
       const shas: Record<string, string> = {}
-      const tree: { path: string; mode: '100644'; type: 'blob'; sha: string | null }[] = []
+      // Текст идёт прямо в элемент дерева (content) — без отдельного запроса на файл:
+      // у Workers Free лимит 50 подзапросов на запрос. Отдельный blob — только для бинарных файлов.
+      const tree: TreeChange[] = []
       for (const change of changes) {
         if (change.content === null) {
           tree.push({ path: change.path, mode: '100644', type: 'blob', sha: null })
-          continue
+        } else if (typeof change.content === 'string') {
+          shas[change.path] = await gitBlobSha(new TextEncoder().encode(change.content))
+          tree.push({ path: change.path, mode: '100644', type: 'blob', content: change.content })
+        } else {
+          const { body: blob } = await this.request<{ sha: string }>(`/git/blobs`, {
+            method: 'POST',
+            body: JSON.stringify({ content: bytesToBase64(change.content), encoding: 'base64' }),
+          })
+          shas[change.path] = blob.sha
+          tree.push({ path: change.path, mode: '100644', type: 'blob', sha: blob.sha })
         }
-        const bytes = typeof change.content === 'string' ? new TextEncoder().encode(change.content) : change.content
-        const { body: blob } = await this.request<{ sha: string }>(`/git/blobs`, {
-          method: 'POST',
-          body: JSON.stringify({ content: bytesToBase64(bytes), encoding: 'base64' }),
-        })
-        shas[change.path] = blob.sha
-        tree.push({ path: change.path, mode: '100644', type: 'blob', sha: blob.sha })
       }
 
       const { body: newTree } = await this.request<{ sha: string }>(`/git/trees`, {

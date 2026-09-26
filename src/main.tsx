@@ -4,7 +4,7 @@ import { RouterProvider } from 'react-router'
 import { registerSW } from 'virtual:pwa-register'
 import { router } from './app/router'
 import { UpdateNotice } from './components/UpdateNotice'
-import { idbStateStore, restoreHandoff, saveHandoff } from './lib/drafts'
+import { idbStateStore, installDraftPersistence, restoreHandoff, saveHandoff, type HandoffInput } from './lib/drafts'
 import { BUILD_ID, installUpdater } from './lib/update'
 import './styles/global.css'
 
@@ -17,6 +17,7 @@ try {
 }
 
 const store = idbStateStore()
+const handoffInput = (): HandoffInput => ({ route: location.hash, scrollY: window.scrollY, now: Date.now(), build: BUILD_ID })
 
 /** Вернуть прокрутку, когда экран дорисуется (данные грузятся асинхронно). Сдаёмся через 2 с. */
 function restoreScroll(y: number) {
@@ -36,7 +37,7 @@ async function boot() {
   const restoring = new Promise<void>((resolve) => (restoreDone = resolve))
   const { applyWaitingAtStartup } = installUpdater(registerSW, async () => {
     await restoring
-    await saveHandoff(store, { route: location.hash, scrollY: window.scrollY, now: Date.now(), build: BUILD_ID })
+    await saveHandoff(store, handoffInput())
   })
   // Новая версия уже скачана — включаем её до первого экрана.
   if (await applyWaitingAtStartup()) return
@@ -48,6 +49,8 @@ async function boot() {
     console.warn('handoff не прочитан:', e instanceof Error ? e.message : e)
   }
   restoreDone()
+  // Черновики переживают и выгрузку из фона, F5, вход заново (не только обновление).
+  installDraftPersistence(store, handoffInput)
   if (restored.route && restored.route !== location.hash.slice(1)) await router.navigate(restored.route, { replace: true })
 
   createRoot(document.getElementById('root')!).render(

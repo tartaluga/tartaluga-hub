@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { resetGitHubAppCaches } from '../githubApp'
-import { COMMIT_BODY_LIMIT, COMMIT_LIMIT } from '../write'
+import { COMMIT_BODY_LIMIT, COMMIT_IMAGE_LIMIT, COMMIT_LIMIT } from '../write'
 import { jsonResponse, mutation, on, ORIGIN, setup, type Handler } from './helpers'
 
 const example = (name: string) => readFileSync(new URL(`../../schema/examples/valid/${name}`, import.meta.url), 'utf8')
@@ -90,10 +91,16 @@ describe('POST /api/commit', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect((await res.json()).head).toBe('f'.repeat(40))
+    const out = await res.json()
+    expect(out.head).toBe('f'.repeat(40))
+    // sha текста считается как у git (blob <длина>\0<байты>) — без запроса к GitHub.
+    const gitSha = createHash('sha1').update(`blob ${Buffer.byteLength(PROJECT)}\0`).update(PROJECT).digest('hex')
+    expect(out.shas).toEqual({ 'projects/tartaluga-hub.json': gitSha, 'covers/tartaluga-hub.webp': SHA })
+    expect(gh.repoCalls().filter((c) => c.url.endsWith('/git/blobs'))).toHaveLength(1)
     const tree = gh.repoCalls().find((c) => c.url.endsWith('/git/trees'))!.body.tree
-    expect(tree.map((t: { path: string; sha: string | null }) => [t.path, t.sha])).toEqual([
-      ['projects/tartaluga-hub.json', SHA],
+    expect(tree[0]).toEqual({ path: 'projects/tartaluga-hub.json', mode: '100644', type: 'blob', content: PROJECT })
+    expect(tree.map((t: { path: string; sha?: string | null }) => [t.path, t.sha])).toEqual([
+      ['projects/tartaluga-hub.json', undefined],
       ['covers/tartaluga-hub.webp', SHA],
       ['ideas/01K5TQ0000000000000000E001.json', null],
     ])
@@ -119,6 +126,30 @@ describe('POST /api/commit', () => {
     const res = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes }))
     expect(res.status).toBe(200)
     expect(gh.repoCalls().find((c) => c.url.endsWith('/git/trees'))!.body.tree).toHaveLength(100)
+  })
+
+  it('подзапросы к GitHub не растут с числом текстовых файлов: 100 файлов — не больше 10 (лимит Workers Free — 50)', async () => {
+    const { gh, cookie, send } = await setup(...gitData)
+    const changes = Array.from({ length: COMMIT_LIMIT }, (_, i) => ({ path: `projects/p${i}.json`, text: JSON.stringify({ ...JSON.parse(PROJECT), slug: `p${i}` }) }))
+    const res = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes }))
+    expect(res.status).toBe(200)
+    expect(Object.keys((await res.json()).shas)).toHaveLength(COMMIT_LIMIT)
+    expect(gh.calls.length).toBeLessThanOrEqual(10)
+    expect(gh.calls.filter((c) => c.url.endsWith('/git/blobs'))).toEqual([])
+  })
+
+  it(`картинок больше ${COMMIT_IMAGE_LIMIT} — 413 с понятной ошибкой, в GitHub ничего не пишется`, async () => {
+    expect(COMMIT_IMAGE_LIMIT + 10).toBeLessThan(45)
+    const { gh, cookie, send } = await setup(...gitData)
+    const covers = (n: number) => Array.from({ length: n }, (_, i) => ({ path: `covers/p${i}.webp`, base64: WEBP.toString('base64') }))
+    const res = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes: covers(COMMIT_IMAGE_LIMIT + 1) }))
+    expect(res.status).toBe(413)
+    expect((await res.json()).error.message).toContain(`${COMMIT_IMAGE_LIMIT} картинок`)
+    expect(gh.repoCalls().filter((c) => c.method !== 'GET')).toEqual([])
+
+    const ok = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes: covers(COMMIT_IMAGE_LIMIT) }))
+    expect(ok.status).toBe(200)
+    expect(gh.calls.length).toBeLessThan(45)
   })
 
   it('тело коммита больше лимита — 413, в GitHub ничего не пишется', async () => {
@@ -171,13 +202,13 @@ describe('POST /api/commit', () => {
       ],
     })
 
-    it('успех: один блоб на файл, одно дерево, один коммит, ref без force', async () => {
+    it('успех: без отдельных блобов для текста, одно дерево, один коммит, ref без force', async () => {
       const { gh, cookie, send } = await setup(...gitData)
       const res = await send(mutation('POST', '/api/commit', cookie, untag()))
       expect(res.status).toBe(200)
       expect(Object.keys((await res.json()).shas)).toEqual(['settings.json', 'projects/a.json', 'projects/b.json'])
       const posts = gh.repoCalls().filter((c) => c.method === 'POST')
-      expect(posts.filter((c) => c.url.endsWith('/git/blobs'))).toHaveLength(3)
+      expect(posts.filter((c) => c.url.endsWith('/git/blobs'))).toHaveLength(0)
       expect(posts.filter((c) => c.url.endsWith('/git/trees'))).toHaveLength(1)
       expect(posts.filter((c) => c.url.endsWith('/git/commits'))).toHaveLength(1)
       expect(gh.repoCalls().filter((c) => c.method === 'PATCH')).toHaveLength(1)
