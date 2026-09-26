@@ -197,6 +197,16 @@ export interface Filter {
 
 export const EMPTY_FILTER: Filter = { query: '', statuses: [], tags: [], sort: 'activity' }
 
+/** Фильтр по умолчанию (адрес без status): только «в работе». Вкладка «Все» — явное status=all. */
+export const DEFAULT_STATUSES: Status[] = ['active']
+export const DEFAULT_FILTER: Filter = { ...EMPTY_FILTER, statuses: DEFAULT_STATUSES }
+
+const ALL_STATUSES = 'all'
+
+/** Фильтр по статусу — тот, что по умолчанию. */
+export const isDefaultStatuses = (statuses: Status[]) =>
+  statuses.length === DEFAULT_STATUSES.length && DEFAULT_STATUSES.every((s) => statuses.includes(s))
+
 const norm = (s: string) => s.toLocaleLowerCase('ru').replace(/ё/g, 'е')
 
 function matchesQuery(p: Project, q: string): boolean {
@@ -242,9 +252,10 @@ export function applyFilter(projects: ProjectView[], f: Filter): ProjectView[] {
 
 export function filterFromParams(params: URLSearchParams): Filter {
   const sort = params.get('sort')
+  const raw = params.getAll('status')
   return {
     query: params.get('q') ?? '',
-    statuses: params.getAll('status').filter((s): s is Status => (STATUSES as string[]).includes(s)),
+    statuses: raw.length === 0 ? [...DEFAULT_STATUSES] : raw.filter((s): s is Status => (STATUSES as string[]).includes(s)),
     tags: params.getAll('tag'),
     sort: sort && sort in SORT_LABEL ? (sort as SortKey) : 'activity',
   }
@@ -253,7 +264,8 @@ export function filterFromParams(params: URLSearchParams): Filter {
 export function filterToParams(f: Filter): URLSearchParams {
   const p = new URLSearchParams()
   if (f.query) p.set('q', f.query)
-  for (const s of f.statuses) p.append('status', s)
+  if (f.statuses.length === 0) p.set('status', ALL_STATUSES)
+  else if (!isDefaultStatuses(f.statuses)) for (const s of f.statuses) p.append('status', s)
   for (const t of f.tags) p.append('tag', t)
   if (f.sort !== 'activity') p.set('sort', f.sort)
   return p

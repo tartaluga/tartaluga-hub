@@ -18,6 +18,7 @@ import {
   rebaseIdeaPatch,
   saveIdea,
   shortDate,
+  textExtendsTitle,
   titleFromIdea,
   unlinkIdeasChanges,
 } from './ideas'
@@ -55,6 +56,14 @@ describe('разбор', () => {
   it('firstLine берёт первую непустую строку и схлопывает пробелы', () => {
     expect(firstLine('\n  \n  Бот   для  пар \nвторая')).toBe('Бот для пар')
     expect(firstLine('   ')).toBe('')
+  })
+
+  it('textExtendsTitle: текст длиннее заголовка — только если есть что-то кроме первой строки', () => {
+    expect(textExtendsTitle('Бот для пар')).toBe(false)
+    expect(textExtendsTitle('  Бот   для пар \n\n  ')).toBe(false)
+    expect(textExtendsTitle('Бот для пар\nподробности')).toBe(true)
+    expect(textExtendsTitle('\nБот\n\nещё')).toBe(true)
+    expect(textExtendsTitle('')).toBe(false)
   })
 
   it('shortDate — дата как записана, без пересчёта поясов', () => {

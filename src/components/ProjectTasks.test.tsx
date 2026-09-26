@@ -182,6 +182,14 @@ describe('ProjectTasks: вехи', () => {
   it('без вех — заголовка «Без вехи» нет', async () => {
     await render(tasks)
     expect(host.textContent).not.toContain('Без вехи')
+    expect(host.textContent).not.toContain('Вехи ·')
+  })
+
+  it('с вехами — подпись «Вехи · N» перед группами', async () => {
+    await renderMs(grouped, milestones)
+    const label = host.querySelector('section > h3')!
+    expect(label.textContent).toBe(`Вехи · ${milestones.length}`)
+    expect(label.nextElementSibling).toBe(groups()[0]!)
   })
 
   it('группы по порядку вех, в конце «Без вехи» (с задачами из несуществующей вехи); прогресс и счётчик', async () => {

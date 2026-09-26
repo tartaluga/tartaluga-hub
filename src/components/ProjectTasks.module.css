@@ -255,8 +255,19 @@ button.due:hover {
   min-width: 0;
 }
 
+/* Между группами — воздух и тонкая линия: следующая веха не липнет к задачам предыдущей. */
 .group + .group {
-  margin-top: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--line);
+}
+
+.groupsLabel {
+  margin: var(--space-2) 0 0;
+  font: 500 11px/1.4 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
 }
 
 .groupTitle {

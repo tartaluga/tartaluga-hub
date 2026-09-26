@@ -64,6 +64,14 @@ export function firstLine(text: string): string {
   return ''
 }
 
+/**
+ * Дополняет ли полный текст заголовок (первую строку): есть другие строки или иное, чем в заголовке.
+ * Если нет — в раскрытой идее текст второй раз не показываем.
+ */
+export function textExtendsTitle(text: string): boolean {
+  return text.trim().replace(/\s+/g, ' ') !== firstLine(text)
+}
+
 /** Дата «23.09» из момента ISO: берём дату как она записана (местная дата автора), без пересчёта поясов. */
 export function shortDate(iso: string): string {
   const m = /^\d{4}-(\d{2})-(\d{2})/.exec(iso)

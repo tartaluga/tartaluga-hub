@@ -173,6 +173,10 @@ function ProjectCard({ slug }: { slug: string }) {
           onSave={(nextStep) => save({ nextStep })}
         />
       </div>
+      {/* Описание — сразу под названием и следующим шагом, а не под задачами. */}
+      <div className={css.lead}>
+        <Description slug={d.slug} text={d.description ?? ''} readOnly={ro} save={save} />
+      </div>
       {ro && <p className={css.notice}>Файл записан новой версией формата данных — править его может только новая версия хаба. Здесь только чтение.</p>}
 
       <StatusPicker status={d.status as Status} readOnly={ro} save={save} />
@@ -181,7 +185,6 @@ function ProjectCard({ slug }: { slug: string }) {
       <div className={css.body}>
         <div className={css.main}>
           <ProjectTasks tasks={d.tasks ?? []} milestones={d.milestones ?? []} readOnly={ro} save={save} draftKey={`project:${d.slug}`} />
-          <Description slug={d.slug} text={d.description ?? ''} readOnly={ro} save={save} />
           <ProjectLog slug={d.slug} log={d.log ?? []} readOnly={ro} save={save} />
         </div>
         <aside className={css.aside}>

@@ -6,6 +6,7 @@ import {
   countByStatus,
   daysUntil,
   deadlineText,
+  DEFAULT_FILTER,
   EMPTY_FILTER,
   filterFromParams,
   filterToParams,
@@ -223,8 +224,17 @@ describe('фильтр в адресе', () => {
     expect(filterFromParams(filterToParams(filter))).toEqual(filter)
   })
 
-  it('пустой фильтр — пустой адрес; мусор в адресе игнорируется', () => {
-    expect(filterToParams(EMPTY_FILTER).toString()).toBe('')
+  it('по умолчанию — «в работе» и пустой адрес; «Все» — явное status=all', () => {
+    expect(filterFromParams(new URLSearchParams(''))).toEqual(DEFAULT_FILTER)
+    expect(DEFAULT_FILTER.statuses).toEqual(['active'])
+    expect(filterToParams(DEFAULT_FILTER).toString()).toBe('')
+    expect(filterToParams(EMPTY_FILTER).toString()).toBe('status=all')
+    expect(filterFromParams(filterToParams(EMPTY_FILTER))).toEqual(EMPTY_FILTER)
+    expect(filterFromParams(new URLSearchParams('status=paused'))).toEqual(f({ statuses: ['paused'] }))
+    expect(filterFromParams(filterToParams(f({ statuses: ['active', 'done'] })))).toEqual(f({ statuses: ['active', 'done'] }))
+  })
+
+  it('мусор в адресе игнорируется', () => {
     expect(filterFromParams(new URLSearchParams('status=wip&status=done&sort=evil'))).toEqual(f({ statuses: ['done'] }))
   })
 })

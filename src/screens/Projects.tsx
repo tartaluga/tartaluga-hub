@@ -11,6 +11,8 @@ import { hasNewProjectDraft } from '../data/newProject'
 import {
   activityText,
   applyFilter,
+  EMPTY_FILTER,
+  isDefaultStatuses,
   buildLibrary,
   countByStatus,
   deadlineText,
@@ -61,7 +63,8 @@ export function Projects() {
   const set = (next: Partial<Filter>) => setParams(filterToParams({ ...filter, ...next }), { replace: true })
   const total = lib.projects.length - counts.archived
   const current = filter.statuses.length === 1 ? filter.statuses[0]! : null
-  const filtered = filter.query !== '' || filter.statuses.length > 0 || filter.tags.length > 0
+  // «В работе» по умолчанию и «Все» — не фильтр: кнопки сброса при них нет.
+  const filtered = filter.query !== '' || filter.tags.length > 0 || (filter.statuses.length > 0 && !isDefaultStatuses(filter.statuses))
 
   useEffect(() => {
     if (carriedQuery === undefined) return
@@ -77,7 +80,8 @@ export function Projects() {
   // Кнопка сброса после него исчезает; фокус — на заголовок экрана, а не на body.
   function resetFilter() {
     setSearchOpen(false)
-    setParams({}, { replace: true })
+    // Сброс показывает всё (status=all), а не вкладку по умолчанию: иначе «Ничего не нашлось» при пустой «В работе» не уйдёт.
+    setParams(filterToParams(EMPTY_FILTER), { replace: true })
     titleRef.current?.focus()
   }
 
@@ -239,11 +243,13 @@ export function EmptyLibrary({ branch, onCreate }: { branch: string; onCreate: (
 export function NothingFound({ filter, archived, onReset }: { filter: Filter; archived: number; onReset: () => void }) {
   const onlyStatus = filter.query === '' && filter.tags.length === 0 && filter.statuses.length > 0
   const hint =
-    filter.query && !filter.statuses.includes('archived') && archived > 0
-      ? 'Архив в поиск не входит — открой вкладку «Архив».'
-      : onlyStatus
-        ? 'Проектов с этим статусом нет.'
-        : 'Попробуй другой запрос или сбрось фильтры.'
+    filter.query && filter.statuses.length > 0
+      ? 'Поиск идёт только по выбранному статусу — открой вкладку «Все».'
+      : filter.query && archived > 0
+        ? 'Архив в поиск не входит — открой вкладку «Архив».'
+        : onlyStatus
+          ? 'Проектов с этим статусом нет.'
+          : 'Попробуй другой запрос или сбрось фильтры.'
   return (
     <div className={css.none}>
       <MagnifyingGlass size={32} className={css.firstIcon} aria-hidden />
