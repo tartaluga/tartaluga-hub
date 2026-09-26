@@ -152,13 +152,14 @@ describe('ProjectTasks', () => {
     expect(save).toHaveBeenCalledWith({ taskRemove: [B] })
   })
 
-  it('правка названия на месте: Enter сохраняет', async () => {
+  it('название задачи в списке не правится: ни нажатием, ни карандашом', async () => {
     await render(tasks)
-    await click(button('Макет'))
-    const field = byLabel<HTMLInputElement>('Название задачи')
-    await type(field, 'Макет меню')
-    await key(field, 'Enter')
-    expect(save).toHaveBeenCalledWith({ taskSet: [{ id: B, title: 'Макет меню' }] })
+    const title = [...host.querySelectorAll('li span')].find((el) => el.textContent === 'Макет')!
+    expect(title.closest('button')).toBeNull()
+    await click(title)
+    expect(byLabel('Название задачи')).toBeNull()
+    expect(host.querySelector('[aria-label^="Изменить название"]')).toBeNull()
+    expect(save).not.toHaveBeenCalled()
   })
 })
 
@@ -262,7 +263,8 @@ describe('ProjectTasks: вехи', () => {
 
   it('правка названия и срока вехи', async () => {
     await renderMs(grouped, milestones)
-    await click(button('Релиз'))
+    expect(button('Релиз')).toBeUndefined()
+    await click(byLabel('Изменить название вехи Релиз'))
     const field = byLabel<HTMLInputElement>('Название вехи')
     await type(field, 'Релиз 1.0')
     await key(field, 'Enter')

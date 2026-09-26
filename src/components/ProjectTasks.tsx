@@ -260,6 +260,8 @@ function MilestoneHead({ milestone: m, tasks, today, readOnly, run }: HeadProps)
         label="Название вехи"
         maxLength={MILESTONE_TITLE_MAX}
         readOnly={readOnly}
+        trigger="pencil"
+        editLabel={`Изменить название вехи ${m.title}`}
         className={css.msTitle}
         onSave={(title) => run({ milestoneSet: [{ id: m.id, title }] })}
       />
@@ -356,15 +358,8 @@ function TaskRow({ task, today, readOnly, milestones, run, onRemove }: RowProps)
         {task.done && <Check size={14} weight="bold" aria-hidden />}
       </button>
       <div className={css.main}>
-        <InlineText
-          value={task.title}
-          placeholder="Без названия"
-          label="Название задачи"
-          maxLength={TASK_TITLE_MAX}
-          readOnly={readOnly}
-          className={css.taskTitle}
-          onSave={(title) => run({ taskSet: [{ id: task.id, title }] })}
-        />
+        {/* Название задачи здесь не правится: правка будет карандашом на странице задачи. */}
+        <span className={css.taskTitle}>{task.title || 'Без названия'}</span>
         {info?.movedFrom && <span className={css.moved}>перенесено с {info.movedFrom}</span>}
       </div>
       {editingDue ? (
