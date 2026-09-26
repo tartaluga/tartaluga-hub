@@ -16,6 +16,7 @@ import {
 } from '../data/editProject'
 import type { Milestone, Task } from '../schema/types'
 import { InlineText } from './InlineText'
+import { restoredDraft, useDraft } from '../lib/drafts'
 import css from './ProjectTasks.module.css'
 
 interface Props {
@@ -25,16 +26,39 @@ interface Props {
   save(patch: ProjectPatch): Promise<string | null>
   /** «Сегодня» для подписей сроков; в тестах — фиксированная дата. */
   today?: Date
+  /** Префикс ключей черновиков формы добавления (ADR-011), например `project:<slug>`; нет — черновики не отдаются. */
+  draftKey?: string
 }
 
 type Run = (patch: ProjectPatch) => Promise<string | null>
 
+/** Поле формы добавления: с ключом — стартует с черновика и отдаёт непустой текст в handoff (как useDraftText). */
+function useFieldText(key: string | null, label: string): [string, (next: string | ((cur: string) => string)) => void] {
+  const [text, setText] = useState(() => (key === null ? undefined : restoredDraft(key)) ?? '')
+  useDraft(key, text === '' ? undefined : text, label)
+  return [text, setText]
+}
+
+const restoredAny = (...keys: (string | null)[]) => keys.some((k) => k !== null && restoredDraft(k) !== undefined)
+
+const taskKeys = (prefix: string | undefined, milestone: Milestone | null | undefined) => {
+  if (prefix === undefined) return { title: null, due: null }
+  const group = milestone === undefined ? 'all' : milestone === null ? 'none' : `m:${milestone.id}`
+  return { title: `${prefix}:new-task:${group}:title`, due: `${prefix}:new-task:${group}:due` }
+}
+
+const milestoneKeys = (prefix: string | undefined) =>
+  prefix === undefined ? { title: null, due: null } : { title: `${prefix}:new-milestone:title`, due: `${prefix}:new-milestone:due` }
+
 /** Больше задач — полоса вехи сплошная с заливкой, а не по сегменту на задачу. */
 export const SEGMENTS_MAX = 20
 
-export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = new Date() }: Props) {
+export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = new Date(), draftKey }: Props) {
   const [error, setError] = useState<string | null>(null)
-  const [addingMilestone, setAddingMilestone] = useState(false)
+  const [addingMilestone, setAddingMilestone] = useState(() => {
+    const k = milestoneKeys(draftKey)
+    return !readOnly && restoredAny(k.title, k.due)
+  })
   const progress = taskProgress(tasks)
 
   async function run(patch: ProjectPatch) {
@@ -72,7 +96,7 @@ export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = n
           ) : (
             list(tasks)
           )}
-          {!readOnly && <AddTask run={run} />}
+          {!readOnly && <AddTask run={run} draftKey={draftKey} />}
         </>
       ) : (
         <>
@@ -82,7 +106,7 @@ export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = n
               <div key={m.id} className={css.group}>
                 <MilestoneHead milestone={m} tasks={own} today={today} readOnly={readOnly} run={run} />
                 {own.length > 0 && list(own)}
-                {!readOnly && <AddTask run={run} milestone={m} />}
+                {!readOnly && <AddTask run={run} milestone={m} draftKey={draftKey} />}
               </div>
             )
           })}
@@ -90,14 +114,14 @@ export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = n
             <div className={css.group}>
               <h3 className={css.groupTitle}>Без вехи</h3>
               {loose.length > 0 && list(loose)}
-              {!readOnly && <AddTask run={run} milestone={null} />}
+              {!readOnly && <AddTask run={run} milestone={null} draftKey={draftKey} />}
             </div>
           )}
         </>
       )}
       {!readOnly &&
         (addingMilestone ? (
-          <AddMilestone run={run} onClose={() => setAddingMilestone(false)} />
+          <AddMilestone run={run} draftKey={draftKey} onClose={() => setAddingMilestone(false)} />
         ) : (
           <button type="button" className={css.textButton} onClick={() => setAddingMilestone(true)}>
             <Plus size={14} aria-hidden /> Веха
@@ -116,12 +140,24 @@ export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = n
  * Новая задача. Без вех — форма видна всегда. В группе вехи — сначала кнопка «+ задача», форма открывается по ней
  * и задача получает milestoneId группы (null — группа «Без вехи»).
  */
-function AddTask({ run, milestone }: { run: Run; milestone?: Milestone | null }) {
+function AddTask({ run, milestone, draftKey }: { run: Run; milestone?: Milestone | null; draftKey?: string }) {
   const grouped = milestone !== undefined
   const where = milestone ? `в «${milestone.title}»` : 'без вехи'
-  const [open, setOpen] = useState(!grouped)
-  const [title, setTitle] = useState('')
-  const [due, setDue] = useState('')
+  const keys = taskKeys(draftKey, milestone)
+  const [open, setOpen] = useState(() => !grouped || restoredAny(keys.title, keys.due))
+  return open ? <AddTaskForm run={run} milestone={milestone} keys={keys} onClose={() => setOpen(false)} /> : (
+    <button type="button" className={css.textButton} onClick={() => setOpen(true)} aria-label={`Добавить задачу ${where}`}>
+      <Plus size={14} aria-hidden /> задача
+    </button>
+  )
+}
+
+/** Форма новой задачи — отдельно, чтобы черновик жил, пока форма открыта, и уходил, когда её закрыли. */
+function AddTaskForm({ run, milestone, keys, onClose }: { run: Run; milestone?: Milestone | null; keys: ReturnType<typeof taskKeys>; onClose(): void }) {
+  const grouped = milestone !== undefined
+  const where = milestone ? `в «${milestone.title}»` : 'без вехи'
+  const [title, setTitle] = useFieldText(keys.title, grouped ? `Новая задача ${where}` : 'Новая задача')
+  const [due, setDue] = useFieldText(keys.due, 'Срок новой задачи')
 
   async function add(e: FormEvent) {
     e.preventDefault()
@@ -139,17 +175,10 @@ function AddTask({ run, milestone }: { run: Run; milestone?: Milestone | null })
   function onKeyDown(e: KeyboardEvent) {
     if (grouped && e.key === 'Escape') {
       e.preventDefault()
-      setOpen(false)
+      onClose()
     }
   }
 
-  if (!open) {
-    return (
-      <button type="button" className={css.textButton} onClick={() => setOpen(true)} aria-label={`Добавить задачу ${where}`}>
-        <Plus size={14} aria-hidden /> задача
-      </button>
-    )
-  }
   return (
     <form className={css.add} onSubmit={add} onKeyDown={onKeyDown}>
       <input
@@ -168,9 +197,10 @@ function AddTask({ run, milestone }: { run: Run; milestone?: Milestone | null })
   )
 }
 
-function AddMilestone({ run, onClose }: { run: Run; onClose(): void }) {
-  const [title, setTitle] = useState('')
-  const [due, setDue] = useState('')
+function AddMilestone({ run, onClose, draftKey }: { run: Run; onClose(): void; draftKey?: string }) {
+  const keys = milestoneKeys(draftKey)
+  const [title, setTitle] = useFieldText(keys.title, 'Новая веха')
+  const [due, setDue] = useFieldText(keys.due, 'Срок новой вехи')
 
   async function add(e: FormEvent) {
     e.preventDefault()

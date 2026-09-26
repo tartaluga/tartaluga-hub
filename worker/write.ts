@@ -13,6 +13,9 @@ const JSON_LIMIT = 1024 * 1024 // файл данных — до 1 МБ
 const IMAGE_LIMIT = 2 * 1024 * 1024 // обложка — до 2 МБ
 export const COMMIT_LIMIT = 100 // файлов в одном коммите (клиент: src/app/session.ts)
 // Тело запроса коммита: до COMMIT_LIMIT JSON обычного размера (десятки КБ) и обложка в base64 (2 МБ → ~2,7 МБ).
+// Картинки уходят в GitHub отдельным запросом каждая, а у Workers Free лимит 50 подзапросов на запрос.
+// Текстовые файлы идут в одном запросе дерева, их число на подзапросы не влияет.
+export const COMMIT_IMAGE_LIMIT = 20
 export const COMMIT_BODY_LIMIT = 8 * 1024 * 1024
 const MERGE_FILES_LIMIT = 300 // больше compare API не отдаёт — такое слияние делаем руками на GitHub
 
@@ -82,6 +85,9 @@ export async function commit(request: Request, env: Env, fetchImpl?: F): Promise
     if (deleting) return { path, content: null }
     return { path, content: path.endsWith('.json') ? validatedText(path, c.text) : validatedImage(path, c.base64) }
   })
+
+  const images = changes.filter((c) => c.content instanceof Uint8Array).length
+  if (images > COMMIT_IMAGE_LIMIT) throw new HttpError(413, 'payload_too_large', `Не больше ${COMMIT_IMAGE_LIMIT} картинок за раз`)
 
   const message = typeof body.message === 'string' && body.message.trim() ? body.message.trim().slice(0, 200) : `Хаб: ${changes.length} файл(ов)`
   const repo = await dataRepo(env, branch, fetchImpl)

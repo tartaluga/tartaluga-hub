@@ -3,6 +3,7 @@ import { Fingerprint, GithubLogo } from '@phosphor-icons/react'
 import { Visor } from '../components/Visor'
 import { useSession } from '../app/session'
 import { GITHUB_LOGIN_URL } from '../lib/api'
+import { persistDrafts } from '../lib/drafts'
 import { passkeySignInErrorText, passkeysSupported, signInWithPasskey } from '../lib/passkey'
 import css from './Login.module.css'
 
@@ -50,7 +51,11 @@ export function Login({ reason }: { reason?: string }) {
 
   function github() {
     setBusy('github')
-    window.location.assign(GITHUB_LOGIN_URL)
+    // Уходим со страницы: открытые черновики — в handoff, после возврата с GitHub они встанут на место.
+    // Запись не удалась — всё равно уходим: pagehide попробует ещё раз.
+    void persistDrafts()
+      .catch(() => undefined)
+      .finally(() => window.location.assign(GITHUB_LOGIN_URL))
   }
 
   return (

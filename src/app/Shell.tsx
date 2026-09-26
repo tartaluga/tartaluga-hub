@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router'
 import { ChartBar, GearSix, Lightbulb, SignOut, SquaresFour, SunHorizon } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -10,6 +10,7 @@ import { BranchBanner } from '../components/BranchBanner'
 import { Login } from '../screens/Login'
 import { useSession } from './session'
 import { buildLibrary } from '../data/projects'
+import { persistDrafts } from '../lib/drafts'
 import css from './Shell.module.css'
 
 type Counts = { projects: number; ideas: number }
@@ -23,6 +24,28 @@ const NAV: { to: string; label: string; icon: Icon; count?: keyof Counts }[] = [
 
 /** Экраны телефона, в шапке которых шестерёнка настроек (макет: «Сегодня» и «Проекты»). */
 const GEAR_SCREENS = ['/', '/projects']
+
+const EXPIRED = 'Сессия закончилась. Войди снова — данные на устройстве сохранились.'
+
+/**
+ * Вход заново поверх открытого экрана: экран не размонтируется, открытые поля и их текст остаются.
+ * Модальный dialog — поверх любых других диалогов (верхний слой), остальное недоступно, Esc не закрывает.
+ */
+function ReLogin() {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const d = ref.current
+    if (d && !d.open) d.showModal()
+    return () => {
+      if (d?.open) d.close()
+    }
+  }, [])
+  return (
+    <dialog ref={ref} className={css.relogin} onCancel={(e) => e.preventDefault()} aria-label="Вход">
+      <Login reason={EXPIRED} />
+    </dialog>
+  )
+}
 
 export function Shell() {
   const { pathname } = useLocation()
@@ -55,12 +78,18 @@ export function Shell() {
     }
   }, [])
 
+  // Сессия кончилась: на случай ухода со страницы (вход через GitHub, закрытие) черновики сразу в handoff.
+  const expired = sync === 'sessionExpired'
+  useEffect(() => {
+    if (expired) persistDrafts().catch((e: unknown) => console.warn('черновики не записаны:', e instanceof Error ? e.message : e))
+  }, [expired])
+
   if (phase === 'booting') return <div className={css.boot} aria-hidden><Visor size={72} /></div>
   if (phase === 'signedOut') return <Login />
-  if (sync === 'sessionExpired') return <Login reason="Сессия закончилась. Войди снова — данные на устройстве сохранились." />
 
   return (
     <div className={css.shell}>
+      {expired && <ReLogin />}
       <aside className={css.side}>
         <div className={css.brand}>
           <Visor />

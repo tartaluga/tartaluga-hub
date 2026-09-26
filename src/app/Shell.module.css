@@ -120,6 +120,24 @@
   border-color: var(--magenta);
 }
 
+/* Вход заново поверх экрана (сессия закончилась): на весь экран, как обычная страница входа. */
+.relogin {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--bg);
+  color: var(--text);
+  overflow: auto;
+}
+
+.relogin::backdrop {
+  background: var(--bg);
+}
+
 .boot {
   min-height: 100%;
   display: grid;

@@ -170,8 +170,61 @@ export function buildHandoff(input: { route: string; scrollY: number; now: numbe
   }
 }
 
-export async function saveHandoff(store: StateStore, input: Parameters<typeof buildHandoff>[0]): Promise<void> {
+export type HandoffInput = Parameters<typeof buildHandoff>[0]
+
+export async function saveHandoff(store: StateStore, input: HandoffInput): Promise<void> {
   await store.put(HANDOFF_KEY, buildHandoff(input))
+  // Запись обновления — не наша «при уходе»: следующий уход без черновиков её не стирает.
+  if (persistence?.store === store) persistence.written = false
+}
+
+// ---------- Черновики при уходе со страницы ----------
+// Android выгружает PWA из фона, F5, переход на вход через GitHub, конец сессии — всё это та же запись handoff,
+// что и при обновлении: следующий запуск восстановит черновики и экран (restoreHandoff).
+
+let persistence: { store: StateStore; input: () => HandoffInput; written: boolean } | null = null
+let persistQueue: Promise<void> = Promise.resolve()
+
+/**
+ * Записать открытые черновики в handoff сейчас. Черновиков нет — стереть прежнюю запись «при уходе»,
+ * чтобы уже сохранённое (закрытое) поле не всплыло при следующем запуске. Записи идут строго по очереди.
+ */
+export function persistDrafts(): Promise<void> {
+  const p = persistence
+  if (!p) return Promise.resolve()
+  const run = persistQueue.then(async () => {
+    const handoff = buildHandoff(p.input())
+    if (handoff.drafts.length) {
+      await p.store.put(HANDOFF_KEY, handoff)
+      p.written = true
+    } else if (p.written) {
+      await p.store.delete(HANDOFF_KEY)
+      p.written = false
+    }
+  })
+  persistQueue = run.catch(() => undefined)
+  return run
+}
+
+/**
+ * Писать handoff на pagehide и visibilitychange→hidden. Ставить после restoreHandoff: до него реестр пуст,
+ * и ранняя запись затёрла бы непрочитанные черновики. Возвращает отписку.
+ */
+export function installDraftPersistence(store: StateStore, input: () => HandoffInput): () => void {
+  persistence = { store, input, written: false }
+  const onHide = () => {
+    persistDrafts().catch((e: unknown) => console.warn('черновики не записаны:', e instanceof Error ? e.message : e))
+  }
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') onHide()
+  }
+  window.addEventListener('pagehide', onHide)
+  document.addEventListener('visibilitychange', onVisibility)
+  return () => {
+    window.removeEventListener('pagehide', onHide)
+    document.removeEventListener('visibilitychange', onVisibility)
+    persistence = null
+  }
 }
 
 const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
