@@ -78,6 +78,11 @@
   box-shadow: var(--glow);
 }
 
+/* Счётчик входящих конфликтов — маджентой («горит»). */
+.navHot {
+  color: var(--magenta);
+}
+
 .link.active .navCount {
   display: none;
 }
@@ -188,7 +193,8 @@
     position: fixed;
     inset: auto 0 0 0;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr); /* 4 вкладки, пятая — «Конфликты», когда они есть */
     padding: 6px var(--space-2) calc(6px + env(safe-area-inset-bottom, 0px));
     background: color-mix(in srgb, var(--bg) 88%, transparent);
     backdrop-filter: blur(14px);
@@ -208,5 +214,23 @@
 
   .tab.active {
     color: var(--accent);
+  }
+
+  /* Счётчик конфликтов на вкладке: маджентой, над иконкой. */
+  .tab {
+    position: relative;
+  }
+
+  .tabHot {
+    position: absolute;
+    top: 2px;
+    left: calc(50% + 6px);
+    min-width: 16px;
+    padding: 1px 4px;
+    border-radius: 8px;
+    background: var(--magenta);
+    color: var(--on-accent);
+    font: 600 10px/14px var(--font-mono);
+    text-align: center;
   }
 }
