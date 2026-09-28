@@ -1343,12 +1343,22 @@ function withProblem(branch: string, path: string, prev: StoredConflict | undefi
     if (prev?.deleted) rec.deleted = prev.deleted
   } else if ('refused' in problem) {
     rec.title = titleOf(problem.refused.mine) ?? rec.title
-    rec.refused = problem.refused
+    // Новый отказ не затирает прежние мои версии файла: они уходят в earlier (старые первыми).
+    const earlier = withoutRepeats([...(prev?.refused?.earlier ?? []), prev?.refused?.mine, prev?.deleted?.mine], problem.refused.mine)
+    rec.refused = earlier.length ? { reason: problem.refused.reason, mine: problem.refused.mine, earlier } : { reason: problem.refused.reason, mine: problem.refused.mine }
   } else {
     rec.title = titleOf(problem.deleted.mine) ?? rec.title
     rec.deleted = problem.deleted
+    if (prev?.refused) rec.refused = prev.refused
   }
   return rec
+}
+
+/** Прежние версии без пустых, повторов и совпадающих с текущей. */
+function withoutRepeats(texts: (string | undefined)[], current: string): string[] {
+  const out: string[] = []
+  for (const t of texts) if (t !== undefined && t !== current && !out.includes(t)) out.push(t)
+  return out
 }
 
 /**

@@ -6,6 +6,8 @@ import { getCachedFiles, getConflicts, getQueue, wipeDevice } from '../lib/local
 import type { Idea } from '../schema/types'
 import {
   applyIdeaPatch,
+  DELETED_ONLY_ON_DEVICE,
+  ideaErrorText,
   buildInbox,
   createIdea,
   deleteIdea,
@@ -205,7 +207,7 @@ function fakeRepo(files: { path: string; sha: string; text: string }[]) {
   let n = 0
   const log: string[] = []
   // down — нет сети; lose — запись дошла, а ответ потерялся (один раз).
-  const hooks: { beforePut?: () => void; failCommit?: ApiError[]; down?: boolean; lose?: boolean } = {}
+  const hooks: { beforePut?: () => void; failCommit?: ApiError[]; failList?: ApiError; down?: boolean; lose?: boolean } = {}
   const net = () => {
     if (hooks.down) throw new ApiError(0, 'network', 'нет сети')
   }
@@ -221,6 +223,7 @@ function fakeRepo(files: { path: string; sha: string; text: string }[]) {
     },
     async listFiles() {
       net()
+      if (hooks.failList) throw hooks.failList
       return { head: `h${n}`, files: [...tree] }
     },
     async readBlobText(sha) {
@@ -672,13 +675,37 @@ describe('идеи через очередь правок (ADR-004)', () => {
     const d = draftOf('Передумал')
     repo.hooks.down = true
     await createIdea(d)
-    await deleteIdea(ID1)
+    // Без сети из репо не удалить: пользователь узнаёт, что удалено только с устройства.
+    await expect(deleteIdea(ID1)).rejects.toThrow(DELETED_ONLY_ON_DEVICE)
     expect(onScreen(d.path)).toBeUndefined()
     expect(useSession.getState().queued).toBe(0)
     expect(await getQueue()).toEqual([])
     repo.hooks.down = false
     await useSession.getState().syncNow()
     expect(repo.log).toEqual([])
+  })
+
+  it('сверка перед удалением упала (502) — по старому дереву не удаляем: ошибка, идея из репо остаётся видна', async () => {
+    const repo = await start([])
+    const d = draftOf('Дошла, а сверка упала')
+    repo.hooks.lose = true
+    await createIdea(d)
+    expect(repo.text(d.path)).toBe(d.text)
+    expect(useSession.getState().tree?.paths).not.toContain(d.path) // старое дерево: идеи в нём нет
+    repo.hooks.failList = new ApiError(502, 'upstream', 'GitHub не ответил')
+    const err = await deleteIdea(ID1).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(ApiError)
+    expect(ideaErrorText(err, 'идея не удалена')).toBe(DELETED_ONLY_ON_DEVICE)
+    expect(commits(repo)).toEqual([])
+    repo.hooks.failList = undefined
+    await useSession.getState().syncNow()
+    expect(repo.text(d.path)).toBe(d.text)
+    expect(onScreen(d.path)?.text).toBe(d.text) // не пропала молча — её можно удалить ещё раз
+    await deleteIdea(ID1)
+    expect(repo.text(d.path)).toBeUndefined()
   })
 
   it('удалить идею, пока её создание летит на сервер, — дождаться ответа и удалить из репо: идея не воскресает', async () => {

@@ -57,8 +57,12 @@ export interface StoredConflict {
   items: MergeConflict[]
   /** Подпись каждого спорного места для экрана («задача «…» · срок»), по индексу items. */
   labels: string[]
-  /** Правку не удалось ни слить, ни записать: причина и моя версия файла целиком. */
-  refused?: { reason: string; mine: string }
+  /**
+   * Правку не удалось ни слить, ни записать: причина и моя версия файла целиком.
+   * earlier — мои прежние отклонённые версии того же файла (старые первыми), если отказов было несколько:
+   * новый отказ не затирает прежний. Поле необязательное — старые записи читаются как есть.
+   */
+  refused?: { reason: string; mine: string; earlier?: string[] }
   /** Файл удалили в репо, а у меня была правка: моя версия файла. */
   deleted?: { mine: string }
 }
@@ -202,16 +206,19 @@ export interface UnreadableQueued {
  */
 export async function getUnreadableQueued(): Promise<{ key: IDBValidKey; item: UnreadableQueued }[]> {
   const d = await db()
-  const [keys, rows] = await Promise.all([d.getAllKeys('queue'), d.getAll('queue')])
+  // Ключи и записи — одним курсором в одной транзакции: две отдельные выборки могли разойтись,
+  // если между ними другая вкладка записала или удалила правку.
+  const rows: { key: IDBValidKey; raw: QueuedEdit }[] = []
+  for (let cur = await d.transaction('queue').store.openCursor(); cur; cur = await cur.continue()) rows.push({ key: cur.primaryKey as IDBValidKey, raw: cur.value })
   const out: { key: IDBValidKey; item: UnreadableQueued }[] = []
-  rows.forEach((raw, i) => {
+  rows.forEach(({ key: rawKey, raw }) => {
     try {
       readQueued(raw)
     } catch (e) {
       const r = raw as unknown as Record<string, unknown>
-      const k = keys[i] as unknown as unknown[]
+      const k = rawKey as unknown as unknown[]
       out.push({
-        key: keys[i] as IDBValidKey,
+        key: rawKey,
         item: {
           branch: String(typeof r.branch === 'string' ? r.branch : (k?.[0] ?? '')),
           path: String(typeof r.path === 'string' ? r.path : (k?.[1] ?? '')),

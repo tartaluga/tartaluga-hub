@@ -75,13 +75,14 @@ export function Conflicts() {
       {!conflicts.length && <p className={css.empty}>Всё записано — выбирать нечего.</p>}
 
       {conflicts.map((rec) =>
-        rec.refused ? (
+        rec.refused && !rec.deleted ? (
           <Card key={`${rec.branch}\n${rec.path}`} rec={rec} what="правка не записана">
             <p className={css.reason}>{rec.refused.reason}</p>
             <details className={css.details}>
               <summary>Моя версия файла</summary>
               <pre className={css.pre}>{rec.refused.mine}</pre>
             </details>
+            <Earlier texts={earlierVersions(rec)} />
             <div className={css.actions}>
               <button type="button" className={css.button} onClick={() => void pick(rec, 0, 'repo')} disabled={busy}>
                 Взять из репо
@@ -102,6 +103,7 @@ export function Conflicts() {
                 </button>
               </Version>
             </div>
+            <Earlier texts={earlierVersions(rec)} />
           </Card>
         ) : (
           rec.items.map((item, index) => (
@@ -141,6 +143,30 @@ export function Conflicts() {
         />
       )}
     </section>
+  )
+}
+
+/**
+ * Прежние мои версии файла, которые тоже не записались: новый отказ их не затирает (session.withProblem).
+ * У удалённого в репо файла сюда попадает и отклонённая раньше правка — выбор на карточке снимает обе.
+ */
+export function earlierVersions(rec: StoredConflict): string[] {
+  const refused = rec.refused
+  if (!refused) return []
+  return rec.deleted ? [...(refused.earlier ?? []), refused.mine] : [...(refused.earlier ?? [])]
+}
+
+function Earlier({ texts }: { texts: string[] }) {
+  if (!texts.length) return null
+  return (
+    <details className={css.details}>
+      <summary>Прежние мои версии, тоже не записаны ({texts.length})</summary>
+      {texts.map((t, i) => (
+        <pre key={i} className={css.pre}>
+          {t}
+        </pre>
+      ))}
+    </details>
   )
 }
 

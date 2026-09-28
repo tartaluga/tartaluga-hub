@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { useSession } from '../app/session'
 import { Shell } from '../app/Shell'
-import { Conflicts, conflictCount } from './Conflicts'
+import { Conflicts, conflictCount, earlierVersions } from './Conflicts'
 import { SyncIndicator, conflictText, syncText } from '../components/SyncIndicator'
 import type { StoredConflict } from '../lib/localdb'
 
@@ -76,6 +76,26 @@ describe('экран «Входящие конфликты»', () => {
     expect(html).toContain('проект удалён в репо')
     expect(html).toContain('Вернуть проект')
     expect(html).toContain('Согласиться с удалением')
+  })
+
+  it('несколько отказов по файлу — на карточке и новая, и прежние мои версии', () => {
+    setState({ conflicts: [rec({ items: [], labels: [], refused: { reason: 'схема', mine: '{"v":"новая"}', earlier: ['{"v":"первая"}', '{"v":"вторая"}'] } })] })
+    const html = render(<Conflicts />)
+    expect(html).toContain('{&quot;v&quot;:&quot;новая&quot;}')
+    expect(html).toContain('Прежние мои версии, тоже не записаны (2)')
+    expect(html).toContain('{&quot;v&quot;:&quot;первая&quot;}')
+    expect(html).toContain('{&quot;v&quot;:&quot;вторая&quot;}')
+  })
+
+  it('файл удалили в репо после отказа — карточка удаления, отклонённая правка видна в прежних', () => {
+    const both = rec({ items: [], labels: [], refused: { reason: 'схема', mine: '{"v":"отказ"}' }, deleted: { mine: '{"v":"удалён"}' } })
+    expect(earlierVersions(both)).toEqual(['{"v":"отказ"}'])
+    setState({ conflicts: [both] })
+    const html = render(<Conflicts />)
+    expect(html).toContain('Вернуть проект')
+    expect(html).not.toContain('правка не записана')
+    expect(html).toContain('{&quot;v&quot;:&quot;отказ&quot;}')
+    expect(earlierVersions(rec({ items: [], labels: [], refused: { reason: 'r', mine: 'x' } }))).toEqual([])
   })
 
   it('идею удалили в репо — карточка про идею, а не проект', () => {

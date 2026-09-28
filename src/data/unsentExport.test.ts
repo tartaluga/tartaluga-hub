@@ -75,6 +75,11 @@ describe('buildUnsentExport', () => {
     expect(plain).not.toHaveProperty('deleted')
   })
 
+  it('несколько отказов по файлу — в выгрузке и новая, и прежние мои версии', () => {
+    const c = buildUnsentExport([], [{ ...conflict, refused: { reason: 'r', mine: '{"title":"новая"}', earlier: ['{"title":"первая"}', 'не JSON'] } }], NOW).conflicts[0]!
+    expect(c.refused).toEqual({ reason: 'r', content: { title: 'новая' }, earlier: [{ title: 'первая' }, 'не JSON'] })
+  })
+
   it('результат переживает JSON без потерь', () => {
     const out = buildUnsentExport([edit('main', 'projects/a.json')], [conflict], NOW)
     expect(JSON.parse(JSON.stringify(out))).toEqual(out)

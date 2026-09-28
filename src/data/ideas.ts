@@ -236,7 +236,11 @@ export function unlinkIdeasChanges(slug: string, files: CachedFile[], now = new 
 // ---------- Запись ----------
 
 /** Текст ошибки записи для человека. */
+/** Код ошибки: сделано только на устройстве, текст ошибки — для экрана как есть. */
+const LOCAL_ONLY = 'local_only'
+
 export function ideaErrorText(e: unknown, what: string): string {
+  if (e instanceof ApiError && e.code === LOCAL_ONLY) return e.message
   if (e instanceof ApiError && e.status === 0) return `Нет связи с сервером хаба — ${what}. Попробуй, когда появится сеть.`
   return errorText(e)
 }
@@ -283,21 +287,32 @@ export async function deleteProject(slug: string): Promise<void> {
   await useSession.getState().deleteFiles((tree) => projectPaths(slug, tree.paths), `Хаб: удалить проект ${slug}`, (files) => unlinkIdeasChanges(slug, files))
 }
 
+/** Идея убрана с устройства, а удалить её из репо не вышло: нет свежей сверки с репо. */
+export const DELETED_ONLY_ON_DEVICE =
+  'Идея удалена только с устройства: нет связи с репо. Если она успела туда записаться, после сверки появится снова — тогда удали её ещё раз.'
+
 /**
- * Удалить идею одним коммитом. Уже удалена — успех. Идея ещё в очереди (создана без сети) — убрать из очереди,
- * а при сети всё равно удалить из репо: прошлая попытка создания могла дойти, а ответ потеряться.
- * Без сети — только с устройства.
+ * Удалить идею одним коммитом. Уже удалена — успех. Идея ещё в очереди (создана без сети) — убрать из очереди
+ * и удалить из репо: прошлая попытка создания могла дойти, а ответ потеряться. Удаляем только по дереву свежей
+ * успешной сверки: в старом дереве идеи может не быть, и удаление сочло бы её «уже удалённой», а она вернулась бы
+ * при следующей сверке. Сверка не удалась (нет сети, 5xx, 429) — ошибка DELETED_ONLY_ON_DEVICE, удаление
+ * не считается выполненным: если идея окажется в репо, она останется видна.
  */
 export async function deleteIdea(id: string): Promise<void> {
   const path = `ideas/${id}.json`
   const session = useSession.getState()
   if (await session.discardNew(path)) {
+    const branch = session.branch
+    // Дважды: первая сверка может оказаться той, что уже шла до записи идеи, — её дерево старое.
+    await useSession.getState().refresh()
+    if (useSession.getState().sync === 'idle') await useSession.getState().refresh()
+    const s = useSession.getState()
+    if (s.sync !== 'idle' || !s.tree || s.branch !== branch) throw new ApiError(0, LOCAL_ONLY, DELETED_ONLY_ON_DEVICE)
     try {
-      await useSession.getState().refresh() // свежее дерево: в нём видно, дошло ли создание
-      if (useSession.getState().sync === 'offline') return
-      await useSession.getState().deleteFiles(() => [path], `Идеи: удалить ${id}`)
+      await s.deleteFiles(() => [path], `Идеи: удалить ${id}`)
     } catch (e) {
-      if (!(e instanceof ApiError && e.status === 0)) throw e
+      if (e instanceof ApiError && e.status === 0) throw new ApiError(0, LOCAL_ONLY, DELETED_ONLY_ON_DEVICE)
+      throw e
     }
     return
   }

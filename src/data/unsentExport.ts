@@ -34,7 +34,8 @@ export interface UnsentConflict {
   at: string
   places: UnsentConflictPlace[]
   /** Правку не удалось ни слить, ни записать: причина и моя версия файла целиком. */
-  refused?: { reason: string; content: unknown }
+  /** earlier — мои прежние отклонённые версии того же файла, старые первыми (если отказов было несколько). */
+  refused?: { reason: string; content: unknown; earlier?: unknown[] }
   /** Файл удалили в репо, а у меня была правка: моя версия файла. */
   deleted?: { content: unknown }
 }
@@ -95,7 +96,10 @@ export function buildUnsentExport(edits: QueuedEdit[], conflicts: StoredConflict
           theirs: orNull(item.remote),
         })),
       }
-      if (c.refused) out.refused = { reason: c.refused.reason, content: content(c.refused.mine) }
+      if (c.refused) {
+        out.refused = { reason: c.refused.reason, content: content(c.refused.mine) }
+        if (c.refused.earlier?.length) out.refused.earlier = c.refused.earlier.map(content)
+      }
       if (c.deleted) out.deleted = { content: content(c.deleted.mine) }
       return out
     }),

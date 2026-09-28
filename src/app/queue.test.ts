@@ -949,6 +949,26 @@ describe('идеи в очереди (ADR-004): создание повторя�
     expect(b.useSession.getState().queued).toBe(0)
     expect(await getQueue()).toEqual([])
   })
+
+  it('два отказа подряд по одному файлу — обе мои версии во «Входящих», прежняя не затёрта', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.fail = new ApiError(422, 'validation', 'первый отказ')
+    await useSession.getState().saveProject('a', { title: 'Б' }).catch(() => undefined)
+    srv.state.fail = new ApiError(422, 'validation', 'второй отказ')
+    await useSession.getState().saveProject('a', { title: 'В' }).catch(() => undefined)
+    for (const c of [useSession.getState().conflicts[0], (await getConflicts())[0]]) {
+      expect(c!.refused!.reason).toBe('второй отказ')
+      expect(JSON.parse(c!.refused!.mine).title).toBe('В')
+      expect(c!.refused!.earlier!.map((t) => JSON.parse(t).title)).toEqual(['Б'])
+    }
+    // Та же версия ещё раз — без повторов в прежних.
+    srv.state.fail = new ApiError(422, 'validation', 'третий отказ')
+    await useSession.getState().saveProject('a', { title: 'Б' }).catch(() => undefined)
+    const [c] = await getConflicts()
+    expect(JSON.parse(c!.refused!.mine).title).toBe('Б')
+    expect(c!.refused!.earlier!.map((t) => JSON.parse(t).title)).toEqual(['В'])
+  })
 })
 
 describe('запись очереди, которую сборка не понимает (ADR-011 §6)', () => {
