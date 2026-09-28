@@ -4,6 +4,9 @@ import { DownloadSimple, SignOut, WarningCircle } from '@phosphor-icons/react'
 import { answerSignOut, downloadUnsent, unsentMessage, useSignOutGuard, type SignOutAsk } from '../app/signOutGuard'
 import css from './SignOutGuardDialog.module.css'
 
+/** Другая вкладка хаба держит свою очередь в памяти — выход сотрёт устройство и под ней. */
+export const OTHER_TABS = 'Если хаб открыт в другой вкладке, закрой её сначала — её неотправленные правки тоже сотрутся.'
+
 const TITLE = { device: 'Выйти с этого устройства?', everywhere: 'Выйти на всех устройствах?' } as const
 
 /** Страж выхода: диалог есть в DOM, только пока открыт вопрос (иначе он мешал бы другим модальным окнам и тестам). */
@@ -25,9 +28,9 @@ function GuardDialog({ ask }: { ask: SignOutAsk }) {
     }
   }, [])
 
-  const download = () => {
+  const download = async () => {
     try {
-      downloadUnsent()
+      await downloadUnsent()
       setSaved(true)
       setError(null)
     } catch (e) {
@@ -48,34 +51,37 @@ function GuardDialog({ ask }: { ask: SignOutAsk }) {
       }}
     >
       <div className={css.body}>
-          <h2 id="signout-guard-title" className={css.title}>
-            <WarningCircle size={22} aria-hidden /> {TITLE[ask.scope]}
-          </h2>
-          <p id="signout-guard-text" className={css.text}>
+        <h2 id="signout-guard-title" className={css.title}>
+          <WarningCircle size={22} aria-hidden /> {TITLE[ask.scope]}
+        </h2>
+        <div id="signout-guard-text" className={css.text}>
+          <p>
             {unsentMessage(ask.counts)} Скачай их файлом, чтобы не потерять: там твои версии всех спорных мест.
             {ask.scope === 'everywhere' && ' Входы на других устройствах тоже завершатся.'}
           </p>
-          {saved && (
-            <p className={css.saved} role="status">
-              Файл скачан. Проверь, что он сохранился, прежде чем стирать.
-            </p>
-          )}
-          {error && (
-            <p className={css.error} role="alert">
-              {error}
-            </p>
-          )}
-          <div className={css.actions}>
-            <button type="button" className={css.primary} onClick={download}>
-              <DownloadSimple size={18} aria-hidden /> Скачать неотправленное
-            </button>
-            <button type="button" className={css.danger} onClick={() => answerSignOut(true)}>
-              <SignOut size={18} aria-hidden /> Стереть и выйти
-            </button>
-            <button type="button" className={css.ghost} onClick={() => answerSignOut(false)}>
-              Отмена
-            </button>
-          </div>
+          <p>{OTHER_TABS}</p>
+        </div>
+        {saved && (
+          <p className={css.saved} role="status">
+            Файл скачан. Проверь, что он сохранился, прежде чем стирать.
+          </p>
+        )}
+        {error && (
+          <p className={css.error} role="alert">
+            {error}
+          </p>
+        )}
+        <div className={css.actions}>
+          <button type="button" className={css.primary} onClick={() => void download()}>
+            <DownloadSimple size={18} aria-hidden /> Скачать неотправленное
+          </button>
+          <button type="button" className={css.danger} onClick={() => answerSignOut(true)}>
+            <SignOut size={18} aria-hidden /> Стереть и выйти
+          </button>
+          <button type="button" className={css.ghost} onClick={() => answerSignOut(false)}>
+            Отмена
+          </button>
+        </div>
       </div>
     </dialog>
   )

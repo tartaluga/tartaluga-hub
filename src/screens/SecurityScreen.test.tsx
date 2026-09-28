@@ -32,6 +32,10 @@ vi.mock('../lib/passkey', async (importOriginal) => ({
   addPasskey: vi.fn(),
 }))
 const unsent = vi.hoisted(() => ({ conflicts: [] as unknown[] }))
+vi.mock('../lib/localdb', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/localdb')>()
+  return { ...real, wipeDevice: vi.fn(real.wipeDevice) }
+})
 vi.mock('../app/session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../app/session')>()),
   unsentSnapshot: () => ({ edits: [], conflicts: [...unsent.conflicts] }),
@@ -41,6 +45,7 @@ const { Security, ThisDeviceKey, THIS_DEVICE_STALE_HINT } = await import('./Secu
 const { useSession } = await import('../app/session')
 const { answerSignOut, useSignOutGuard } = await import('../app/signOutGuard')
 const api = await import('../lib/api')
+const localdb = await import('../lib/localdb')
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -194,18 +199,27 @@ describe('Security: заголовки блоков', () => {
   })
 })
 
+/** Дождаться открытого вопроса стража (он появляется после чтения IndexedDB). */
+const asked = (scope: string) =>
+  act(() =>
+    vi.waitFor(() => {
+      if (useSignOutGuard.getState().ask?.scope !== scope) throw new Error('вопроса нет')
+    }),
+  )
+const settled = (check: () => void) => act(() => vi.waitFor(check))
+
 describe('Security: выход идёт через страж', () => {
   it('«Выйти на этом устройстве» без неотправленного — выход сразу', async () => {
     await render({})
     await click('Выйти на этом устройстве')
-    expect(signOut).toHaveBeenCalledOnce()
+    await settled(() => expect(signOut).toHaveBeenCalledOnce())
   })
 
   it('«Выйти на этом устройстве» с конфликтом — ждёт «Стереть и выйти»', async () => {
     unsent.conflicts = [conflict]
     await render({})
     await click('Выйти на этом устройстве')
-    expect(useSignOutGuard.getState().ask?.scope).toBe('device')
+    await asked('device')
     expect(signOut).not.toHaveBeenCalled()
     await act(async () => answerSignOut(true))
     expect(signOut).toHaveBeenCalledOnce()
@@ -216,7 +230,7 @@ describe('Security: выход идёт через страж', () => {
     const confirm = stubConfirm(true)
     await render({})
     await click('Выйти везде')
-    expect(useSignOutGuard.getState().ask?.scope).toBe('everywhere')
+    await asked('everywhere')
     await act(async () => answerSignOut(false))
     expect(api.logoutAll).not.toHaveBeenCalled()
     expect(signOut).not.toHaveBeenCalled()
@@ -228,24 +242,36 @@ describe('Security: выход идёт через страж', () => {
     const confirm = stubConfirm(true)
     await render({})
     await click('Выйти везде')
+    await asked('everywhere')
     await act(async () => answerSignOut(true))
-    await act(async () => undefined)
+    await settled(() => expect(signOut).toHaveBeenCalledOnce())
     expect(api.logoutAll).toHaveBeenCalledOnce()
-    expect(signOut).toHaveBeenCalledOnce()
     expect(confirm).not.toHaveBeenCalled()
+  })
+
+  it('«Выйти везде»: сервер не ответил — устройство не стирается, выхода нет, ошибка на экране', async () => {
+    unsent.conflicts = [conflict]
+    vi.mocked(api.logoutAll).mockRejectedValueOnce(new api.ApiError(0, 'network', 'Нет сети'))
+    await render({})
+    await click('Выйти везде')
+    await asked('everywhere')
+    await act(async () => answerSignOut(true))
+    await settled(() => expect(host.querySelector('[role="alert"]')?.textContent).toContain('Нет сети'))
+    expect(api.logoutAll).toHaveBeenCalledOnce()
+    expect(localdb.wipeDevice).not.toHaveBeenCalled()
+    expect(signOut).not.toHaveBeenCalled()
   })
 
   it('«Выйти везде» без неотправленного — прежний confirm; отказ — ничего', async () => {
     const confirm = stubConfirm(false)
     await render({})
     await click('Выйти везде')
-    expect(confirm).toHaveBeenCalledOnce()
+    await settled(() => expect(confirm).toHaveBeenCalledOnce())
     expect(useSignOutGuard.getState().ask).toBeNull()
     expect(api.logoutAll).not.toHaveBeenCalled()
     confirm.mockReturnValue(true)
     await click('Выйти везде')
-    await act(async () => undefined)
+    await settled(() => expect(signOut).toHaveBeenCalledOnce())
     expect(api.logoutAll).toHaveBeenCalledOnce()
-    expect(signOut).toHaveBeenCalledOnce()
   })
 })

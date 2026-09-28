@@ -35,9 +35,19 @@
 }
 
 .text {
-  margin: 0;
+  display: grid;
+  gap: var(--space-2);
   line-height: 1.5;
   color: var(--text);
+}
+
+.text p {
+  margin: 0;
+}
+
+.text p + p {
+  font-size: 14px;
+  color: var(--text-muted);
 }
 
 .saved {
