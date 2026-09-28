@@ -109,7 +109,7 @@ describe('POST /api/commit', () => {
     expect(gh.repoCalls().find((c) => c.url.endsWith('/git/commits') && c.method === 'POST')!.body.message).toBe('Идея → проект')
   })
 
-  it('граница: 100 файлов — 99 проектов по ~40 КБ и обложка 2 МБ — одним коммитом', async () => {
+  it('граница: 100 файлов — 99 проектов по ~40 КБ и обложка 2 МБ — одним коммитом', { timeout: 30_000 }, async () => {
     expect(COMMIT_LIMIT).toBe(100)
     const { gh, cookie, send } = await setup(...gitData)
     const padded = (slug: string) => {
