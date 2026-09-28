@@ -22,7 +22,7 @@ import css from './Panel.module.css'
 import own from './Branches.module.css'
 
 type Outcome =
-  | { kind: 'merged'; branch: string; warnings: MergeWarning[] }
+  | { kind: 'merged'; branch: string; warnings: MergeWarning[]; checkFailed: boolean }
   | { kind: 'nothing'; branch: string }
   | { kind: 'invalid' | 'conflict'; branch: string; files: { path: string; error?: string }[] }
 
@@ -80,7 +80,7 @@ export function Branches() {
       await settleBranch(branch)
       try {
         const res = await mergeBranch(branch)
-        setOutcome(res.merged ? { kind: 'merged', branch, warnings: res.warnings ?? [] } : { kind: 'nothing', branch })
+        setOutcome(res.merged ? { kind: 'merged', branch, warnings: res.warnings ?? [], checkFailed: res.checkFailed === true } : { kind: 'nothing', branch })
         if (res.merged && useSession.getState().branch === MAIN) void refresh()
       } catch (err) {
         if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
@@ -204,9 +204,12 @@ function OutcomeNote(props: { outcome: Outcome; current: string; busy: boolean; 
   const b = `«${outcome.branch}»`
   if (outcome.kind === 'merged') {
     const warned = outcome.warnings.length > 0
+    const alarm = warned || outcome.checkFailed
     return (
-      <div className={css.notice} {...(warned ? { role: 'alert' } : { 'data-tone': 'ok', role: 'status' })}>
-        {warned ? (
+      <div className={css.notice} {...(alarm ? { role: 'alert' } : { 'data-tone': 'ok', role: 'status' })}>
+        {outcome.checkFailed ? (
+          <p>{b} влита в main, но проверить итог не удалось — открой файлы на GitHub.</p>
+        ) : warned ? (
           <>
             <p>{b} влита в main, но файлы не проходят проверку: правки ветки и main склеились неудачно. Исправь их в main:</p>
             <FileList files={outcome.warnings} />

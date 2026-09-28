@@ -346,7 +346,29 @@ describe('слияние ветки в main', () => {
     expect(gh.repoCalls().some((c) => c.method === 'PATCH' || c.method === 'DELETE')).toBe(false)
   })
 
-  it('сбой проверки итога — всё равно 200 и предупреждение (слияние уже в main)', async () => {
+  it('файл, не изменённый при слиянии относительно проверенного в ветке, повторно не читается; изменённый — читается', async () => {
+    const MIXED = 'd'.repeat(40)
+    const OTHER = 'e'.repeat(40)
+    const same = { filename: 'projects/tartaluga-hub.json', status: 'modified', sha: SHA }
+    const { gh, cookie, send } = await setup(
+      branchHead,
+      mainHead,
+      compare([same, { filename: 'settings.json', status: 'modified', sha: OTHER }]),
+      blobBy(SHA, PROJECT),
+      blobBy(OTHER, example('settings.json')),
+      blobBy(MIXED, example('settings.json')),
+      mergeOk,
+      merged([same, { filename: 'settings.json', status: 'modified', sha: MIXED }]),
+    )
+    const res = await send(mutation('POST', '/api/branches/draft/merge', cookie))
+    expect(res.status).toBe(200)
+    const reads = gh.repoCalls().filter((c) => c.url.includes('/git/blobs/')).map((c) => c.url.split('/').pop())
+    expect(reads).toHaveLength(3)
+    expect(reads.filter((s) => s === SHA)).toHaveLength(1)
+    expect(reads).toContain(MIXED)
+  })
+
+  it('сбой проверки итога — всё равно 200 и checkFailed (слияние уже в main)', async () => {
     const file = { filename: 'projects/tartaluga-hub.json', status: 'modified', sha: SHA }
     const { cookie, send } = await setup(
       branchHead,
@@ -358,7 +380,7 @@ describe('слияние ветки в main', () => {
     )
     const res = await send(mutation('POST', '/api/branches/draft/merge', cookie))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ merged: true, head: MERGED, warnings: [{ path: 'main', error: 'не удалось проверить итог слияния' }] })
+    expect(await res.json()).toEqual({ merged: true, head: MERGED, checkFailed: true })
   })
 
   it('битый файл в ветке — 422 со списком, ничего не вливается', async () => {

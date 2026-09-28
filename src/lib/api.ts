@@ -97,7 +97,7 @@ export interface MergeWarning {
   path: string
   error: string
 }
-export type MergeResult = { merged: true; head: string; warnings?: MergeWarning[] } | { merged: false; reason?: 'nothing_to_merge' }
+export type MergeResult = { merged: true; head: string; warnings?: MergeWarning[]; checkFailed?: boolean } | { merged: false; reason?: 'nothing_to_merge' }
 
 export const listBranches = () => api<{ branches: Branch[] }>('/api/branches')
 export const createBranch = (name: string) => api<{ name: string; head: string }>('/api/branches', { method: 'POST', body: { name } })

@@ -98,6 +98,15 @@ describe('экран «Ветки»: «Влить в main»', () => {
     expect(alert?.textContent).toContain('status: недопустимое значение')
   })
 
+  it('влито, но проверить итог не удалось — своя фраза про GitHub', async () => {
+    server({ merged: true, head: 'f'.repeat(40), checkFailed: true })
+    await show()
+    await clickMerge()
+    const alert = host.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain('влита в main, но проверить итог не удалось — открой файлы на GitHub')
+    expect(host.textContent).not.toContain('не проходят проверку')
+  })
+
   it('в ветке неотправленные правки (settleBranch — 423): текст отказа, на сервер «Влить» не уходит', async () => {
     const text = 'В ветке «draft» ещё 1 правка — разбери сначала: дождись сети.'
     const settle = vi.fn(async () => {

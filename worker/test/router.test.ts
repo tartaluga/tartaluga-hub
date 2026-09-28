@@ -182,7 +182,19 @@ describe('вход через GitHub', () => {
     expect(sql.prepare('SELECT id_hash FROM sessions').all()).toEqual([{ id_hash: await sha256Hex(second) }])
   })
 
-  it('oauth-cookie без хэша прежней сессии (или с чужой сессией в другом браузере) чужие сессии не трогает', async () => {
+  it('отказ на callback (not_owner) не удаляет прежнюю сессию, хэш которой лежит в oauth-cookie', async () => {
+    const { env, sql } = testEnv()
+    const { fn } = github()
+    const first = (await login(env, fn)).session!
+    const denied = github({ userId: 999 }).fn
+    const start = await handle(req('/api/auth/github/start', { cookie: `${SESSION_COOKIE}=${first}` }), env, deps(denied))
+    const state = new URL(start.headers.get('Location')!).searchParams.get('state')!
+    const cb = await handle(req(`/api/auth/github/callback?code=abc&state=${state}`, { cookie: `${OAUTH_COOKIE}=${cookieFrom(start, OAUTH_COOKIE)}` }), env, deps(denied))
+    expect(cb.headers.get('Location')).toBe('/?auth_error=not_owner')
+    expect(sql.prepare('SELECT id_hash FROM sessions').all()).toEqual([{ id_hash: await sha256Hex(first) }])
+  })
+
+  it('вход из браузера без cookie сессии и без хэша в oauth-cookie чужие сессии не трогает', async () => {
     const { env, sql } = testEnv()
     const { fn } = github()
     const other = (await login(env, fn)).session!

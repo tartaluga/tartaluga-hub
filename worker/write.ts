@@ -175,8 +175,8 @@ export async function mergeBranch(name: string, env: Env, fetchImpl?: F): Promis
     throw e
   }
   if (sha === null) return json({ merged: false, head: null })
-  const warnings = await checkMergeResult(repo, oldMain, sha, checked)
-  return json({ merged: true, head: sha, ...(warnings.length ? { warnings } : {}) })
+  const { warnings, checkFailed } = await checkMergeResult(repo, oldMain, sha, checked)
+  return json({ merged: true, head: sha, ...(warnings.length ? { warnings } : {}), ...(checkFailed ? { checkFailed: true } : {}) })
 }
 
 /**
@@ -185,7 +185,7 @@ export async function mergeBranch(name: string, env: Env, fetchImpl?: F): Promis
  * поэтому ошибки не отменяют слияние, а возвращаются предупреждениями — экран просит проверить файл.
  * Файлы, чьё итоговое содержимое совпало с проверенным в ветке, повторно не читаются.
  */
-async function checkMergeResult(repo: GitHubClient, oldMain: string, newMain: string, checked: Map<string, string>): Promise<{ path: string; error: string }[]> {
+async function checkMergeResult(repo: GitHubClient, oldMain: string, newMain: string, checked: Map<string, string>): Promise<{ warnings: { path: string; error: string }[]; checkFailed: boolean }> {
   const warnings: { path: string; error: string }[] = []
   try {
     const diff = await repo.compare(oldMain, newMain)
@@ -195,11 +195,11 @@ async function checkMergeResult(repo: GitHubClient, oldMain: string, newMain: st
       if (!parsed.ok) warnings.push({ path: f.path, error: parsed.error })
     }
   } catch (e) {
-    // Слияние уже в main: сбой проверки — тоже предупреждение, а не ошибка запроса.
+    // Слияние уже в main: сбой проверки — флаг в ответе, а не ошибка запроса.
     console.error('merge result check failed', e instanceof GitHubError ? e.kind : e instanceof Error ? e.name : typeof e)
-    warnings.push({ path: MAIN, error: 'не удалось проверить итог слияния' })
+    return { warnings, checkFailed: true }
   }
-  return warnings
+  return { warnings, checkFailed: false }
 }
 
 /** POST /api/status/refresh — запустить status.yml только на main (на другой ветке могла лежать старая версия). */
