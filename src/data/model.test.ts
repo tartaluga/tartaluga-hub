@@ -35,6 +35,32 @@ describe('parseFile', () => {
     expect(p).toMatchObject({ ok: false, error: expect.stringContaining('/status') })
   })
 
+  it.each(['links', 'milestones', 'tasks', 'log'])('два элемента %s с одним id — ошибка', (key) => {
+    const item: Record<string, object> = {
+      links: { kind: 'site', value: 'https://example.com/' },
+      milestones: { title: 'Веха' },
+      tasks: { title: 'Задача', done: false },
+      log: { at: '2026-09-23T02:30:00+03:00', kind: 'note', text: 'Запись' },
+    }
+    const id = '01K5TQ0000000000000000Z001'
+    const one = { id, ...item[key] }
+    expect(parseFile('projects/x.json', 'sha', project({ [key]: [one] }))).toMatchObject({ ok: true })
+    const p = parseFile('projects/x.json', 'sha', project({ [key]: [one, { ...item[key], id: '01K5TQ0000000000000000Z002' }, one] }))
+    expect(p).toMatchObject({ ok: false, error: `два элемента ${key} с id «${id}»` })
+  })
+
+  it('элементы без id не считаются повтором: им выдаются разные id', () => {
+    const p = parseFile('projects/x.json', 'sha', project({ tasks: [{ title: 'А', done: false }, { title: 'Б', done: false }] }))
+    expect(p).toMatchObject({ ok: true, idsAssigned: true })
+  })
+
+  it('два тега с одним id в settings.json — ошибка', () => {
+    const tag = { id: 'code', name: 'код', color: '#a7a1db' }
+    const text = (tags: object[]) => JSON.stringify({ schemaVersion: 1, tags })
+    expect(parseFile('settings.json', 'sha', text([tag, { ...tag, id: 'study' }]))).toMatchObject({ ok: true })
+    expect(parseFile('settings.json', 'sha', text([tag, { ...tag, name: 'ещё' }]))).toMatchObject({ ok: false, error: 'два элемента tags с id «code»' })
+  })
+
   it('slug не совпадает с именем файла — ошибка', () => {
     expect(parseFile('projects/y.json', 'sha', project())).toMatchObject({ ok: false, error: expect.stringContaining('slug') })
   })

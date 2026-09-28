@@ -61,6 +61,9 @@ export function parseFile(path: string, sha: string, text: string): Parsed {
   const validate = VALIDATORS[kind]
   if (!validate(obj)) return { ok: false, kind, path, sha, error: describeErrors(validate.errors) }
 
+  const dupError = checkUniqueIds(kind, obj)
+  if (dupError) return { ok: false, kind, path, sha, error: dupError }
+
   const nameError = checkFileName(kind, path, obj)
   if (nameError) return { ok: false, kind, path, sha, error: nameError }
 
@@ -95,6 +98,23 @@ function assignMissingIds(obj: Record<string, unknown>): boolean {
     }
   }
   return changed
+}
+
+/** Схема не ловит повторы id в массивах, а правки и слияние адресуют элементы по id — повтор делает файл неоднозначным. */
+function checkUniqueIds(kind: FileKind, obj: Record<string, unknown>): string | null {
+  const keys = kind === 'project' ? ['links', 'milestones', 'tasks', 'log'] : kind === 'settings' ? ['tags'] : []
+  for (const key of keys) {
+    const arr = obj[key]
+    if (!Array.isArray(arr)) continue
+    const seen = new Set<unknown>()
+    for (const item of arr) {
+      if (!item || typeof item !== 'object' || !('id' in item)) continue
+      const id = (item as Record<string, unknown>).id
+      if (seen.has(id)) return `два элемента ${key} с id «${String(id)}»`
+      seen.add(id)
+    }
+  }
+  return null
 }
 
 function checkFileName(kind: FileKind, path: string, obj: Record<string, unknown>): string | null {

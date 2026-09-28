@@ -53,6 +53,16 @@ describe('applyEdit', () => {
     expect(out).not.toHaveProperty('description')
     expect(parseFile('projects/bot.json', '', serialize(out))).toMatchObject({ ok: true, readOnly: false })
   })
+
+  it('null из исходного файла переносится как есть; убирает поле только null из правки', () => {
+    const withNulls = { ...base, cover: null, x: null, pinned: true }
+    const out = applyEdit(withNulls, normalizePatch({ nextStep: 'Дальше' }), NOW)
+    expect(out).toMatchObject({ nextStep: 'Дальше', cover: null, x: null, pinned: true })
+    expect(Object.keys(out)).toEqual(Object.keys(withNulls))
+    const unpinned = applyEdit(withNulls, normalizePatch({ pinned: false }), NOW)
+    expect(unpinned).not.toHaveProperty('pinned')
+    expect(unpinned).toMatchObject({ cover: null, x: null })
+  })
 })
 
 describe('закрепление', () => {

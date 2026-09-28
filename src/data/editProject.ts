@@ -320,13 +320,15 @@ export function applyEdit<T extends Record<string, unknown>>(data: T, patch: Pro
     set.set('milestones', nextItems(data.milestones, patch.milestoneAdd, patch.milestoneSet, patch.milestoneRemove))
   }
   const out: Record<string, unknown> = {}
+  // null в правке убирает поле; null из исходного файла (cover: null, незнакомые поля) переносится как есть.
   const put = (k: string, v: unknown) => {
     if (v !== null) out[k] = v
   }
   for (const [k, v] of Object.entries(data)) {
     if (k === 'createdAt') for (const [nk, nv] of set) if (!(nk in data)) put(nk, nv)
     if (k === 'updatedAt') out[k] = nowIso(now)
-    else put(k, set.has(k) ? set.get(k) : v)
+    else if (set.has(k)) put(k, set.get(k))
+    else out[k] = v
   }
   // Файл без createdAt не проходит схему, но на всякий случай новые поля не теряем.
   if (!('createdAt' in data)) for (const [nk, nv] of set) if (!(nk in data)) put(nk, nv)
