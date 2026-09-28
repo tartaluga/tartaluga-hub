@@ -47,9 +47,20 @@ function sessionCookie(id: string, expiresAt: number, now: number): string {
   return setCookie(SESSION_COOKIE, id, { maxAge: Math.max(0, Math.floor((expiresAt - now) / 1000)), sameSite: 'Strict' })
 }
 
+const SESSION_ID = /^[A-Za-z0-9_-]{43}$/
+const ID_HASH = /^[0-9a-f]{64}$/
+
+/** Хэш id сессии из cookie запроса (как в D1) или undefined, если cookie нет или она не похожа на id. */
+export async function requestSessionHash(request: Request): Promise<string | undefined> {
+  const id = getCookie(request, SESSION_COOKIE)
+  return id && SESSION_ID.test(id) ? sha256Hex(id) : undefined
+}
+
 /**
  * Новая сессия после входа. Старая сессия этого браузера (если была) удаляется:
  * при каждом входе — новый id, иначе возможна фиксация сессии.
+ * replaceHash — хэш прежней сессии, известный не из cookie этого запроса (вход через GitHub:
+ * Strict-cookie не приходит на возврат с github.com, хэш несёт подписанная oauth-cookie).
  */
 export async function createSession(
   db: D1Database,
@@ -57,6 +68,7 @@ export async function createSession(
   method: AuthMethod,
   device: string,
   now = Date.now(),
+  replaceHash?: string,
 ): Promise<{ session: Session; setCookie: string }> {
   const id = randomToken(32)
   const session: Session = {
@@ -68,13 +80,16 @@ export async function createSession(
     authMethod: method,
     device,
   }
-  const old = getCookie(request, SESSION_COOKIE)
+  const oldHashes = new Set<string>()
+  const fromCookie = await requestSessionHash(request)
+  if (fromCookie) oldHashes.add(fromCookie)
+  if (replaceHash && ID_HASH.test(replaceHash)) oldHashes.add(replaceHash)
   const statements = [
     db
       .prepare('INSERT INTO sessions (id_hash, created_at, expires_at, last_used_at, auth_at, auth_method, device) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(session.idHash, session.createdAt, session.expiresAt, session.lastUsedAt, session.authAt, session.authMethod, session.device),
   ]
-  if (old) statements.unshift(db.prepare('DELETE FROM sessions WHERE id_hash = ?').bind(await sha256Hex(old)))
+  for (const h of oldHashes) statements.unshift(db.prepare('DELETE FROM sessions WHERE id_hash = ?').bind(h))
   await db.batch(statements)
   return { session, setCookie: sessionCookie(id, session.expiresAt, now) }
 }
@@ -86,7 +101,7 @@ export async function readSession(
   now = Date.now(),
 ): Promise<{ session: Session; setCookie?: string } | null> {
   const id = getCookie(request, SESSION_COOKIE)
-  if (!id || !/^[A-Za-z0-9_-]{43}$/.test(id)) return null
+  if (!id || !SESSION_ID.test(id)) return null
   const idHash = await sha256Hex(id)
   const row = await db.prepare('SELECT * FROM sessions WHERE id_hash = ? AND expires_at > ?').bind(idHash, now).first<Row>()
   if (!row) return null

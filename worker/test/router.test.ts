@@ -168,6 +168,32 @@ describe('вход через GitHub', () => {
     expect(second).not.toBe(first)
     expect(sql.prepare('SELECT id_hash FROM sessions').all()).toEqual([{ id_hash: await sha256Hex(second) }])
   })
+
+  it('повторный вход через GitHub без cookie сессии на возврате удаляет прежнюю сессию по хэшу из oauth-cookie', async () => {
+    const { env, sql } = testEnv()
+    const { fn } = github()
+    const first = (await login(env, fn)).session!
+    // Strict-cookie сессии приходит на /start (переход внутри хаба), но не на callback (возврат с github.com).
+    const start = await handle(req('/api/auth/github/start', { cookie: `${SESSION_COOKIE}=${first}` }), env, deps(fn))
+    const state = new URL(start.headers.get('Location')!).searchParams.get('state')!
+    const cb = await handle(req(`/api/auth/github/callback?code=abc&state=${state}`, { cookie: `${OAUTH_COOKIE}=${cookieFrom(start, OAUTH_COOKIE)}` }), env, deps(fn))
+    const second = cookieFrom(cb, SESSION_COOKIE)!
+    expect(second).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(sql.prepare('SELECT id_hash FROM sessions').all()).toEqual([{ id_hash: await sha256Hex(second) }])
+  })
+
+  it('oauth-cookie без хэша прежней сессии (или с чужой сессией в другом браузере) чужие сессии не трогает', async () => {
+    const { env, sql } = testEnv()
+    const { fn } = github()
+    const other = (await login(env, fn)).session!
+    const mine = (await login(env, fn)).session!
+    expect(sql.prepare('SELECT count(*) AS n FROM sessions').get()).toEqual({ n: 2 })
+    // Новый вход из браузера без сессии: обе прежние на месте.
+    await login(env, fn)
+    const hashes = (sql.prepare('SELECT id_hash FROM sessions').all() as { id_hash: string }[]).map((r) => r.id_hash)
+    expect(hashes).toEqual(expect.arrayContaining([await sha256Hex(other), await sha256Hex(mine)]))
+    expect(hashes).toHaveLength(3)
+  })
 })
 
 describe('сессия', () => {
@@ -221,6 +247,50 @@ describe('сессия', () => {
     expect(res.headers.getSetCookie()).toContain(`${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`)
     expect(sql.prepare('SELECT count(*) AS n FROM sessions').get()).toEqual({ n: 0 })
     expect((await handle(req('/api/me', { cookie }), env, deps(fn))).status).toBe(401)
+  })
+
+  it('выход в час продления: одна Set-Cookie сессии, и та стирает (продлённая не дописывается)', async () => {
+    const { env, sql } = testEnv()
+    const { fn } = github()
+    const t0 = Date.now()
+    const session = (await login(env, fn)).session!
+    sql.prepare('UPDATE sessions SET last_used_at = ?').run(t0 - 60 * 60_000 - 1000)
+    const res = await handle(
+      req('/api/auth/logout', { method: 'POST', cookie: `${SESSION_COOKIE}=${session}`, headers: { Origin: ORIGIN, 'X-Hub': '1' } }),
+      env,
+      deps(fn, () => t0),
+    )
+    expect(res.status).toBe(200)
+    const sessionCookies = res.headers.getSetCookie().filter((c) => c.startsWith(`${SESSION_COOKIE}=`))
+    expect(sessionCookies).toHaveLength(1)
+    expect(sessionCookies[0]).toMatch(/Max-Age=0$/)
+  })
+
+  it('«Выйти везде» в час продления: продлённая cookie не дописывается', async () => {
+    const { env, sql } = testEnv()
+    const { fn } = github()
+    const t0 = Date.now()
+    const session = (await login(env, fn)).session!
+    sql.prepare('UPDATE sessions SET last_used_at = ?').run(t0 - 2 * 60 * 60_000)
+    const res = await handle(
+      req('/api/auth/logout-all', { method: 'POST', cookie: `${SESSION_COOKIE}=${session}`, headers: { Origin: ORIGIN, 'X-Hub': '1' } }),
+      env,
+      deps(fn, () => t0),
+    )
+    const sessionCookies = res.headers.getSetCookie().filter((c) => c.startsWith(`${SESSION_COOKIE}=`))
+    expect(res.status).toBe(200)
+    expect(sessionCookies).toHaveLength(1)
+    expect(sessionCookies[0]).toMatch(/Max-Age=0$/)
+  })
+
+  it('обычный запрос в час продления по-прежнему получает продлённую cookie', async () => {
+    const { env, sql } = testEnv()
+    const { fn } = github()
+    const t0 = Date.now()
+    const session = (await login(env, fn)).session!
+    sql.prepare('UPDATE sessions SET last_used_at = ?').run(t0 - 2 * 60 * 60_000)
+    const res = await handle(req('/api/me', { cookie: `${SESSION_COOKIE}=${session}` }), env, deps(fn, () => t0))
+    expect(cookieFrom(res, SESSION_COOKIE)).toBe(session)
   })
 
   it('GET на logout — 405', async () => {

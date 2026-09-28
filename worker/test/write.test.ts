@@ -297,14 +297,68 @@ describe('слияние ветки в main', () => {
     on('GET', `/compare/main...${BRANCH_HEAD}`, () => jsonResponse({ ahead_by: aheadBy, files }))
   const branchHead = on('GET', '/git/ref/heads/draft', () => jsonResponse({ object: { sha: BRANCH_HEAD } }))
   const blob = (text: string) => on('GET', '/git/blobs/', () => jsonResponse({ encoding: 'base64', content: Buffer.from(text).toString('base64') }))
-  const mergeOk = on('POST', '/merges', () => jsonResponse({ sha: 'f'.repeat(40) }, 201))
+  const MERGED = 'f'.repeat(40)
+  const mergeOk = on('POST', '/merges', () => jsonResponse({ sha: MERGED }, 201))
+  const mainHead = on('GET', '/git/ref/heads/main', () => jsonResponse({ object: { sha: HEAD } }))
+  /** Итог слияния: что изменилось в main между прежней головой и коммитом слияния. */
+  const merged = (files: object[]) => on('GET', `/compare/${HEAD}...${MERGED}`, () => jsonResponse({ ahead_by: 2, files }))
+  const blobBy = (sha: string, text: string) =>
+    on('GET', `/git/blobs/${sha}`, () => jsonResponse({ encoding: 'base64', content: Buffer.from(text).toString('base64') }))
 
   it('проверенные файлы вливаются; вливается именно проверенный коммит', async () => {
-    const { gh, cookie, send } = await setup(branchHead, compare([{ filename: 'projects/tartaluga-hub.json', status: 'modified', sha: SHA }]), blob(PROJECT), mergeOk)
+    const file = { filename: 'projects/tartaluga-hub.json', status: 'modified', sha: SHA }
+    const { gh, cookie, send } = await setup(branchHead, mainHead, compare([file]), blob(PROJECT), mergeOk, merged([file]))
     const res = await send(mutation('POST', '/api/branches/draft/merge', cookie))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ merged: true, head: 'f'.repeat(40) })
+    expect(await res.json()).toEqual({ merged: true, head: MERGED })
     expect(gh.repoCalls().find((c) => c.url.endsWith('/merges'))!.body).toMatchObject({ base: 'main', head: BRANCH_HEAD })
+    // Итог совпал с проверенным в ветке — повторно не читается.
+    expect(gh.repoCalls().filter((c) => c.url.includes('/git/blobs/'))).toHaveLength(1)
+  })
+
+  it('итог слияния проверяется: склейка с main дала неверный файл — 200 с предупреждением, main не откатывается', async () => {
+    const MIXED = 'd'.repeat(40)
+    const OTHER = 'e'.repeat(40)
+    const broken = JSON.stringify({ ...JSON.parse(PROJECT), status: 'нет-такого' })
+    const { gh, cookie, send } = await setup(
+      branchHead,
+      mainHead,
+      compare([{ filename: 'projects/tartaluga-hub.json', status: 'modified', sha: SHA }]),
+      blobBy(SHA, PROJECT),
+      blobBy(MIXED, broken),
+      blobBy(OTHER, example('settings.json')),
+      mergeOk,
+      merged([
+        { filename: 'projects/tartaluga-hub.json', status: 'modified', sha: MIXED },
+        { filename: 'settings.json', status: 'modified', sha: OTHER },
+        { filename: 'ideas/01K5TQ0000000000000000E001.json', status: 'removed', sha: SHA },
+        { filename: 'covers/x.webp', status: 'added', sha: SHA },
+      ]),
+    )
+    const res = await send(mutation('POST', '/api/branches/draft/merge', cookie))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.merged).toBe(true)
+    expect(body.head).toBe(MERGED)
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0].path).toBe('projects/tartaluga-hub.json')
+    expect(body.warnings[0].error).toEqual(expect.any(String))
+    expect(gh.repoCalls().some((c) => c.method === 'PATCH' || c.method === 'DELETE')).toBe(false)
+  })
+
+  it('сбой проверки итога — всё равно 200 и предупреждение (слияние уже в main)', async () => {
+    const file = { filename: 'projects/tartaluga-hub.json', status: 'modified', sha: SHA }
+    const { cookie, send } = await setup(
+      branchHead,
+      mainHead,
+      compare([file]),
+      blob(PROJECT),
+      mergeOk,
+      on('GET', `/compare/${HEAD}...${MERGED}`, () => jsonResponse({ message: 'boom' }, 500)),
+    )
+    const res = await send(mutation('POST', '/api/branches/draft/merge', cookie))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ merged: true, head: MERGED, warnings: [{ path: 'main', error: 'не удалось проверить итог слияния' }] })
   })
 
   it('битый файл в ветке — 422 со списком, ничего не вливается', async () => {
@@ -330,6 +384,8 @@ describe('слияние ветки в main', () => {
   it('удалённые файлы и обложки не читаются, но вливаются', async () => {
     const { cookie, send } = await setup(
       branchHead,
+      mainHead,
+      merged([]),
       compare([
         { filename: 'ideas/01K5TQ0000000000000000E001.json', status: 'removed', sha: SHA },
         { filename: 'covers/x.webp', status: 'added', sha: SHA },
@@ -343,7 +399,7 @@ describe('слияние ветки в main', () => {
     const nothing = await setup(branchHead, compare([], 0))
     expect(await (await nothing.send(mutation('POST', '/api/branches/draft/merge', nothing.cookie))).json()).toEqual({ merged: false, reason: 'nothing_to_merge' })
 
-    const conflict = await setup(branchHead, compare([{ filename: 'covers/x.jpg', status: 'added', sha: SHA }]), on('POST', '/merges', () => jsonResponse({ message: 'Merge conflict' }, 409)))
+    const conflict = await setup(branchHead, mainHead, compare([{ filename: 'covers/x.jpg', status: 'added', sha: SHA }]), on('POST', '/merges', () => jsonResponse({ message: 'Merge conflict' }, 409)))
     const res = await conflict.send(mutation('POST', '/api/branches/draft/merge', conflict.cookie))
     expect(res.status).toBe(409)
     expect((await res.json()).error.details.files).toEqual(['covers/x.jpg'])

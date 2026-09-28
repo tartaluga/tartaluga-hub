@@ -14,6 +14,7 @@ import {
   mergeBranch,
   problemFiles,
   type Branch,
+  type MergeWarning,
 } from '../lib/api'
 import { useDraftText } from '../lib/drafts'
 import { Link } from 'react-router'
@@ -21,7 +22,7 @@ import css from './Panel.module.css'
 import own from './Branches.module.css'
 
 type Outcome =
-  | { kind: 'merged'; branch: string }
+  | { kind: 'merged'; branch: string; warnings: MergeWarning[] }
   | { kind: 'nothing'; branch: string }
   | { kind: 'invalid' | 'conflict'; branch: string; files: { path: string; error?: string }[] }
 
@@ -79,7 +80,7 @@ export function Branches() {
       await settleBranch(branch)
       try {
         const res = await mergeBranch(branch)
-        setOutcome({ kind: res.merged ? 'merged' : 'nothing', branch })
+        setOutcome(res.merged ? { kind: 'merged', branch, warnings: res.warnings ?? [] } : { kind: 'nothing', branch })
         if (res.merged && useSession.getState().branch === MAIN) void refresh()
       } catch (err) {
         if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
@@ -202,9 +203,17 @@ function OutcomeNote(props: { outcome: Outcome; current: string; busy: boolean; 
   const { outcome, current, busy } = props
   const b = `«${outcome.branch}»`
   if (outcome.kind === 'merged') {
+    const warned = outcome.warnings.length > 0
     return (
-      <div className={css.notice} data-tone="ok" role="status">
-        <p>{b} влита в main.</p>
+      <div className={css.notice} {...(warned ? { role: 'alert' } : { 'data-tone': 'ok', role: 'status' })}>
+        {warned ? (
+          <>
+            <p>{b} влита в main, но файлы не проходят проверку: правки ветки и main склеились неудачно. Исправь их в main:</p>
+            <FileList files={outcome.warnings} />
+          </>
+        ) : (
+          <p>{b} влита в main.</p>
+        )}
         <div className={own.actions}>
           {current !== MAIN && (
             <button type="button" className={css.ghost} onClick={props.onOpenMain} disabled={busy}>
@@ -232,16 +241,21 @@ function OutcomeNote(props: { outcome: Outcome; current: string; busy: boolean; 
           ? `${b} конфликтует с main. Ничего не влито: разбери конфликт на GitHub или в самой ветке. Затронутые файлы:`
           : `В ${b} есть файлы, которые не проходят проверку. Ничего не влито. Исправь их в ветке:`}
       </p>
-      {outcome.files.length > 0 && (
-        <ul className={own.problems}>
-          {outcome.files.map((f) => (
-            <li key={f.path}>
-              <span className="mono">{f.path}</span>
-              {f.error && <span className={css.meta}> — {f.error}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
+      <FileList files={outcome.files} />
     </div>
+  )
+}
+
+function FileList({ files }: { files: { path: string; error?: string }[] }) {
+  if (files.length === 0) return null
+  return (
+    <ul className={own.problems}>
+      {files.map((f) => (
+        <li key={f.path}>
+          <span className="mono">{f.path}</span>
+          {f.error && <span className={css.meta}> — {f.error}</span>}
+        </li>
+      ))}
+    </ul>
   )
 }

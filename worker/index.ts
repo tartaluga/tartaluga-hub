@@ -9,7 +9,7 @@ import { deleteOtherSession, listSessions, logoutAll, markSeen, securityLog, uns
 import { authenticate, authenticationOptions, deletePasskey, listPasskeys, register, registrationOptions } from './passkeys'
 import { commit, createBranch, deleteBranch, listBranches, mergeBranch, putFile, refreshStatus } from './write'
 import { assertSameOriginMutation, errorResponse, HttpError, json } from './http'
-import { cleanup, clearSessionCookie, deleteSession, isFresh, logEvent, readSession, type Session } from './sessions'
+import { cleanup, clearSessionCookie, deleteSession, isFresh, logEvent, readSession, SESSION_COOKIE, type Session } from './sessions'
 
 export interface Deps {
   fetch: typeof fetch
@@ -25,7 +25,10 @@ export async function handle(request: Request, env: Env, deps: Deps = defaultDep
   let refreshedCookie: string | undefined
   try {
     const res = await route(request, url, env, deps, (c) => (refreshedCookie = c))
-    if (refreshedCookie) res.headers.append('Set-Cookie', refreshedCookie)
+    // Ответ сам ставит cookie сессии (выход, «Выйти везде») — продлённую не добавляем: браузер применил бы последнюю.
+    if (refreshedCookie && !res.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_COOKIE}=`))) {
+      res.headers.append('Set-Cookie', refreshedCookie)
+    }
     return res
   } catch (e) {
     return errorResponse(toHttpError(e))
@@ -39,7 +42,7 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
   // Входы — единственные маршруты без сессии.
   if (pathname === '/api/auth/github/start') {
     allow(method, 'GET')
-    return githubStart(env)
+    return githubStart(request, env)
   }
   if (pathname === CALLBACK_PATH) {
     allow(method, 'GET')

@@ -92,7 +92,12 @@ export interface Branch {
 /** Имя ветки — как на сервере (worker/rules.ts): строчные латинские буквы, цифры, дефис, до 40 символов. */
 export const BRANCH_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
 
-export type MergeResult = { merged: true; head: string } | { merged: false; reason?: 'nothing_to_merge' }
+/** Файл, который после слияния в main не проходит проверку (merge API склеил правки построчно). Слияние не отменено. */
+export interface MergeWarning {
+  path: string
+  error: string
+}
+export type MergeResult = { merged: true; head: string; warnings?: MergeWarning[] } | { merged: false; reason?: 'nothing_to_merge' }
 
 export const listBranches = () => api<{ branches: Branch[] }>('/api/branches')
 export const createBranch = (name: string) => api<{ name: string; head: string }>('/api/branches', { method: 'POST', body: { name } })

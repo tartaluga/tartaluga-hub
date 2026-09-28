@@ -4,7 +4,7 @@ import { base64url, randomToken, sha256, signValue, verifyValue } from './crypto
 import type { Env } from './env'
 import { clearCookie, deviceLabel, getCookie, redirect, setCookie } from './http'
 import { USER_AGENT } from './githubApp'
-import { createSession, logEvent } from './sessions'
+import { createSession, logEvent, requestSessionHash } from './sessions'
 
 export const OAUTH_COOKIE = '__Host-hub_oauth'
 const OAUTH_TTL = 5 * 60_000
@@ -13,14 +13,22 @@ export const CALLBACK_PATH = '/api/auth/github/callback'
 interface OAuthState {
   s: string // state
   v: string // PKCE code_verifier
+  o?: string // хэш сессии, с которой браузер ушёл на github.com: её заменит новая (иначе копятся дубли)
 }
 
-/** Шаг 1: отправить браузер на github.com. Ничего не пишет в D1 — анонимный запрос. */
-export async function githubStart(env: Env): Promise<Response> {
+/**
+ * Шаг 1: отправить браузер на github.com. Ничего не пишет в D1 — анонимный запрос.
+ * Cookie сессии Strict и на возврат с github.com не придёт, поэтому хэш прежней сессии (если она есть)
+ * едет в подписанной Lax-cookie: callback удалит её при создании новой. Подделать хэш нельзя (подпись),
+ * а сам хэш сессию не открывает.
+ */
+export async function githubStart(request: Request, env: Env): Promise<Response> {
   const state = randomToken(32)
   const verifier = randomToken(32)
   const challenge = base64url(await sha256(verifier))
-  const cookie = await signValue(env.COOKIE_SECRET, 'oauth', { s: state, v: verifier } satisfies OAuthState, OAUTH_TTL)
+  const old = await requestSessionHash(request)
+  const payload: OAuthState = { s: state, v: verifier, ...(old ? { o: old } : {}) }
+  const cookie = await signValue(env.COOKIE_SECRET, 'oauth', payload, OAUTH_TTL)
 
   const url = new URL('https://github.com/login/oauth/authorize')
   url.searchParams.set('client_id', env.GITHUB_APP_CLIENT_ID)
@@ -62,7 +70,8 @@ export async function githubCallback(request: Request, env: Env, fetchImpl: type
     return fail('not_owner')
   }
 
-  const { setCookie: sessionCookie } = await createSession(env.DB, request, 'github', device)
+  const replace = typeof saved.o === 'string' ? saved.o : undefined
+  const { setCookie: sessionCookie } = await createSession(env.DB, request, 'github', device, Date.now(), replace)
   await logEvent(env.DB, 'login', { method: 'github', device })
   const headers = new Headers(clear)
   headers.append('Set-Cookie', sessionCookie)

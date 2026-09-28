@@ -1,7 +1,7 @@
 // Запись в репо данных и ветки (ADR-007). Каждый файл проверяется схемой, каждая запись несёт ожидаемую версию,
 // сервер никогда не повторяет запись «поверх свежего sha» сам.
 import { base64ToBytes } from '../src/lib/base64'
-import { GitHubError, type FileChange } from '../src/lib/github'
+import { GitHubError, type FileChange, type GitHubClient } from '../src/lib/github'
 import { parseFile } from '../src/data/model'
 import type { Env } from './env'
 import { dataRepo } from './githubApp'
@@ -150,6 +150,7 @@ export async function mergeBranch(name: string, env: Env, fetchImpl?: F): Promis
   if (diff.files.length >= MERGE_FILES_LIMIT) throw new HttpError(422, 'validation', 'Слишком много изменённых файлов, слей ветку на GitHub')
 
   const problems: { path: string; error: string }[] = []
+  const checked = new Map<string, string>() // путь → sha проверенного содержимого из ветки
   for (const f of diff.files) {
     const outside = [f.path, f.previousPath].filter((p): p is string => p !== undefined && !isDataPath(p))
     if (outside.length) {
@@ -159,18 +160,46 @@ export async function mergeBranch(name: string, env: Env, fetchImpl?: F): Promis
     if (f.status === 'removed' || !f.path.endsWith('.json')) continue
     const parsed = parseFile(f.path, f.sha, await repo.readBlobText(f.sha))
     if (!parsed.ok) problems.push({ path: f.path, error: parsed.error })
+    else checked.set(f.path, f.sha)
   }
   if (problems.length) throw new HttpError(422, 'validation', 'В ветке есть файлы, которые не проходят проверку', { files: problems })
 
+  const oldMain = await repo.branchHead(MAIN)
+  let sha: string | null
   try {
-    const sha = await repo.merge(MAIN, head, `Хаб: влить ${branch} в ${MAIN}`)
-    return json({ merged: sha !== null, head: sha })
+    sha = await repo.merge(MAIN, head, `Хаб: влить ${branch} в ${MAIN}`)
   } catch (e) {
     if (e instanceof GitHubError && e.kind === 'conflict') {
       throw new HttpError(409, 'conflict', 'Ветка конфликтует с main', { files: diff.files.map((f) => f.path) })
     }
     throw e
   }
+  if (sha === null) return json({ merged: false, head: null })
+  const warnings = await checkMergeResult(repo, oldMain, sha, checked)
+  return json({ merged: true, head: sha, ...(warnings.length ? { warnings } : {}) })
+}
+
+/**
+ * Проверка итога слияния (ADR-010 §3.6): merge API склеивает построчно, и файл, который правили и в ветке,
+ * и в main, может выйти неверным, хотя обе стороны по отдельности верны. Откатить main без force нельзя,
+ * поэтому ошибки не отменяют слияние, а возвращаются предупреждениями — экран просит проверить файл.
+ * Файлы, чьё итоговое содержимое совпало с проверенным в ветке, повторно не читаются.
+ */
+async function checkMergeResult(repo: GitHubClient, oldMain: string, newMain: string, checked: Map<string, string>): Promise<{ path: string; error: string }[]> {
+  const warnings: { path: string; error: string }[] = []
+  try {
+    const diff = await repo.compare(oldMain, newMain)
+    for (const f of diff.files) {
+      if (f.status === 'removed' || !f.path.endsWith('.json') || checked.get(f.path) === f.sha) continue
+      const parsed = parseFile(f.path, f.sha, await repo.readBlobText(f.sha))
+      if (!parsed.ok) warnings.push({ path: f.path, error: parsed.error })
+    }
+  } catch (e) {
+    // Слияние уже в main: сбой проверки — тоже предупреждение, а не ошибка запроса.
+    console.error('merge result check failed', e instanceof GitHubError ? e.kind : e instanceof Error ? e.name : typeof e)
+    warnings.push({ path: MAIN, error: 'не удалось проверить итог слияния' })
+  }
+  return warnings
 }
 
 /** POST /api/status/refresh — запустить status.yml только на main (на другой ветке могла лежать старая версия). */
