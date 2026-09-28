@@ -55,6 +55,25 @@ describe('applyEdit', () => {
   })
 })
 
+describe('закрепление', () => {
+  it('pinned: true пишется в файл, false и null поле убирают', () => {
+    expect(normalizePatch({ pinned: true })).toEqual({ pinned: true })
+    expect(normalizePatch({ pinned: false })).toEqual({ pinned: null })
+    expect(normalizePatch({ pinned: null })).toEqual({ pinned: null })
+    const pinned = applyEdit(base, normalizePatch({ pinned: true }), NOW)
+    expect(pinned).toMatchObject({ pinned: true, futureField: { keep: true } })
+    expect(parseFile('projects/bot.json', '', serialize(pinned))).toMatchObject({ ok: true, readOnly: false })
+    const unpinned = applyEdit(pinned, normalizePatch({ pinned: false }), NOW)
+    expect(unpinned).not.toHaveProperty('pinned')
+    expect(unpinned).toMatchObject({ futureField: { keep: true } })
+  })
+
+  it('последнее значение побеждает при склейке правок', () => {
+    expect(mergePatch({ pinned: true }, { pinned: null })).toEqual({ pinned: null })
+    expect(mergePatch({ pinned: null, title: 'А' }, { pinned: true })).toEqual({ pinned: true, title: 'А' })
+  })
+})
+
 describe('rebaseEdit', () => {
   const edited = { ...base, updatedAt: 'x' }
 

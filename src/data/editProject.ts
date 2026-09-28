@@ -14,6 +14,8 @@ export interface ProjectPatch {
   status?: Project['status']
   nextStep?: string | null
   links?: Link[] | null
+  /** Закрепить проект (true) или открепить (false/null — поле убирается из файла). */
+  pinned?: boolean | null
   /** Новые записи лога: добавляются в конец, при слиянии с чужими правками не конфликтуют. */
   logAdd?: LogEntry[]
   /** id записей лога, которые убрать. */
@@ -89,6 +91,7 @@ export function normalizePatch(patch: ProjectPatch): ProjectPatch {
     out.tags = items.length ? items : null
   }
   if (patch.links !== undefined) out.links = patch.links?.length ? patch.links : null
+  if (patch.pinned !== undefined) out.pinned = patch.pinned === true ? true : null
   if (patch.logAdd?.length) out.logAdd = patch.logAdd.map((e) => ({ ...e, text: e.text.replace(/\r\n?/g, '\n').trim() }))
   if (patch.logRemove?.length) out.logRemove = [...new Set(patch.logRemove)]
   if (patch.taskAdd?.length) out.taskAdd = patch.taskAdd.map((t) => ({ ...t, title: oneLine(t.title) }))
@@ -460,6 +463,7 @@ export const FIELD_LABEL: Record<FieldKey, string> = {
   status: 'статус',
   nextStep: 'следующий шаг',
   links: 'ссылки',
+  pinned: 'закрепление',
 }
 
 const CONFLICT_LABEL: Record<ConflictKey, string> = { ...FIELD_LABEL, tasks: 'задачи', milestones: 'вехи' }

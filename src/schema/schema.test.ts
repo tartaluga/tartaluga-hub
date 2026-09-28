@@ -102,6 +102,16 @@ describe('JSON Schema: проект v2 (ADR-009)', () => {
     }
   })
 
+  it('pinned — необязательное логическое поле; без версии формата', () => {
+    expect(validateProject({ ...base, pinned: true })).toBe(true)
+    expect(validateProject({ ...base, pinned: false })).toBe(true)
+    expect(validateProject({ ...base, schemaVersion: 1, pinned: true })).toBe(true)
+    for (const bad of ['true', 1, null, {}]) {
+      expect(validateProject({ ...base, pinned: bad }), String(bad)).toBe(false)
+      expect(keywords(validateProject)).toContain('type')
+    }
+  })
+
   it('doneAt — момент со смещением, не дата', () => {
     expect(validateProject({ ...base, status: 'done', doneAt: '2026-09-24' })).toBe(false)
   })

@@ -786,6 +786,14 @@ function publish() {
   useSession.setState({ queued: queue.size })
 }
 
+/**
+ * Всё неотправленное на устройстве, по всем веткам: ожидающие правки (из памяти — там есть и то,
+ * что не успело лечь в IndexedDB) и входящие конфликты. Для «Скачать неотправленное» (ADR-004).
+ */
+export function unsentSnapshot(): { edits: QueuedEdit[]; conflicts: StoredConflict[] } {
+  return { edits: [...queue.values()].map((l) => l.edit), conflicts: [...conflictMap.values()] }
+}
+
 function publishConflicts() {
   useSession.setState({ conflicts: [...conflictMap.values()].sort((a, b) => a.at.localeCompare(b.at)) })
 }

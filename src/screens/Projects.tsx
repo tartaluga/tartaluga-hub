@@ -3,7 +3,7 @@
 // Фильтр живёт в адресе, поэтому «назад» из карточки возвращает ту же выборку.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router'
-import { ArrowsDownUp, MagnifyingGlass, Plus, PlusCircle, SquaresFour, Warning, X } from '@phosphor-icons/react'
+import { ArrowsDownUp, MagnifyingGlass, Plus, PlusCircle, PushPin, SquaresFour, Warning, X } from '@phosphor-icons/react'
 import { MAIN, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { NewProjectDialog } from '../components/NewProjectDialog'
@@ -19,6 +19,7 @@ import {
   filterFromParams,
   filterToParams,
   isHot,
+  isPinned,
   SORT_LABEL,
   STATUS_LABEL,
   type Filter,
@@ -300,6 +301,12 @@ function Tile({ p }: { p: ProjectView }) {
           <span className={css.rowDot} aria-hidden />
           {/* На телефоне плашки статуса нет, точка — только цвет; статус словом для скринридера. */}
           <span className={css.rowStatus}>{STATUS_LABEL[d.status as Status]}</span>
+          {isPinned(d) && (
+            <span className={css.pinMark} title="Закреплён">
+              <PushPin size={14} weight="fill" aria-hidden />
+              <span className={css.srOnly}>закреплён</span>
+            </span>
+          )}
           <h2 className={css.name} title={d.title}>
             {d.title}
           </h2>

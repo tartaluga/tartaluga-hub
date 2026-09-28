@@ -201,3 +201,13 @@ describe('Пустые состояния: кнопки', () => {
     expect(count(html, 'role="status"')).toBe(1)
   })
 })
+
+describe('Projects: закреплённые', () => {
+  it('закреплённый — первым в сетке и с меткой «закреплён»', () => {
+    setState({ files: [project('a'), project('z', { pinned: true }), project('b', { pinned: false })] })
+    const html = render('/projects?sort=title')
+    expect(html.indexOf('Проект z')).toBeLessThan(html.indexOf('Проект a'))
+    expect(html.indexOf('Проект a')).toBeLessThan(html.indexOf('Проект b'))
+    expect(count(html, 'title="Закреплён"')).toBe(1)
+  })
+})

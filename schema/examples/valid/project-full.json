@@ -6,6 +6,7 @@
   "stack": ["React", "TypeScript", "Vite"],
   "tags": ["code", "personal"],
   "status": "active",
+  "pinned": true,
   "nextStep": "Утвердить схему данных",
   "cover": "covers/tartaluga-hub.webp",
   "links": [

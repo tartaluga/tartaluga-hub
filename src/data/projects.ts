@@ -245,8 +245,14 @@ export function applyFilter(projects: ProjectView[], f: Filter): ProjectView[] {
     .filter((p) => statuses.has(p.data.status))
     .filter((p) => tags.size === 0 || (p.data.tags ?? []).some((t) => tags.has(t)))
     .filter((p) => matchesQuery(p.data, f.query.trim()))
-    .sort((a, b) => compare(f.sort, a, b) || collator.compare(a.data.title, b.data.title))
+    .sort((a, b) => pinOrder(a, b) || compare(f.sort, a, b) || collator.compare(a.data.title, b.data.title))
 }
+
+/** Закреплён ли проект: только явное pinned: true (ADR-003: поле необязательное). */
+export const isPinned = (p: Pick<Project, 'pinned'>) => p.pinned === true
+
+/** Закреплённые — первыми; внутри групп порядок задаёт выбранная сортировка. */
+const pinOrder = (a: ProjectView, b: ProjectView) => Number(isPinned(b.data)) - Number(isPinned(a.data))
 
 // Фильтр живёт в адресе (#/projects?q=…&status=…&tag=…&sort=…), чтобы «назад» из карточки его не сбрасывал.
 

@@ -15,6 +15,8 @@ import {
   LinkSimple,
   PencilSimple,
   Plus,
+  PushPin,
+  PushPinSlash,
   Trash,
   X,
   type Icon,
@@ -151,9 +153,12 @@ function ProjectCard({ slug }: { slug: string }) {
   const ro = p.readOnly
   return (
     <section className={css.page}>
-      <Link to={back} className={css.back} viewTransition>
-        <ArrowLeft size={16} aria-hidden /> Проекты
-      </Link>
+      <div className={css.top}>
+        <Link to={back} className={css.back} viewTransition>
+          <ArrowLeft size={16} aria-hidden /> Проекты
+        </Link>
+        {!ro && <PinToggle pinned={d.pinned === true} save={save} />}
+      </div>
       <div className={css.cover} data-status={d.status} style={{ viewTransitionName: `cover-${d.slug}` }}>
         <Cover slug={d.slug} muted={d.status === 'paused' || d.status === 'done' || d.status === 'archived'} />
       </div>
@@ -234,6 +239,22 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <h2 className={css.sectionTitle}>{title}</h2>
       {children}
     </section>
+  )
+}
+
+/** Закрепить наверху списка «Проекты». Пишется как любая правка: через очередь, работает и без сети. */
+function PinToggle({ pinned, save }: { pinned: boolean; save: Save }) {
+  const { run, alert } = useAction(save)
+  const label = pinned ? 'Открепить' : 'Закрепить'
+  const Icon = pinned ? PushPinSlash : PushPin
+  return (
+    <div className={css.pinRow}>
+      <button type="button" className={css.pin} aria-pressed={pinned} aria-label={label} title={label} onClick={() => void run({ pinned: !pinned })}>
+        <Icon size={18} weight={pinned ? 'fill' : 'regular'} aria-hidden />
+        {label}
+      </button>
+      {alert}
+    </div>
   )
 }
 

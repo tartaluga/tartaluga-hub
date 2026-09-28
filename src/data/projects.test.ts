@@ -219,6 +219,33 @@ describe('сортировка по сроку и прогрессу', () => {
   })
 })
 
+describe('закреплённые проекты', () => {
+  const lib = buildLibrary(
+    [
+      project('b-late', { tasks: [{ id: id('A'), title: 't', done: false, due: '2026-10-10' }] }),
+      project('a-none'),
+      project('c-soon', { tasks: [{ id: id('B'), title: 't', done: false, due: '2026-09-24' }] }),
+      project('d-pinned-late', { pinned: true, tasks: [{ id: id('C'), title: 't', done: false, due: '2026-10-20' }] }),
+      project('e-pinned-none', { pinned: true }),
+      project('f-paused-pinned', { pinned: true, status: 'paused' }),
+      project('g-not-pinned', { pinned: false }),
+    ],
+    TODAY,
+  )
+  const slugs = (over: Partial<Filter>) => applyFilter(lib.projects, f(over)).map((p) => p.data.slug)
+
+  it('первыми при любой сортировке, остальные — в выбранном порядке', () => {
+    expect(slugs({ sort: 'deadline', statuses: ['active'] })).toEqual(['d-pinned-late', 'e-pinned-none', 'c-soon', 'b-late', 'a-none', 'g-not-pinned'])
+    expect(slugs({ sort: 'title', statuses: ['active'] })).toEqual(['d-pinned-late', 'e-pinned-none', 'a-none', 'b-late', 'c-soon', 'g-not-pinned'])
+  })
+
+  it('фильтр по-прежнему решает, виден ли проект', () => {
+    expect(slugs({ statuses: ['paused'] })).toEqual(['f-paused-pinned'])
+    expect(slugs({ statuses: ['active'], query: 'late' })).toEqual(['d-pinned-late', 'b-late'])
+    expect(slugs({ sort: 'title' })).toEqual(['d-pinned-late', 'e-pinned-none', 'f-paused-pinned', 'a-none', 'b-late', 'c-soon', 'g-not-pinned'])
+  })
+})
+
 describe('фильтр в адресе', () => {
   it('туда и обратно без потерь', () => {
     const filter: Filter = { query: 'бот', statuses: ['idea', 'archived'], tags: ['code'], sort: 'deadline' }

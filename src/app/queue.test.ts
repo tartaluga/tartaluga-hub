@@ -1,7 +1,7 @@
 // Очередь правок (ADR-004) и входящие конфликты (ADR-004 шаг 5, ADR-010): сессия с поддельным сервером.
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, resetQueueMemory, useSession, type Remote } from './session'
+import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
 import { ApiError, type Me } from '../lib/api'
 import { getCachedFiles, getConflicts, getQueue, putQueued, wipeDevice } from '../lib/localdb'
 
@@ -353,6 +353,23 @@ describe('очередь правок: ветки раздельны (ADR-007)',
     await useSession.getState().saveProject('a', { title: 'feat' })
     expect((await getQueue()).map((q) => q.branch).sort()).toEqual(['feat', 'main'])
     expect(shown().title).toBe('feat')
+  })
+
+  it('«Скачать неотправленное» видит правки всех веток и конфликты, а не только открытую ветку', async () => {
+    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
+    await start(srv)
+    await useSession.getState().switchBranch('feat')
+    await useSession.getState().switchBranch('main')
+    srv.state.fail = new ApiError(422, 'validation', 'не проходит схему')
+    await useSession.getState().saveProject('a', { nextStep: 'отказ' }).catch(() => {})
+    srv.state.fail = null
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'main' })
+    await useSession.getState().switchBranch('feat')
+    await useSession.getState().saveProject('a', { title: 'feat' })
+    const snap = unsentSnapshot()
+    expect(snap.edits.map((e) => `${e.branch} ${JSON.parse(e.text).title}`).sort()).toEqual(['feat feat', 'main main'])
+    expect(snap.conflicts.map((c) => `${c.branch} ${c.path}`)).toEqual([`main ${PATH}`])
   })
 
   it('удаление ветки стирает её очередь и конфликты', async () => {

@@ -121,3 +121,30 @@ describe('карточка проекта: шапка', () => {
     expect(html.indexOf('Здесь только чтение.')).toBeLessThan(html.indexOf('>Описание<'))
   })
 })
+
+describe('карточка проекта: закрепление', () => {
+  it('кнопка закрепляет через saveProject и сразу показывает новое состояние', async () => {
+    let finish!: () => void
+    const saveProject = vi.fn((_slug: string, _patch: ProjectPatch) => new Promise<void>((r) => (finish = r)))
+    await open(saveProject)
+    const pin = byLabel<HTMLButtonElement>('Закрепить')
+    expect(pin.getAttribute('aria-pressed')).toBe('false')
+    await act(async () => pin.click())
+    expect(saveProject).toHaveBeenCalledWith('bot', { pinned: true })
+    expect(byLabel('Открепить').getAttribute('aria-pressed')).toBe('true')
+    await act(async () => finish())
+  })
+
+  it('закреплённый открепляется: поле убирается', async () => {
+    const saveProject = vi.fn(async (_slug: string, _patch: ProjectPatch) => {})
+    await open(saveProject, undefined, { ...project, pinned: true })
+    await act(async () => byLabel<HTMLButtonElement>('Открепить').click())
+    expect(saveProject).toHaveBeenCalledWith('bot', { pinned: null })
+  })
+
+  it('в файле новой версии кнопки нет', async () => {
+    await open(async () => {}, undefined, { ...project, schemaVersion: 99, pinned: true })
+    expect(byLabel('Открепить')).toBeNull()
+    expect(byLabel('Закрепить')).toBeNull()
+  })
+})

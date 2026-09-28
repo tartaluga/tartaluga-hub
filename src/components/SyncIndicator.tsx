@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
-import { useSession } from '../app/session'
+import { DownloadSimple } from '@phosphor-icons/react'
+import { unsentSnapshot, useSession } from '../app/session'
+import { buildUnsentExport, downloadJson, hasUnsent, unsentFileName } from '../data/unsentExport'
 import { plural } from '../lib/plural'
 import { conflictCount } from '../screens/Conflicts'
 import css from './SyncIndicator.module.css'
@@ -29,6 +31,14 @@ export function syncText(sync: State, queued: number, lastSync: Date | null, now
 /** Строка «Входящих конфликтов» под индикатором: пусто, если разбирать нечего. */
 export function conflictText(count: number): string | null {
   return count > 0 ? `${count} ${plural(count, 'конфликт', 'конфликта', 'конфликтов')} · разобрать` : null
+}
+
+/** Выгрузить очередь и конфликты всех веток в файл (ADR-004): запасной путь, когда синхронизация невозможна. */
+function exportUnsent() {
+  const snap = unsentSnapshot()
+  if (!hasUnsent(snap)) return
+  const now = new Date()
+  downloadJson(unsentFileName(now), buildUnsentExport(snap.edits, snap.conflicts, now))
 }
 
 /** «SYNC · 2 мин назад» внизу боковой панели. Нажатие — сверить данные и отправить очередь сейчас. */
@@ -70,6 +80,12 @@ export function SyncIndicator() {
           <span className={css.dot} aria-hidden />
           <span className="mono">{conflicts}</span>
         </Link>
+      )}
+      {(queued > 0 || conflictList.length > 0) && (
+        <button type="button" className={css.export} onClick={exportUnsent} title="Файл JSON со всеми неотправленными правками и конфликтами всех веток — на случай, если отправить их не получается">
+          <DownloadSimple size={14} aria-hidden />
+          <span className="mono">Скачать неотправленное</span>
+        </button>
       )}
     </div>
   )
