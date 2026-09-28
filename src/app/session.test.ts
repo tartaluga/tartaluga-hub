@@ -162,6 +162,40 @@ describe('session.boot', () => {
     expect(useSession.getState().files).toHaveLength(1)
   })
 
+  it('сбой сервера (502) при данных на устройстве — хаб открыт с ошибкой в индикаторе, а не экран входа', async () => {
+    await putCachedFiles('main', [{ path: 'settings.json', sha: 's1', text: '{}' }], [])
+    const down = new ApiError(502, 'upstream', 'GitHub не ответил как надо')
+    useSession.setState({ phase: 'booting', me: null, remote: fakeRemote([], {}, down, down).remote })
+    await useSession.getState().boot()
+    expect(useSession.getState()).toMatchObject({ phase: 'ready', sync: 'error', syncError: 'GitHub не ответил как надо', me: null })
+    expect(useSession.getState().files).toHaveLength(1)
+  })
+
+  it.each([
+    ['429', new ApiError(429, 'rate_limited', 'GitHub просит подождать')],
+    ['ответ не JSON', new SyntaxError('Unexpected token <')],
+  ])('%s при данных на устройстве — хаб открыт, sync: error', async (_name, err) => {
+    await putCachedFiles('main', [{ path: 'settings.json', sha: 's1', text: '{}' }], [])
+    const base = fakeRemote([], {}).remote
+    useSession.setState({ phase: 'booting', me: null, remote: { ...base, me: () => Promise.reject(err) } })
+    await useSession.getState().boot()
+    expect(useSession.getState()).toMatchObject({ phase: 'ready', sync: 'error' })
+  })
+
+  it('401 при данных на устройстве — экран входа', async () => {
+    await putCachedFiles('main', [{ path: 'settings.json', sha: 's1', text: '{}' }], [])
+    useSession.setState({ phase: 'booting', me: null, remote: fakeRemote([], {}, undefined, expired).remote })
+    await useSession.getState().boot()
+    expect(useSession.getState().phase).toBe('signedOut')
+  })
+
+  it('сбой сервера (502) без данных на устройстве — экран входа', async () => {
+    const down = new ApiError(502, 'upstream', 'GitHub не ответил как надо')
+    useSession.setState({ phase: 'booting', me: null, remote: fakeRemote([], {}, down, down).remote })
+    await useSession.getState().boot()
+    expect(useSession.getState().phase).toBe('signedOut')
+  })
+
   it('без сети и без данных — экран входа', async () => {
     useSession.setState({ phase: 'booting', me: null, remote: fakeRemote([], {}, offline, offline).remote })
     await useSession.getState().boot()

@@ -173,9 +173,12 @@ export const useSession = create<Session>((set, get) => ({
       void requestPersistence()
       void get().syncNow()
     } catch (e) {
-      // Без сети, но данные на устройстве есть — работаем с ними; вход проверим, когда появится связь.
-      if (isNetworkError(e) && files.length) set({ phase: 'ready', files, sync: 'offline', syncError: errorText(e) })
-      else set({ phase: 'signedOut', files })
+      // Экран входа — только если сервер сказал «не вошёл» (401) или показать нечего. Любой другой сбой
+      // (нет сети, 5xx, 429, ответ не JSON) при данных на устройстве — работаем с ними; вход, сверка и
+      // отправка очереди — при следующем триггере (онлайн, возврат на вкладку, кнопка индикатора).
+      const unauthorized = e instanceof ApiError && e.status === 401
+      if (unauthorized || !files.length) set({ phase: 'signedOut', files })
+      else set({ phase: 'ready', files, sync: isNetworkError(e) ? 'offline' : 'error', syncError: errorText(e) })
     }
   },
 
