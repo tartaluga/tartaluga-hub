@@ -161,23 +161,77 @@ export async function dropBranchCache(branch: string): Promise<void> {
 
 /**
  * Запись очереди с устройства в формате этой сборки. До STATE_VERSION 2 очередь знала только проекты и поля kind
- * не было: такая запись — правка проекта. Незнакомый kind (запись новой сборки после отката) тоже не угадываем.
+ * не было: такая запись — правка проекта. Незнакомый kind (запись новой сборки после отката) или битую запись
+ * не угадываем — ошибка; getQueue такие пропускает, их забирает takeUnreadableQueued (ADR-011 §6).
  */
 export function readQueued(raw: QueuedEdit): QueuedEdit {
-  const kind = (raw as { kind?: unknown }).kind
+  const r = raw as unknown as Record<string, unknown>
+  const str = (k: string) => typeof r[k] === 'string'
+  if (!str('branch') || !str('path') || !str('baseSha') || !str('baseText') || !str('text') || !str('queuedAt')) throw new Error('Запись очереди не разбирается')
+  if (typeof r.patch !== 'object' || r.patch === null || Array.isArray(r.patch)) throw new Error('Запись очереди не разбирается')
+  const kind = r.kind
   if (kind === 'project' || kind === 'idea') return raw
   if (kind === undefined) return { ...raw, kind: 'project' }
   throw new Error(`Незнакомый вид записи очереди: ${String(kind)}`)
 }
 
-/** Все ожидающие правки устройства, по всем веткам. */
+const readable = (raw: QueuedEdit): QueuedEdit | undefined => {
+  try {
+    return readQueued(raw)
+  } catch {
+    return undefined
+  }
+}
+
+/** Все ожидающие правки устройства, по всем веткам. Записи, которые эта сборка не понимает, пропускаются. */
 export async function getQueue(): Promise<QueuedEdit[]> {
-  return (await (await db()).getAll('queue')).map(readQueued)
+  return (await (await db()).getAll('queue')).flatMap((raw) => readable(raw) ?? [])
+}
+
+/** Запись очереди, которую эта сборка не понимает: где она и моя версия файла целиком. */
+export interface UnreadableQueued {
+  branch: string
+  path: string
+  reason: string
+  mine: string
+}
+
+/**
+ * Записи очереди, которые эта сборка не понимает (ADR-011 §6), с сырыми ключами. Базу не меняет: вызывающий под
+ * блокировкой очереди сперва кладёт их во «Входящие» (putConflict), потом удаляет (dropQueuedKey) — так не теряются.
+ */
+export async function getUnreadableQueued(): Promise<{ key: IDBValidKey; item: UnreadableQueued }[]> {
+  const d = await db()
+  const [keys, rows] = await Promise.all([d.getAllKeys('queue'), d.getAll('queue')])
+  const out: { key: IDBValidKey; item: UnreadableQueued }[] = []
+  rows.forEach((raw, i) => {
+    try {
+      readQueued(raw)
+    } catch (e) {
+      const r = raw as unknown as Record<string, unknown>
+      const k = keys[i] as unknown as unknown[]
+      out.push({
+        key: keys[i] as IDBValidKey,
+        item: {
+          branch: String(typeof r.branch === 'string' ? r.branch : (k?.[0] ?? '')),
+          path: String(typeof r.path === 'string' ? r.path : (k?.[1] ?? '')),
+          reason: e instanceof Error ? e.message : 'Запись очереди не разбирается',
+          mine: typeof r.text === 'string' ? r.text : JSON.stringify(raw, null, 2),
+        },
+      })
+    }
+  })
+  return out
+}
+
+/** Удалить запись очереди по сырому ключу (для записей, которые эта сборка не понимает). */
+export async function dropQueuedKey(key: IDBValidKey): Promise<void> {
+  await (await db()).delete('queue', key as [string, string])
 }
 
 export async function getQueued(branch: string, path: string): Promise<QueuedEdit | undefined> {
   const raw = await (await db()).get('queue', [branch, path])
-  return raw && readQueued(raw)
+  return raw && readable(raw)
 }
 
 export async function putQueued(edit: QueuedEdit): Promise<void> {

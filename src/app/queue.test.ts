@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
 import { ApiError, type Me } from '../lib/api'
-import { getCachedFiles, getConflicts, getQueue, putQueued, wipeDevice } from '../lib/localdb'
+import { getCachedFiles, getConflicts, getQueue, putQueued, wipeDevice, type QueuedEdit } from '../lib/localdb'
 
 // Запись в очередь на устройстве настоящая, но её можно уронить в отдельном тесте.
 vi.mock('../lib/localdb', async (importOriginal) => {
@@ -948,5 +948,27 @@ describe('идеи в очереди (ADR-004): создание повторя�
     expect(b.useSession.getState().conflicts).toEqual([])
     expect(b.useSession.getState().queued).toBe(0)
     expect(await getQueue()).toEqual([])
+  })
+})
+
+describe('запись очереди, которую сборка не понимает (ADR-011 §6)', () => {
+  it('не роняет чтение очереди: другая правка уходит, эта — во «Входящих» целиком и из очереди удалена', async () => {
+    const srv = server({ main: { [PATH]: project(), 'projects/b.json': project({ slug: 'b' }) } })
+    const base = project()
+    await putQueued({ branch: 'main', path: 'projects/b.json', kind: 'unknown', baseSha: 'x', baseText: '{}', patch: {}, text: '{"моя":"версия"}', queuedAt: '2026-09-01T10:00:00+03:00' } as unknown as QueuedEdit)
+    await start(srv)
+    const sha = useSession.getState().files.find((f) => f.path === PATH)!.sha
+    await putQueued({ kind: 'project', branch: 'main', path: PATH, baseSha: sha, baseText: base, patch: { title: 'Б' }, text: project({ title: 'Б' }), queuedAt: '2026-09-02T10:00:00+03:00', id: 'y' })
+    resetQueueMemory()
+    useSession.setState({ phase: 'booting' })
+    await start(srv)
+    expect(JSON.parse(srv.text('main', PATH)).title).toBe('Б')
+    expect(srv.state.writes).toEqual([`main ${PATH}`])
+    expect(await getQueue()).toEqual([])
+    const [c] = await getConflicts()
+    expect(c).toMatchObject({ branch: 'main', path: 'projects/b.json', refused: { mine: '{"моя":"версия"}' } })
+    expect(c!.refused!.reason).toMatch(/unknown/)
+    expect(useSession.getState().conflicts).toHaveLength(1)
+    expect(useSession.getState().deviceError).toBeNull()
   })
 })

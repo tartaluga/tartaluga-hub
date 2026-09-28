@@ -12,8 +12,10 @@ import {
   getConflict,
   getConflicts,
   getCurrentBranch,
+  dropQueuedKey,
   getQueue,
   getQueued,
+  getUnreadableQueued,
   onDbBlocked,
   putCachedFiles,
   putConflict,
@@ -794,9 +796,17 @@ async function write(k: string, live: Live): Promise<boolean> {
 function reloadFromDevice(): Promise<void> {
   return persist(() =>
     withLock(async () => {
+      // Записи, которые эта сборка не понимает (ADR-011 §6): во «Входящие» как отказ с моей версией, из очереди — вон.
+      // Сперва конфликт, потом удаление: упадёт между ними — запись останется в очереди и уйдёт в следующий раз.
+      const unreadable = await getUnreadableQueued()
+      for (const { key: raw, item } of unreadable) {
+        const next = withProblem(item.branch, item.path, await getConflict(item.branch, item.path), { refused: { reason: `запись очереди не разобрана (${item.reason})`, mine: item.mine } })
+        await putConflict(next)
+        await dropQueuedKey(raw)
+      }
       const records = await getQueue()
       const keys = new Set([...queue.keys(), ...records.map((r) => key(r.branch, r.path))])
-      let wrote = false
+      let wrote = unreadable.length > 0
       for (const k of keys) if (await reconcile(k)) wrote = true
       const conflicts = await getConflicts()
       conflictMap.clear()

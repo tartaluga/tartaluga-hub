@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getCachedFiles, getCurrentBranch, getQueue, getQueued, onDbBlocked, putQueued, readQueued, wipeDevice, type QueuedEdit } from './localdb'
+import { getCachedFiles, getCurrentBranch, dropQueuedKey, getQueue, getQueued, getUnreadableQueued, onDbBlocked, putQueued, readQueued, wipeDevice, type QueuedEdit } from './localdb'
 
 beforeEach(() => wipeDevice())
 
@@ -89,10 +89,21 @@ describe('localdb: записи очереди разных версий', () =>
     expect(await getQueue()).toEqual([idea])
   })
 
-  it('незнакомый kind не угадываем: ошибка, запись на устройстве цела', async () => {
-    const odd = { ...legacy, kind: 'settings' } as unknown as QueuedEdit
+  it('незнакомый kind и битая запись: getQueue их пропускает, getUnreadableQueued отдаёт с моей версией', async () => {
+    const odd = { ...legacy, path: 'projects/b.json', kind: 'settings', text: '{"мое":1}' } as unknown as QueuedEdit
     expect(() => readQueued(odd)).toThrow(/settings/)
+    await putQueued(legacy as unknown as QueuedEdit)
     await putQueued(odd)
-    await expect(getQueue()).rejects.toThrow()
+    await putQueued({ branch: 'main', path: 'projects/c.json', junk: true } as unknown as QueuedEdit)
+    expect(await getQueue()).toEqual([{ ...legacy, kind: 'project' }])
+    expect(await getQueued('main', 'projects/b.json')).toBeUndefined()
+    const bad = await getUnreadableQueued()
+    expect(bad.map((b) => b.item)).toEqual([
+      { branch: 'main', path: 'projects/b.json', reason: 'Незнакомый вид записи очереди: settings', mine: '{"мое":1}' },
+      expect.objectContaining({ branch: 'main', path: 'projects/c.json', mine: expect.stringContaining('junk') }),
+    ])
+    await dropQueuedKey(bad[0]!.key)
+    expect(await getUnreadableQueued()).toHaveLength(1)
   })
+
 })
