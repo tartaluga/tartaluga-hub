@@ -19,6 +19,7 @@ import {
 } from '../lib/api'
 import { addPasskey, passkeysSupported } from '../lib/passkey'
 import { useFreshAction } from '../app/useFreshAction'
+import { confirmDataLoss, guardedSignOut } from '../app/signOutGuard'
 import { wipeDevice } from '../lib/localdb'
 import { Link } from 'react-router'
 import css from './Panel.module.css'
@@ -111,9 +112,12 @@ export function Security() {
     )
     if (ok) void run(() => deletePasskey(p.id).then(() => undefined))
   }
-  const everywhere = () => {
-    if (!window.confirm('Выйти на всех устройствах, включая это? Войти снова можно по ключу или через GitHub.')) return
-    void run(async () => {
+  // Сначала страж (неотправленное сотрётся), потом сервер. Если страж спросил, его «Стереть и выйти» и есть согласие.
+  const everywhere = async () => {
+    const answer = await confirmDataLoss('everywhere')
+    if (answer === 'cancel') return
+    if (answer === 'clean' && !window.confirm('Выйти на всех устройствах, включая это? Войти снова можно по ключу или через GitHub.')) return
+    await run(async () => {
       await logoutAll()
       await wipeDevice().catch(() => undefined)
       await signOut()
@@ -195,7 +199,7 @@ export function Security() {
           <h2 className={css.h2}>
             <DeviceMobile size={20} aria-hidden /> Где выполнен вход
           </h2>
-          <button type="button" className={css.danger} onClick={everywhere} disabled={busy}>
+          <button type="button" className={css.danger} onClick={() => void everywhere()} disabled={busy}>
             Выйти везде
           </button>
         </div>
@@ -224,7 +228,7 @@ export function Security() {
             </li>
           ))}
         </ul>
-        <button type="button" className={css.ghost} onClick={() => void signOut()}>
+        <button type="button" className={css.ghost} onClick={() => void guardedSignOut(signOut)}>
           <SignOut size={18} aria-hidden /> Выйти на этом устройстве
         </button>
       </div>

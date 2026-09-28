@@ -7,8 +7,10 @@ import { ThemeSwitch } from '../components/ThemeSwitch'
 import { SyncIndicator } from '../components/SyncIndicator'
 import { SecurityBanner } from '../components/SecurityBanner'
 import { BranchBanner } from '../components/BranchBanner'
+import { SignOutGuardDialog } from '../components/SignOutGuardDialog'
 import { Login } from '../screens/Login'
 import { installSyncTriggers, useSession } from './session'
+import { guardedSignOut } from './signOutGuard'
 import { conflictCount } from '../screens/Conflicts'
 import { plural } from '../lib/plural'
 import { buildLibrary } from '../data/projects'
@@ -74,11 +76,8 @@ export function Shell() {
   )
   const nav = counts.conflicts > 0 ? [...NAV, CONFLICTS_NAV] : NAV
 
-  // ADR-007: «Выйти» предупреждает о неотправленных правках — они сотрутся вместе с данными устройства.
-  const confirmSignOut = () => {
-    if (queued > 0 && !window.confirm(`${queued} ${plural(queued, 'правка ещё не отправлена', 'правки ещё не отправлены', 'правок ещё не отправлены')}. Выйти и стереть их с этого устройства?`)) return
-    void signOut()
-  }
+  // ADR-007: выход стирает устройство — страж спрашивает, если есть неотправленные правки или конфликты.
+  const confirmSignOut = () => void guardedSignOut(signOut)
 
   useEffect(() => {
     void boot()
@@ -99,6 +98,7 @@ export function Shell() {
   return (
     <div className={css.shell}>
       {expired && <ReLogin queued={queued} />}
+      <SignOutGuardDialog />
       <aside className={css.side}>
         <div className={css.brand}>
           <Visor />
