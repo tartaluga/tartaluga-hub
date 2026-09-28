@@ -78,6 +78,15 @@ describe('экран «Входящие конфликты»', () => {
     expect(html).toContain('Согласиться с удалением')
   })
 
+  it('идею удалили в репо — карточка про идею, а не проект', () => {
+    setState({ conflicts: [rec({ path: 'ideas/01J8Z6Y0000000000000000001.json', title: 'Бот', items: [], labels: [], deleted: { mine: '{}' } })] })
+    const html = render(<Conflicts />)
+    expect(html).toContain('идея удалена в репо')
+    expect(html).toContain('идея с моей правкой')
+    expect(html).toContain('Вернуть идею')
+    expect(html).not.toContain('Вернуть проект')
+  })
+
   it('данные из репо — только текст', () => {
     setState({ conflicts: [rec({ title: '<script>x</script>', items: [{ kind: 'field', path: ['nextStep'], base: '', local: 'а', remote: '<img src=x onerror=alert(1)>' }] })] })
     const html = render(<Conflicts />)

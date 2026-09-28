@@ -9,10 +9,17 @@ import { MIGRATIONS, MigrationError, migrateState, STATE_VERSION, type Migration
  */
 const FORMATS: Record<number, string> = {
   1: '{at:number,build:string,drafts:[{key:string,label:string,text:string}],route:string,stateVersion:number,ui:{scrollY:number}}',
+  // 2: handoff тот же; запись очереди получила kind (localdb.readQueued, тест в localdb.test.ts).
+  2: '{at:number,build:string,drafts:[{key:string,label:string,text:string}],route:string,stateVersion:number,ui:{scrollY:number}}',
 }
 
 /** Пример состояния версии n (вход для MIGRATIONS[n - 1]) и что должно выйти. */
-const EXAMPLES: Record<number, { input: unknown; output: unknown }> = {}
+const EXAMPLES: Record<number, { input: unknown; output: unknown }> = {
+  1: {
+    input: { stateVersion: 1, at: 1, build: 'b', route: '#/', drafts: [{ key: 'k', label: 'l', text: 't' }], ui: { scrollY: 0 } },
+    output: { stateVersion: 2, at: 1, build: 'b', route: '#/', drafts: [{ key: 'k', label: 'l', text: 't' }], ui: { scrollY: 0 } },
+  },
+}
 
 function shape(x: unknown): string {
   if (Array.isArray(x)) return `[${x.length ? shape(x[0]) : ''}]`
@@ -44,6 +51,13 @@ describe('цепочка миграций полная', () => {
       expect(ex, `нет примера для миграции ${v} → ${v + 1}`).toBeDefined()
       expect(MIGRATIONS[v - 1]!(ex!.input)).toEqual(ex!.output)
     }
+  })
+})
+
+describe('миграция 1 → 2', () => {
+  it('не объект — ошибка, а не молчаливый пропуск', () => {
+    expect(() => migrateState(null, 1)).toThrow(MigrationError)
+    expect(() => migrateState([], 1)).toThrow(MigrationError)
   })
 })
 

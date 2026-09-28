@@ -27,6 +27,12 @@ const ELEMENT_FIELD_LABEL: Record<string, string> = {
   label: 'подпись',
 }
 
+/** Поля идеи (ideas/<ulid>.json), которых нет у проекта. Теги — общие, подпись из FIELD_LABEL. */
+const IDEA_FIELD_LABEL: Record<string, string> = { text: 'текст', project: 'привязка к проекту' }
+
+/** Подпись из таблицы только по собственному ключу. */
+const labelOf = (map: Readonly<Record<string, string>>, k: string): string | undefined => (Object.prototype.hasOwnProperty.call(map, k) ? map[k] : undefined)
+
 const isObject = (v: unknown): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v)
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 
@@ -55,15 +61,16 @@ function findElement(doc: JsonObject | undefined, arrayKey: string, id: string):
  */
 export function conflictLabel(item: MergeConflict, local: JsonObject | undefined, remote: JsonObject | undefined): string {
   const [top = '', id, ...rest] = item.path
-  if (id === undefined) return (FIELD_LABEL as Record<string, string>)[top] ?? top
+  // Ключи из файла — недоверенный ввод: «constructor» и подобные не должны находить свойства прототипа.
+  if (id === undefined) return labelOf(FIELD_LABEL, top) ?? labelOf(IDEA_FIELD_LABEL, top) ?? top
   const name =
     elementName(item.kind === 'element' ? (item.local ?? item.remote ?? item.base) : undefined) ??
     elementName(findElement(remote, top, id)) ??
     elementName(findElement(local, top, id))
-  const what = `${ARRAY_LABEL[top] ?? top}${name ? ` «${name}»` : ''}`
+  const what = `${labelOf(ARRAY_LABEL, top) ?? top}${name ? ` «${name}»` : ''}`
   if (item.kind === 'element') return `${what} · ${item.deletedBy === 'local' ? 'удалена у тебя' : 'удалена в репо'}`
   const field = rest[rest.length - 1] ?? ''
-  return `${what} · ${ELEMENT_FIELD_LABEL[field] ?? field}`
+  return `${what} · ${labelOf(ELEMENT_FIELD_LABEL, field) ?? field}`
 }
 
 /** Значение для показа (только текст). undefined — поля нет. */

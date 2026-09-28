@@ -2,6 +2,7 @@
 // Токенов здесь нет (ADR-007). Кэш и очередь раздельны по веткам (ADR-007): правка на ветке-эксперименте уходит только в неё.
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { ProjectPatch } from '../data/editProject'
+import type { IdeaPatch } from '../data/ideas'
 import type { MergeConflict } from '../data/merge'
 
 export interface CachedFile {
@@ -15,18 +16,26 @@ interface StoredFile extends CachedFile {
   branch: string
 }
 
+/** Какой файл правит запись очереди: проект (projects/<slug>.json) или идея (ideas/<ulid>.json). */
+export type QueueKind = 'project' | 'idea'
+
 /**
  * Ожидающая правка файла (ADR-004): одна на [ветка, путь]. Новая правка того же файла сливается с ней,
  * базовая копия (версия, от которой считается правка) остаётся прежней.
  */
 export interface QueuedEdit {
+  /** Вид файла. Записи до STATE_VERSION 2 поля не имеют — это правка проекта (readQueued дописывает kind при чтении). */
+  kind?: QueueKind
   branch: string
   path: string
-  /** sha и текст базовой копии. */
+  /**
+   * sha и текст базовой копии. Пустой baseSha — файла в репо ещё нет (создание идеи): baseText — новый файл,
+   * от него считается правка, а запись уходит без sha и повторяема по правилу 6 schema/README.md.
+   */
   baseSha: string
   baseText: string
-  /** Все правки, накопленные с базовой копии. */
-  patch: ProjectPatch
+  /** Все правки, накопленные с базовой копии: ProjectPatch у проекта, IdeaPatch у идеи. */
+  patch: ProjectPatch | IdeaPatch
   /** Моя версия файла: базовая копия с правкой. Её видно на экране до отправки. */
   text: string
   queuedAt: string
@@ -150,13 +159,25 @@ export async function dropBranchCache(branch: string): Promise<void> {
   await Promise.all([drop('branchFiles'), drop('queue'), drop('conflicts'), tx.done])
 }
 
+/**
+ * Запись очереди с устройства в формате этой сборки. До STATE_VERSION 2 очередь знала только проекты и поля kind
+ * не было: такая запись — правка проекта. Незнакомый kind (запись новой сборки после отката) тоже не угадываем.
+ */
+export function readQueued(raw: QueuedEdit): QueuedEdit {
+  const kind = (raw as { kind?: unknown }).kind
+  if (kind === 'project' || kind === 'idea') return raw
+  if (kind === undefined) return { ...raw, kind: 'project' }
+  throw new Error(`Незнакомый вид записи очереди: ${String(kind)}`)
+}
+
 /** Все ожидающие правки устройства, по всем веткам. */
 export async function getQueue(): Promise<QueuedEdit[]> {
-  return (await db()).getAll('queue')
+  return (await (await db()).getAll('queue')).map(readQueued)
 }
 
 export async function getQueued(branch: string, path: string): Promise<QueuedEdit | undefined> {
-  return (await db()).get('queue', [branch, path])
+  const raw = await (await db()).get('queue', [branch, path])
+  return raw && readQueued(raw)
 }
 
 export async function putQueued(edit: QueuedEdit): Promise<void> {

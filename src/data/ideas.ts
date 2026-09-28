@@ -1,8 +1,9 @@
 // Идеи (инбокс): разбор ideas/<id>.json для экрана, черновики и правки, запись в репо данных.
-// Чистые функции — сверху; запись — внизу, поверх API сессии (createFile, deleteFiles, refresh, remote, applyWrite).
+// Чистые функции — сверху; запись — внизу, поверх API сессии. Создание и правка идеи идут через очередь правок
+// (ADR-004), как правки проекта; удаление и «Сделать проектом» — прямые коммиты (deleteFiles, commit).
 // Контракт: schema/README.md (идея v1 + project), ADR-009 (fromIdea, привязка к проекту).
 import { ulid } from 'ulid'
-import { applyWrite, errorText, useSession } from '../app/session'
+import { applyWrite, errorText, hasQueued, useSession } from '../app/session'
 import { ApiError, type CommitChange } from '../lib/api'
 import type { CachedFile } from '../lib/localdb'
 import type { Idea, Project } from '../schema/types'
@@ -185,18 +186,12 @@ export function applyIdeaPatch(
   return { ok: true, changed: true, data: next }
 }
 
-const fieldValue = (d: Idea, k: keyof IdeaPatch) => (k === 'project' ? (d.project ?? null) : d.text)
-
-/**
- * Файл идеи изменили, пока шла запись. Правку переносим на свежую версию, если её поля там не трогали;
- * если там уже то же самое — правка не нужна; если другое — конфликт.
- */
-export function rebaseIdeaPatch(base: Idea, fresh: Idea, patch: IdeaPatch): 'apply' | 'already' | 'conflict' {
-  const keys = (Object.keys(patch) as (keyof IdeaPatch)[]).filter((k) => patch[k] !== undefined)
-  const mine = (k: keyof IdeaPatch) => (k === 'text' ? normText(patch.text!) : patch.project)
-  if (keys.every((k) => fieldValue(fresh, k) === mine(k))) return 'already'
-  if (keys.some((k) => fieldValue(fresh, k) !== fieldValue(base, k))) return 'conflict'
-  return 'apply'
+/** Слить две правки идеи из очереди: поля второй поверх первой (ADR-004, одна ожидающая правка на файл). */
+export function mergeIdeaPatch(a: IdeaPatch, b: IdeaPatch): IdeaPatch {
+  const out: IdeaPatch = { ...a }
+  if (b.text !== undefined) out.text = b.text
+  if (b.project !== undefined) out.project = b.project
+  return out
 }
 
 /** Название проекта из идеи: первая строка, не длиннее TITLE_MAX. */
@@ -258,56 +253,26 @@ function currentIdea(branch: string, path: string): { sha: string; data: WithUnk
   return { sha: file.sha, data: parsed.data as WithUnknown<Idea> }
 }
 
-/** Записать новую идею. Повторяемо: тот же черновик после обрыва связи не создаст дубль. */
+/**
+ * Записать новую идею через очередь правок (ADR-004): сразу видна на экране и лежит на устройстве, без сети уходит,
+ * когда появится связь. Повторяемо: тот же черновик (тот же ULID) дубль не создаст (schema/README.md, правило 6).
+ * Промис завершается, когда идея записана или отложена; если в репо уже другая идея с этим id — QueueConflict.
+ */
 export async function createIdea(draft: { path: string; text: string }): Promise<void> {
-  await useSession.getState().createFile(draft.path, draft.text)
+  await useSession.getState().addIdea(draft.path, draft.text)
 }
 
-// Правки одного файла идут по очереди: вторая правка считается от результата первой, а не от старого sha.
-const chains = new Map<string, Promise<void>>()
-
-/** Сохранить правку идеи. Если файл успели изменить — перенос правки на свежую версию, один раз. */
-export function saveIdea(id: string, patch: IdeaPatch): Promise<void> {
-  const branch = useSession.getState().branch
+/**
+ * Правка идеи через очередь правок (ADR-004), как правка проекта: одна ожидающая правка на файл, при конфликте —
+ * трёхстороннее слияние, спорное — во «Входящие конфликты» (QueueConflict). Правка без изменений ничего не пишет.
+ */
+export async function saveIdea(id: string, patch: IdeaPatch): Promise<void> {
+  const state = useSession.getState()
   const path = `ideas/${id}.json`
-  const key = `${branch}\n${path}`
-  const run = (chains.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => writeIdea(branch, path, patch))
-  chains.set(key, run)
-  const cleanup = () => {
-    if (chains.get(key) === run) chains.delete(key)
-  }
-  run.then(cleanup, cleanup)
-  return run
-}
-
-async function writeIdea(branch: string, path: string, patch: IdeaPatch): Promise<void> {
-  const { remote } = useSession.getState()
-  const put = async (from: { sha: string; data: WithUnknown<Idea> }) => {
-    const r = applyIdeaPatch(from.data, patch)
-    if (!r.ok) throw new ApiError(422, 'validation', r.error)
-    if (!r.changed) return // правка ничего не меняет — пустой коммит не нужен
-    const text = serialize(r.data)
-    const { sha } = await remote.putFile(branch, path, text, from.sha)
-    await applyWrite(branch, [{ path, sha, text }], [])
-  }
-  const base = currentIdea(branch, path)
-  try {
-    await put(base)
-  } catch (e) {
-    if (!(e instanceof ApiError && e.status === 409)) throw e
-    await useSession.getState().refresh()
-    let fresh = currentIdea(branch, path)
-    // refresh мог вернуть сверку, начатую до конфликта, — тогда дочитываем ещё раз.
-    if (fresh.sha === base.sha) {
-      await useSession.getState().refresh()
-      fresh = currentIdea(branch, path)
-    }
-    if (fresh.sha === base.sha) throw e
-    const r = rebaseIdeaPatch(base.data, fresh.data, patch)
-    if (r === 'already') return
-    if (r === 'conflict') throw new ApiError(409, 'conflict', 'Идею изменили на другом устройстве. Проверь текст и повтори правку.')
-    await put(fresh)
-  }
+  const r = applyIdeaPatch(currentIdea(state.branch, path).data, patch)
+  if (!r.ok) throw new ApiError(422, 'validation', r.error)
+  if (!r.changed) return // правка ничего не меняет — пустой коммит не нужен
+  await state.saveIdea(path, patch)
 }
 
 /**
@@ -318,9 +283,10 @@ export async function deleteProject(slug: string): Promise<void> {
   await useSession.getState().deleteFiles((tree) => projectPaths(slug, tree.paths), `Хаб: удалить проект ${slug}`, (files) => unlinkIdeasChanges(slug, files))
 }
 
-/** Удалить идею одним коммитом. Уже удалена — успех. */
+/** Удалить идею одним коммитом. Уже удалена — успех. Идея ещё не ушла в репо (создана без сети) — убрать из очереди. */
 export async function deleteIdea(id: string): Promise<void> {
   const path = `ideas/${id}.json`
+  if (await useSession.getState().discardNew(path)) return
   await useSession.getState().deleteFiles(() => [path], `Идеи: удалить ${id}`)
 }
 
@@ -352,6 +318,11 @@ export async function makeProjectFromIdea(idea: Idea, draft: { slug: string; pat
   const ideaId = idea.id
   const ideaPath = `ideas/${ideaId}.json`
   const branch = useSession.getState().branch
+  // Правка идеи ещё в очереди: коммит удалил бы идею из репо без неё. Сперва отправляем очередь.
+  if (hasQueued(branch, ideaPath)) {
+    await useSession.getState().flush()
+    if (hasQueued(branch, ideaPath)) throw new ApiError(0, 'network', 'Идея ещё не записана в репо — проект можно сделать, когда она отправится')
+  }
   let head: string | undefined
   for (let attempt = 0; ; attempt++) {
     const tree = await freshTree(head)

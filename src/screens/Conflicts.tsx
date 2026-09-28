@@ -89,11 +89,11 @@ export function Conflicts() {
             </div>
           </Card>
         ) : rec.deleted ? (
-          <Card key={`${rec.branch}\n${rec.path}`} rec={rec} what="проект удалён в репо">
+          <Card key={`${rec.branch}\n${rec.path}`} rec={rec} what={isIdea(rec.path) ? 'идея удалена в репо' : 'проект удалён в репо'}>
             <div className={css.sides}>
-              <Version head="моя версия · это устройство" text="проект с моей правкой" mine>
+              <Version head="моя версия · это устройство" text={isIdea(rec.path) ? 'идея с моей правкой' : 'проект с моей правкой'} mine>
                 <button type="button" className={css.button} onClick={() => void pick(rec, 0, 'mine')} disabled={busy}>
-                  Вернуть проект
+                  {isIdea(rec.path) ? 'Вернуть идею' : 'Вернуть проект'}
                 </button>
               </Version>
               <Version head="версия из репо" text="удалён">
@@ -143,6 +143,9 @@ export function Conflicts() {
     </section>
   )
 }
+
+/** Конфликт в файле идеи (ideas/<ulid>.json), а не проекта. */
+const isIdea = (path: string) => path.startsWith('ideas/')
 
 function Card({ rec, what, children }: { rec: StoredConflict; what: string; children: ReactNode }) {
   return (

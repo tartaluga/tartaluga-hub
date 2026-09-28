@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useSession, type Remote } from '../app/session'
+import { QueueConflict, resetQueueMemory, useSession, type Remote } from '../app/session'
 import { ApiError, type Me } from '../lib/api'
-import { getCachedFiles, wipeDevice } from '../lib/localdb'
+import { getCachedFiles, getConflicts, getQueue, wipeDevice } from '../lib/localdb'
 import type { Idea } from '../schema/types'
 import {
   applyIdeaPatch,
@@ -15,7 +15,7 @@ import {
   makeProjectFromIdea,
   newIdeaDraft,
   projectFromIdeaDraft,
-  rebaseIdeaPatch,
+  mergeIdeaPatch,
   saveIdea,
   shortDate,
   textExtendsTitle,
@@ -147,13 +147,11 @@ describe('черновики и правки', () => {
     expect(applyIdeaPatch(prev, { project: null }, now)).toMatchObject({ ok: true, changed: true })
   })
 
-  it('rebaseIdeaPatch: переносит, узнаёт уже сделанное, видит конфликт', () => {
-    const base: Idea = { schemaVersion: 1, id: ID1, text: 'A', createdAt: '2026-09-20T10:00:00+03:00' }
-    expect(rebaseIdeaPatch(base, { ...base, project: 'x' }, { text: 'B' })).toBe('apply')
-    expect(rebaseIdeaPatch(base, { ...base, text: 'B' }, { text: 'B\r\n' })).toBe('already')
-    expect(rebaseIdeaPatch(base, { ...base, text: 'C' }, { text: 'B' })).toBe('conflict')
-    expect(rebaseIdeaPatch(base, base, { project: null })).toBe('already')
-    expect(rebaseIdeaPatch({ ...base, project: 'a' }, { ...base, project: 'b' }, { project: null })).toBe('conflict')
+  it('mergeIdeaPatch: поля второй правки поверх первой, непереданные остаются', () => {
+    expect(mergeIdeaPatch({ text: 'A' }, { project: 'hub' })).toEqual({ text: 'A', project: 'hub' })
+    expect(mergeIdeaPatch({ text: 'A', project: 'hub' }, { text: 'B' })).toEqual({ text: 'B', project: 'hub' })
+    expect(mergeIdeaPatch({ project: 'hub' }, { project: null })).toEqual({ project: null })
+    expect(mergeIdeaPatch({}, {})).toEqual({})
   })
 
   it('titleFromIdea режет до 120 символов', () => {
@@ -206,7 +204,11 @@ function fakeRepo(files: { path: string; sha: string; text: string }[]) {
   let tree: Entry[] = files.map(({ path, sha }) => ({ path, sha }))
   let n = 0
   const log: string[] = []
-  const hooks: { beforePut?: () => void; failCommit?: ApiError[] } = {}
+  // down — нет сети; lose — запись дошла, а ответ потерялся (один раз).
+  const hooks: { beforePut?: () => void; failCommit?: ApiError[]; down?: boolean; lose?: boolean } = {}
+  const net = () => {
+    if (hooks.down) throw new ApiError(0, 'network', 'нет сети')
+  }
   const write = (path: string, text: string) => {
     const sha = `w${++n}`
     blobs[sha] = text
@@ -218,19 +220,26 @@ function fakeRepo(files: { path: string; sha: string; text: string }[]) {
       return ME
     },
     async listFiles() {
+      net()
       return { head: `h${n}`, files: [...tree] }
     },
     async readBlobText(sha) {
       return blobs[sha]!
     },
     async putFile(_b, path, text, expected) {
+      net()
       hooks.beforePut?.()
       hooks.beforePut = undefined
       log.push(`put ${path}`)
       const cur = tree.find((f) => f.path === path)
       if (expected !== undefined && cur?.sha !== expected) throw new ApiError(409, 'conflict', 'Файл изменился')
       if (expected === undefined && cur && blobs[cur.sha] !== text) throw new ApiError(409, 'conflict', 'Файл уже есть')
-      return { sha: cur && expected === undefined ? cur.sha : write(path, text) }
+      const sha = cur && expected === undefined ? cur.sha : write(path, text)
+      if (hooks.lose) {
+        hooks.lose = false
+        throw new ApiError(0, 'network', 'ответ потерялся')
+      }
+      return { sha }
     },
     async commit(_b, changes, expectedHead) {
       log.push(`commit ${expectedHead} ${changes.map((c) => c.path).join(',')}`)
@@ -272,6 +281,7 @@ async function start(files: { path: string; sha: string; text: string }[]) {
 const onScreen = (path: string) => useSession.getState().files.find((f) => f.path === path)
 
 beforeEach(async () => {
+  resetQueueMemory()
   await wipeDevice()
 })
 
@@ -309,12 +319,16 @@ describe('запись идей', () => {
     expect(JSON.parse(repo.text(path)!)).toMatchObject({ text: 'Мой текст', project: 'hub' })
   })
 
-  it('saveIdea: тот же текст поменяли иначе — конфликт, чужая правка цела', async () => {
+  it('saveIdea: тот же текст поменяли иначе — конфликт во «Входящих», чужая правка цела', async () => {
     const repo = await start([ideaFile(ID1)])
     const path = `ideas/${ID1}.json`
     repo.hooks.beforePut = () => repo.external(path, JSON.stringify({ ...JSON.parse(repo.text(path)!), text: 'Чужой' }))
-    await expect(saveIdea(ID1, { text: 'Мой' })).rejects.toMatchObject({ status: 409 })
+    await expect(saveIdea(ID1, { text: 'Мой' })).rejects.toBeInstanceOf(QueueConflict)
     expect(JSON.parse(repo.text(path)!).text).toBe('Чужой')
+    expect(JSON.parse(onScreen(path)!.text).text).toBe('Чужой')
+    const [c] = await getConflicts()
+    expect(c).toMatchObject({ path, title: 'Чужой', labels: ['текст'], items: [{ kind: 'field', path: ['text'], local: 'Мой', remote: 'Чужой' }] })
+    expect(await getQueue()).toEqual([])
   })
 
   it('saveIdea: правка без изменений — без записи', async () => {
@@ -507,5 +521,175 @@ describe('удаление проекта', () => {
     const repo = await start([projectFile('a'), ideaFile(ID1, { project: 'a', schemaVersion: 9 })])
     await deleteProject('a')
     expect(commits(repo)).toEqual(['commit h0 projects/a.json'])
+  })
+})
+
+const puts = (repo: { log: string[] }, path: string) => repo.log.filter((l) => l === `put ${path}`).length
+
+describe('идеи через очередь правок (ADR-004)', () => {
+  const draftOf = (text: string, id = ID1) => {
+    const d = newIdeaDraft(text, new Date('2026-09-23T14:32:00+03:00'), id)
+    if (!d.ok) throw new Error(d.error)
+    return d
+  }
+
+  it('без сети: идея сразу на экране и в очереди, индикатор её считает; появилась сеть — записана один раз', async () => {
+    const repo = await start([])
+    const d = draftOf('В метро')
+    repo.hooks.down = true
+    await createIdea(d)
+    expect(onScreen(d.path)?.text).toBe(d.text)
+    expect(buildInbox(useSession.getState().files).ideas.map((i) => i.title)).toEqual(['В метро'])
+    expect(useSession.getState().queued).toBe(1)
+    expect(await getQueue()).toMatchObject([{ kind: 'idea', path: d.path, baseSha: '', baseText: d.text, text: d.text }])
+    expect(repo.text(d.path)).toBeUndefined()
+    repo.hooks.down = false
+    await useSession.getState().syncNow()
+    expect(repo.text(d.path)).toBe(d.text)
+    expect(puts(repo, d.path)).toBe(1)
+    expect(useSession.getState().queued).toBe(0)
+    expect(await getQueue()).toEqual([])
+    expect(onScreen(d.path)).toMatchObject({ text: d.text })
+    expect(onScreen(d.path)!.sha).not.toBe('')
+  })
+
+  it('идея без сети переживает перезапуск и уходит после него', async () => {
+    const repo = await start([])
+    const d = draftOf('Не потерять')
+    repo.hooks.down = true
+    await createIdea(d)
+    resetQueueMemory()
+    useSession.setState({ phase: 'booting', files: [] })
+    await useSession.getState().boot()
+    expect(onScreen(d.path)?.text).toBe(d.text)
+    repo.hooks.down = false
+    await useSession.getState().syncNow()
+    expect(repo.text(d.path)).toBe(d.text)
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('повтор после потерянного ответа не создаёт дубль: одна идея, очередь пуста', async () => {
+    const repo = await start([])
+    const d = draftOf('Один раз')
+    repo.hooks.lose = true
+    await createIdea(d)
+    expect(useSession.getState().queued).toBe(1)
+    await useSession.getState().flush()
+    expect(repo.text(d.path)).toBe(d.text)
+    expect((await useSession.getState().remote.listFiles('main')).files.filter((f) => f.path.startsWith('ideas/'))).toHaveLength(1)
+    expect(await getQueue()).toEqual([])
+    // Тот же черновик ещё раз (двойное нажатие) — ничего нового.
+    await createIdea(d)
+    expect(puts(repo, d.path)).toBe(2)
+  })
+
+  it('ответ потерялся, а идею успели поправить на другом устройстве — не конфликт: чужая правка цела, записи нет', async () => {
+    const repo = await start([])
+    const d = draftOf('Моя')
+    repo.hooks.lose = true
+    await createIdea(d)
+    repo.external(d.path, JSON.stringify({ ...JSON.parse(d.text), project: 'hub' }))
+    await useSession.getState().flush()
+    expect(JSON.parse(repo.text(d.path)!)).toMatchObject({ text: 'Моя', project: 'hub' })
+    expect(await getConflicts()).toEqual([])
+    expect(await getQueue()).toEqual([])
+    expect(puts(repo, d.path)).toBe(2)
+  })
+
+  it('без сети текст поменяли и вернули — правка ничего не меняет: в репо не пишется', async () => {
+    const repo = await start([ideaFile(ID1)])
+    repo.hooks.down = true
+    await saveIdea(ID1, { text: 'Другое' })
+    expect(useSession.getState().queued).toBe(1)
+    await saveIdea(ID1, { text: 'Идея 1' })
+    // Писать нечего — правка уходит из очереди сразу, даже без сети.
+    expect(repo.log).toEqual([])
+    expect(useSession.getState().queued).toBe(0)
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('правка новой идеи до отправки — одна запись с последним текстом', async () => {
+    const repo = await start([])
+    const d = draftOf('Черновик')
+    repo.hooks.down = true
+    await createIdea(d)
+    await saveIdea(ID1, { text: 'Чистовик' })
+    await saveIdea(ID1, { project: 'hub' })
+    expect(useSession.getState().queued).toBe(1)
+    expect(JSON.parse(onScreen(d.path)!.text)).toMatchObject({ text: 'Чистовик', project: 'hub' })
+    repo.hooks.down = false
+    await useSession.getState().flush()
+    expect(puts(repo, d.path)).toBe(1)
+    expect(JSON.parse(repo.text(d.path)!)).toMatchObject({ id: ID1, text: 'Чистовик', project: 'hub', createdAt: JSON.parse(d.text).createdAt })
+  })
+
+  it('в репо уже другая идея с тем же именем — не затираем: моя версия во «Входящих»', async () => {
+    const other = ideaFile(ID1, { text: 'Чужая' })
+    const repo = await start([])
+    const d = draftOf('Моя')
+    repo.hooks.down = true
+    await createIdea(d)
+    repo.external(other.path, other.text)
+    repo.hooks.down = false
+    await useSession.getState().flush()
+    expect(repo.text(d.path)).toBe(other.text)
+    const [c] = await getConflicts()
+    expect(c).toMatchObject({ path: d.path, title: 'Моя', refused: { mine: d.text } })
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('без сети правка идеи в очереди; сеть есть, в репо поменяли другое поле — слито, одна запись', async () => {
+    const repo = await start([ideaFile(ID1)])
+    const path = `ideas/${ID1}.json`
+    repo.hooks.down = true
+    await saveIdea(ID1, { text: 'Мой текст' })
+    expect(JSON.parse(onScreen(path)!.text).text).toBe('Мой текст')
+    expect(await getQueue()).toMatchObject([{ kind: 'idea', patch: { text: 'Мой текст' } }])
+    repo.external(path, JSON.stringify({ ...JSON.parse(repo.text(path)!), project: 'hub' }))
+    repo.hooks.down = false
+    await useSession.getState().flush()
+    expect(JSON.parse(repo.text(path)!)).toMatchObject({ text: 'Мой текст', project: 'hub' })
+    expect(await getConflicts()).toEqual([])
+  })
+
+  it('идею удалили в репо, а у меня правка — конфликт «идея удалена», «моя» возвращает её', async () => {
+    const repo = await start([ideaFile(ID1)])
+    const path = `ideas/${ID1}.json`
+    repo.hooks.down = true
+    await saveIdea(ID1, { text: 'Моя правка' })
+    repo.hooks.down = false
+    await useSession.getState().remote.commit('main', [{ path, text: null }], (await useSession.getState().remote.listFiles('main')).head, 'удалить')
+    await useSession.getState().flush()
+    const [c] = await getConflicts()
+    expect(c).toMatchObject({ path, title: 'Моя правка', deleted: {} })
+    await useSession.getState().resolveConflict('main', path, [{ index: 0, pick: 'mine' }])
+    expect(JSON.parse(repo.text(path)!).text).toBe('Моя правка')
+    expect(await getConflicts()).toEqual([])
+  })
+
+  it('удалить идею, которая ещё не ушла в репо, — убрать из очереди; в репо ничего не пишется', async () => {
+    const repo = await start([])
+    const d = draftOf('Передумал')
+    repo.hooks.down = true
+    await createIdea(d)
+    await deleteIdea(ID1)
+    expect(onScreen(d.path)).toBeUndefined()
+    expect(useSession.getState().queued).toBe(0)
+    expect(await getQueue()).toEqual([])
+    repo.hooks.down = false
+    await useSession.getState().syncNow()
+    expect(repo.log).toEqual([])
+  })
+
+  it('«Сделать проектом» из идеи с неотправленной правкой — без сети отказ, идея цела', async () => {
+    const repo = await start([ideaFile(ID1)])
+    repo.hooks.down = true
+    await saveIdea(ID1, { text: 'Правка' })
+    const idea = JSON.parse(onScreen(`ideas/${ID1}.json`)!.text) as Idea
+    const d = projectFromIdeaDraft(idea, { title: 'Правка', status: 'active', nextStep: '' }, [])
+    if (!d.ok) throw new Error(d.error)
+    await expect(makeProjectFromIdea(idea, d)).rejects.toMatchObject({ status: 0 })
+    expect(commits(repo)).toEqual([])
+    expect(useSession.getState().queued).toBe(1)
   })
 })

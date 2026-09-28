@@ -5,14 +5,24 @@
 // и дописывает в конец MIGRATIONS функцию v(n) → v(n+1). Старые функции не меняются и не удаляются.
 // Тест в migrations.test.ts сверяет «отпечаток» формата с таблицей версий и не даст забыть миграцию.
 
-/** Текущая версия формата локального состояния. */
-export const STATE_VERSION = 1
+/**
+ * Текущая версия формата локального состояния.
+ * 2 — запись очереди правок получила kind ('project' | 'idea'): идеи идут через очередь (ADR-004).
+ */
+export const STATE_VERSION = 2
 
 /** Чистая функция: состояние версии n → состояние версии n + 1. Бросает, если привести нельзя. */
 export type Migration = (state: unknown) => unknown
 
 /** MIGRATIONS[i] переводит версию i + 1 в версию i + 2. Длина всегда STATE_VERSION − 1. */
-export const MIGRATIONS: readonly Migration[] = []
+export const MIGRATIONS: readonly Migration[] = [
+  // 1 → 2: формат handoff не менялся. Записи очереди без kind дописывает при чтении localdb.readQueued
+  // (они лежат в IndexedDB по одной, а не в handoff); здесь — только проверка, что это handoff-объект.
+  (state) => {
+    if (typeof state !== 'object' || state === null || Array.isArray(state)) throw new Error('состояние — не объект')
+    return { ...state, stateVersion: 2 }
+  },
+]
 
 export class MigrationError extends Error {
   constructor(message: string) {

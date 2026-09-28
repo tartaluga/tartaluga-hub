@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getCachedFiles, getCurrentBranch, onDbBlocked, wipeDevice } from './localdb'
+import { getCachedFiles, getCurrentBranch, getQueue, getQueued, onDbBlocked, putQueued, readQueued, wipeDevice, type QueuedEdit } from './localdb'
 
 beforeEach(() => wipeDevice())
 
@@ -71,5 +71,28 @@ describe('localdb: несколько вкладок', () => {
     await expect(getCachedFiles('main')).rejects.toThrow()
     await wipeDevice() // «Выйти» стирает базу, и хаб открывает её заново
     expect(await getCachedFiles('main')).toEqual([])
+  })
+})
+
+describe('localdb: записи очереди разных версий', () => {
+  const legacy = { branch: 'main', path: 'projects/a.json', baseSha: 'a1', baseText: '{}', patch: { title: 'Б' }, text: '{}', queuedAt: '2026-09-01T10:00:00+03:00', id: 'x' }
+
+  it('запись без kind (до STATE_VERSION 2) читается как правка проекта', async () => {
+    await putQueued(legacy as unknown as QueuedEdit)
+    expect(await getQueued('main', 'projects/a.json')).toEqual({ ...legacy, kind: 'project' })
+    expect(await getQueue()).toEqual([{ ...legacy, kind: 'project' }])
+  })
+
+  it('запись идеи читается как есть', async () => {
+    const idea: QueuedEdit = { ...legacy, kind: 'idea', path: 'ideas/01J8Z6Y0000000000000000001.json', patch: { text: 'т' } }
+    await putQueued(idea)
+    expect(await getQueue()).toEqual([idea])
+  })
+
+  it('незнакомый kind не угадываем: ошибка, запись на устройстве цела', async () => {
+    const odd = { ...legacy, kind: 'settings' } as unknown as QueuedEdit
+    expect(() => readQueued(odd)).toThrow(/settings/)
+    await putQueued(odd)
+    await expect(getQueue()).rejects.toThrow()
   })
 })

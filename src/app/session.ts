@@ -23,18 +23,20 @@ import {
   wipeDevice,
   type CachedFile,
   type QueuedEdit,
+  type QueueKind,
   type StoredConflict,
 } from '../lib/localdb'
 import { STALE_BUILD } from '../lib/update'
 import { nowIso, parseFile, SCHEMA_VERSIONS, serialize, type WithUnknown } from '../data/model'
 import { merge, MergeRefused, type Json, type JsonObject, type MergeConflict } from '../data/merge'
 import { applyOps, conflictLabel, heldValue, opsFor, sameContent, sameValue, valueAt, type ConflictOp, type ConflictPick } from '../data/conflicts'
-import type { Project } from '../schema/types'
+import type { Idea, Project } from '../schema/types'
 import { normalizeProject } from '../data/normalize'
 import { validateSettings } from '../schema/validators.js'
 import { removeTag, type SettingsChange, type SettingsData } from '../components/TagEditor.model'
 import { untagProjects } from '../data/projects'
 import { applyEdit, mergePatch, type ProjectPatch } from '../data/editProject'
+import { applyIdeaPatch, firstLine, mergeIdeaPatch, type IdeaPatch } from '../data/ideas'
 import { plural } from '../lib/plural'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
@@ -115,6 +117,15 @@ interface Session {
    * отложена (нет сети, нужен вход); если часть правки ушла во «Входящие конфликты» — ошибка QueueConflict.
    */
   saveProject(slug: string, patch: ProjectPatch): Promise<void>
+  /** Правка идеи через ту же очередь (ADR-004): как saveProject, путь ideas/<ulid>.json. */
+  saveIdea(path: string, patch: IdeaPatch): Promise<void>
+  /**
+   * Новая идея через очередь: файла в репо ещё нет, запись уйдёт без sha. Сразу видна на экране. Повторяемо:
+   * та же идея уже в очереди или уже в ветке с тем же содержимым — ничего не делает; другая с этим путём — ошибка.
+   */
+  addIdea(path: string, text: string): Promise<void>
+  /** Новая идея ещё в очереди (в репо её нет) — убрать с устройства и с экрана. true — убрали. */
+  discardNew(path: string): Promise<boolean>
   /**
    * Разрешить входящий конфликт файла: для каждого выбранного места — «моя», «из репо» или текст по кускам.
    * Выбор записывается в свежую версию файла; разрешённые места уходят из списка.
@@ -302,19 +313,38 @@ export const useSession = create<Session>((set, get) => ({
     }
   },
 
-  async saveProject(slug, patch) {
+  saveProject(slug, patch) {
+    return submit(get().branch, `projects/${slug}.json`, 'project', patch)
+  },
+
+  saveIdea(path, patch) {
+    return submit(get().branch, path, 'idea', patch)
+  },
+
+  async addIdea(path, text) {
     const branch = get().branch
-    const path = `projects/${slug}.json`
-    const k = key(branch, path)
-    const mine = enqueue(branch, path, patch)
-    await persistEntry(k)
-    if (!persistAsked) {
-      persistAsked = true
-      void requestPersistence() // ADR-004: чтобы браузер не вычистил очередь при нехватке места; результат не важен
+    if (queue.has(key(branch, path))) return // тот же черновик уже ждёт отправки
+    const file = get().files.find((f) => f.path === path)
+    if (file) {
+      // Прошлая попытка дошла (правило 6 schema/README.md): та же идея — успех, другая — не затираем.
+      if (file.text === text) return
+      throw new ApiError(409, 'conflict', 'Идея с таким номером уже есть — сохрани ещё раз')
     }
-    await get().flush()
-    const problem = problems.get(k)
-    if (problem && problem.seq >= mine) throw problem.error
+    await submit(branch, path, 'idea', {}, text)
+  },
+
+  async discardNew(path) {
+    const branch = get().branch
+    const k = key(branch, path)
+    const live = queue.get(k)
+    if (!live || live.edit.baseSha) return false
+    const id = storedIds.get(k)
+    queue.delete(k)
+    await persistEntry(k, id)
+    publish()
+    await updateConflict(branch, path, () => null)
+    await showCached(branch, path)
+    return true
   },
 
   async resolveConflict(branch, path, picks) {
@@ -559,12 +589,17 @@ export class QueueConflict extends Error {
   }
 }
 
+type Patch = ProjectPatch | IdeaPatch
+
+/** Вид файла записи очереди: записи без kind (до STATE_VERSION 2) — правки проекта. */
+const kindOf = (edit: QueuedEdit): QueueKind => edit.kind ?? 'project'
+
 interface Live {
   edit: QueuedEdit
   /** Растёт с каждой правкой, влитой в ожидающую: так видно, что во время отправки пришло новое. */
   rev: number
   /** Правки с базовой копии по порядку (edit.patch — их слияние). Первые saved уже лежат в IndexedDB. */
-  patches: ProjectPatch[]
+  patches: Patch[]
   saved: number
   /** В памяти есть то, чего ещё нет в IndexedDB. */
   dirty: boolean
@@ -713,19 +748,19 @@ async function reconcile(k: string, sentId?: string): Promise<boolean> {
   }
   const pending = live ? live.patches.slice(live.saved) : []
   const from = live && !storedIds.has(k) && live.edit.queuedAt < stored.queuedAt ? live.edit : stored
-  const patch = pending.reduce((a, p) => mergePatch(a, p), stored.patch)
+  const patch = pending.reduce((a, p) => mergeAny(kindOf(stored), a, p), stored.patch)
   const changed = pending.length > 0 || from !== stored
   const edit: QueuedEdit = changed
-    ? { ...stored, baseSha: from.baseSha, baseText: from.baseText, queuedAt: from.queuedAt, patch, text: render(path, from.baseSha, from.baseText, patch), id: newId() }
+    ? { ...stored, baseSha: from.baseSha, baseText: from.baseText, queuedAt: from.queuedAt, patch, text: render(kindOf(stored), path, from.baseSha, from.baseText, patch), id: newId() }
     : stored
   if (changed) await putQueued(edit)
   storedIds.set(k, idOf(edit))
   // Правки, пришедшие в эту вкладку, пока шла запись, остаются сверху.
   const now = queue.get(k)
   const later = live && now === live ? now.patches.slice(live.saved + pending.length) : []
-  const mine = later.reduce((a, p) => mergePatch(a, p), edit.patch)
+  const mine = later.reduce((a, p) => mergeAny(kindOf(edit), a, p), edit.patch)
   const next: Live = {
-    edit: later.length ? { ...edit, patch: mine, text: render(path, edit.baseSha, edit.baseText, mine) } : edit,
+    edit: later.length ? { ...edit, patch: mine, text: render(kindOf(edit), path, edit.baseSha, edit.baseText, mine) } : edit,
     rev: (now?.rev ?? 0) + 1,
     patches: [edit.patch, ...later],
     saved: 1,
@@ -864,13 +899,18 @@ async function forgetFiles(branch: string, paths: string[]): Promise<void> {
   publishConflicts()
 }
 
-/** Файлы ветки для экрана: у файлов с ожидающей правкой — моя версия. */
+/** Файлы ветки для экрана: у файлов с ожидающей правкой — моя версия; новые файлы из очереди (в репо их ещё нет) — тоже. */
 function overlay(branch: string, files: CachedFile[]): CachedFile[] {
   if (!queue.size) return files
-  return files.map((f) => {
+  const out = files.map((f) => {
     const live = queue.get(key(branch, f.path))
     return live ? { ...f, text: live.edit.text } : f
   })
+  const have = new Set(files.map((f) => f.path))
+  for (const { edit } of queue.values()) {
+    if (edit.branch === branch && !edit.baseSha && !have.has(edit.path)) out.push({ path: edit.path, sha: '', text: edit.text })
+  }
+  return out
 }
 
 /** Показать на экране текущую версию файла из очереди (если ветка открыта). */
@@ -889,36 +929,75 @@ async function showCached(branch: string, path: string): Promise<void> {
   useSession.setState({ files: overlay(branch, cached ? [...files, cached] : files) })
 }
 
-/** Моя версия файла проекта: базовая копия с правкой, нормализованная (ADR-009). */
-function render(path: string, baseSha: string, baseText: string, patch: ProjectPatch): string {
+/** Слить две правки одного файла по его виду. */
+function mergeAny(kind: QueueKind, a: Patch, b: Patch): Patch {
+  return kind === 'idea' ? mergeIdeaPatch(a as IdeaPatch, b as IdeaPatch) : mergePatch(a as ProjectPatch, b as ProjectPatch)
+}
+
+/**
+ * Моя версия файла: базовая копия с правкой. Проект нормализуется (ADR-009), идея — нет (applyIdeaPatch + схема).
+ * Пустой baseSha у идеи — создание: baseText — новый файл, правка ложится на него.
+ */
+function render(kind: QueueKind, path: string, baseSha: string, baseText: string, patch: Patch): string {
   const parsed = parseFile(path, baseSha, baseText)
   if (!parsed.ok) throw new ApiError(422, 'validation', `Файл не читается: ${parsed.error}`)
   if (parsed.readOnly) throw new ApiError(422, 'validation', parsed.reason)
+  if (parsed.kind !== kind) throw new ApiError(422, 'validation', `${path}: не тот вид файла для правки`)
+  if (kind === 'idea') {
+    const r = applyIdeaPatch(parsed.data as WithUnknown<Idea>, patch as IdeaPatch)
+    if (!r.ok) throw new ApiError(422, 'validation', r.error)
+    return r.changed ? serialize(r.data) : baseText
+  }
   const prev = parsed.data as WithUnknown<Project>
-  return serialize(normalizeProject(prev, applyEdit(prev, patch) as WithUnknown<Project>))
+  return serialize(normalizeProject(prev, applyEdit(prev, patch as ProjectPatch) as WithUnknown<Project>))
 }
 
-/** Положить правку в очередь: новая правка файла сливается с ожидающей, база остаётся прежней. Возвращает номер правки. */
-function enqueue(branch: string, path: string, patch: ProjectPatch): number {
+/**
+ * Положить правку в очередь: новая правка файла сливается с ожидающей, база остаётся прежней. Возвращает номер правки.
+ * created — текст нового файла (создание идеи): база — «файла нет».
+ */
+function enqueue(branch: string, path: string, kind: QueueKind, patch: Patch, created?: string): number {
   const k = key(branch, path)
   const live = queue.get(k)
   if (live) {
-    const merged = mergePatch(live.edit.patch, patch)
-    live.edit = { ...live.edit, patch: merged, text: render(path, live.edit.baseSha, live.edit.baseText, merged) }
+    const merged = mergeAny(kind, live.edit.patch, patch)
+    live.edit = { ...live.edit, patch: merged, text: render(kind, path, live.edit.baseSha, live.edit.baseText, merged) }
     live.patches.push(patch)
     live.rev++
     live.dirty = true
   } else {
     const state = useSession.getState()
     if (state.branch !== branch) throw new ApiError(0, 'network', 'Открыта другая ветка — правка не сохранена')
-    const file = state.files.find((f) => f.path === path)
-    if (!file) throw new ApiError(404, 'not_found', 'Проекта больше нет в этой ветке')
-    const text = render(path, file.sha, file.text, patch)
-    queue.set(k, { edit: { branch, path, baseSha: file.sha, baseText: file.text, patch, text, queuedAt: nowIso() }, rev: 0, patches: [patch], saved: 0, dirty: true, epoch: 0 })
+    const file = created === undefined ? state.files.find((f) => f.path === path) : { sha: '', text: created }
+    if (!file) throw new ApiError(404, 'not_found', kind === 'idea' ? 'Идеи больше нет в этой ветке' : 'Проекта больше нет в этой ветке')
+    const text = render(kind, path, file.sha, file.text, patch)
+    queue.set(k, { edit: { kind, branch, path, baseSha: file.sha, baseText: file.text, patch, text, queuedAt: nowIso() }, rev: 0, patches: [patch], saved: 0, dirty: true, epoch: 0 })
   }
   showEdit(branch)
   publish()
   return ++seq
+}
+
+/**
+ * Правка через очередь (ADR-004): сразу на экране и в IndexedDB, потом отправка. Промис завершается, когда правка
+ * записана или отложена (нет сети, нужен вход); если часть правки ушла во «Входящие конфликты» — QueueConflict.
+ */
+async function submit(branch: string, path: string, kind: QueueKind, patch: Patch, created?: string): Promise<void> {
+  const k = key(branch, path)
+  const mine = enqueue(branch, path, kind, patch, created)
+  await persistEntry(k)
+  if (!persistAsked) {
+    persistAsked = true
+    void requestPersistence() // ADR-004: чтобы браузер не вычистил очередь при нехватке места; результат не важен
+  }
+  await useSession.getState().flush()
+  const problem = problems.get(k)
+  if (problem && problem.seq >= mine) throw problem.error
+}
+
+/** Есть ли у файла ветки неотправленная правка (в памяти этой вкладки). */
+export function hasQueued(branch: string, path: string): boolean {
+  return queue.has(key(branch, path))
 }
 
 /** Разбор цикла отправки: по одному файлу, по порядку правок. */
@@ -966,8 +1045,14 @@ async function send(live: Live): Promise<SendResult> {
   const snap = snapOf(live)
   const sent = live.edit
   let sha: string
+  // Правка вернула файл к базе (например, текст поменяли и вернули): писать нечего.
+  if (sent.baseSha && sent.text === sent.baseText) {
+    await written(live, snap, sent.baseSha, sent.text)
+    return 'next'
+  }
   try {
-    sha = (await remote.putFile(branch, path, sent.text, sent.baseSha)).sha
+    // Пустой baseSha — создание: без sha, повторяемо (сервер: тот же файл — успех, другой — 409).
+    sha = (await remote.putFile(branch, path, sent.text, sent.baseSha || undefined)).sha
   } catch (e) {
     // Файл изменили (или удалили) в другом месте — перечитываем и сливаем (ADR-004, шаги 1–4).
     if (e instanceof ApiError && ((e.status === 409 && e.code !== STALE_BUILD) || e.status === 404)) {
@@ -1009,8 +1094,9 @@ function settle(live: Live, snap: Snap, saved: CachedFile): void {
   // Правку целиком заменила запись другой вкладки — какие правки новые, не знаем: берём все.
   const same = live.epoch === snap.epoch
   const later = same ? live.patches.slice(snap.n) : live.patches
-  const patch = later.slice(1).reduce((a, p) => mergePatch(a, p), later[0] ?? live.edit.patch)
-  live.edit = { ...live.edit, baseSha: saved.sha, baseText: saved.text, patch, text: render(saved.path, saved.sha, saved.text, patch) }
+  const kind = kindOf(live.edit)
+  const patch = later.slice(1).reduce((a, p) => mergeAny(kind, a, p), later[0] ?? live.edit.patch)
+  live.edit = { ...live.edit, baseSha: saved.sha, baseText: saved.text, patch, text: render(kind, saved.path, saved.sha, saved.text, patch) }
   live.saved = same ? Math.max(0, live.saved - snap.n) : live.saved
   live.patches = later.length ? later : [patch]
   live.dirty = true
@@ -1036,16 +1122,22 @@ function parseDoc(text: string, what: string): JsonObject {
   return v as JsonObject
 }
 
-/** Нормализовать слитый файл и проверить его схемой до отправки. */
+const isIdeaPath = (path: string) => path.startsWith('ideas/')
+
+/** Тот же созданный файл: совпадают id и момент создания (идея — ULID и createdAt из черновика). */
+const sameOrigin = (a: JsonObject, b: JsonObject) => typeof a.id === 'string' && a.id === b.id && typeof a.createdAt === 'string' && a.createdAt === b.createdAt
+
+/** Нормализовать слитый файл (только проект, ADR-009) и проверить его схемой до отправки. */
 function finish(path: string, prev: JsonObject, next: JsonObject): JsonObject {
-  const out = normalizeProject(prev as WithUnknown<Project>, next as WithUnknown<Project>) as JsonObject
+  const out = isIdeaPath(path) ? next : (normalizeProject(prev as WithUnknown<Project>, next as WithUnknown<Project>) as JsonObject)
   const parsed = parseFile(path, '', serialize(out))
   if (!parsed.ok) throw new MergeRefused(`после слияния файл не проходит проверку: ${parsed.error}`)
   return out
 }
 
-/** Файл из репо так, как хаб записал бы его без правок: нормализованный (ADR-009). */
-const asWritten = (doc: JsonObject) => normalizeProject(doc as WithUnknown<Project>, doc as WithUnknown<Project>) as JsonObject
+/** Файл из репо так, как хаб записал бы его без правок: проект — нормализованный (ADR-009), идея — как есть. */
+const asWritten = (path: string, doc: JsonObject) =>
+  isIdeaPath(path) ? doc : (normalizeProject(doc as WithUnknown<Project>, doc as WithUnknown<Project>) as JsonObject)
 
 /**
  * Конфликт версий (ADR-004): перечитать файл; тот же sha — ложный конфликт, повтор без слияния; иначе трёхстороннее
@@ -1059,6 +1151,24 @@ async function mergeAndSend(live: Live): Promise<void> {
     const snap = snapOf(live)
     const mine = live.edit
     const fresh = await readFresh(branch, path)
+    if (!mine.baseSha) {
+      // Создание (правило 6 schema/README.md): файла нет — повторяем; тот же файл уже есть — прошлая попытка дошла.
+      if (!fresh) {
+        try {
+          const { sha } = await remote.putFile(branch, path, mine.text)
+          return written(live, snap, sha, mine.text)
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 409 && e.code !== STALE_BUILD) continue
+          throw e
+        }
+      }
+      // Файл уже есть. Если это моя идея (тот же id и момент создания) — прошлая попытка дошла, а потом её могли
+      // править (другая вкладка, другое устройство): обычное трёхстороннее слияние от созданного файла.
+      // Другая идея с тем же именем — не затираем, моя версия уходит во «Входящие».
+      if (!sameOrigin(parseDoc(mine.baseText, 'Моя версия'), parseDoc(fresh.text, 'Файл в репо'))) {
+        throw new MergeRefused('в репо уже есть другой файл с этим именем — моя версия не записана, чтобы его не затереть')
+      }
+    }
     if (!fresh) return recordDeleted(live)
     if (fresh.sha === mine.baseSha) {
       // Ветку сдвинул коммит в другой файл: наш файл тот же, повторяем запись как есть.
@@ -1072,11 +1182,11 @@ async function mergeAndSend(live: Live): Promise<void> {
     }
     const theirs = parseDoc(fresh.text, 'Файл в репо')
     const local = parseDoc(mine.text, 'Моя версия')
-    const { merged, conflicts } = merge('project', parseDoc(mine.baseText, 'Базовая копия'), local, theirs)
+    const { merged, conflicts } = merge(kindOf(mine), parseDoc(mine.baseText, 'Базовая копия'), local, theirs)
     const next = finish(path, theirs, merged)
     let saved: CachedFile = fresh
     // Моя правка уже в репо (ответ прошлой записи потерялся) — писать нечего, кроме времени и нормализации.
-    if (!sameContent(next, asWritten(theirs))) {
+    if (!sameContent(next, asWritten(path, theirs))) {
       const text = serialize(next)
       try {
         saved = { path, sha: (await remote.putFile(branch, path, text, fresh.sha)).sha, text }
@@ -1162,26 +1272,30 @@ function titleOf(...texts: (string | JsonObject | undefined)[]): string | undefi
     }
     const title = doc && typeof doc === 'object' ? (doc as { title?: unknown }).title : undefined
     if (typeof title === 'string' && title.trim()) return title
+    // У идеи названия нет: заголовок — первая строка текста.
+    const text = doc && typeof doc === 'object' ? (doc as { text?: unknown }).text : undefined
+    if (typeof text === 'string' && firstLine(text)) return firstLine(text)
   }
   return undefined
 }
 
 /** Записать конфликт файла. Спорные места того же файла, которые ещё не разобраны, остаются; одинаковые — заменяются. */
 async function recordConflict(branch: string, path: string, problem: Problem): Promise<void> {
-  problems.set(key(branch, path), { seq, error: new QueueConflict(problemMessage(problem)) })
+  problems.set(key(branch, path), { seq, error: new QueueConflict(problemMessage(path, problem)) })
   await updateConflict(branch, path, (prev) => withProblem(branch, path, prev, problem))
 }
 
-function problemMessage(problem: Problem): string {
+function problemMessage(path: string, problem: Problem): string {
   if ('items' in problem)
     return `Эти поля одновременно поменяли в другом месте: ${problem.items.map((it) => conflictLabel(it, problem.local, problem.remote)).join(', ')}. Остальное записано, выбор — во «Входящих конфликтах».`
   if ('refused' in problem) return `Правка не записана: ${problem.refused.reason}. Она сохранена во «Входящих конфликтах».`
+  if (isIdeaPath(path)) return 'Идею удалили в другом месте. Твоя правка — во «Входящих конфликтах»: можно вернуть идею или согласиться с удалением.'
   return 'Проект удалили в другом месте. Твоя правка — во «Входящих конфликтах»: можно вернуть проект или согласиться с удалением.'
 }
 
 /** Конфликт с новой проблемой поверх прежнего: спорные места, которые ещё не разобраны, остаются; одинаковые — заменяются. */
 function withProblem(branch: string, path: string, prev: StoredConflict | undefined, problem: Problem): StoredConflict {
-  const slug = path.replace(/^projects\/|\.json$/g, '')
+  const slug = path.replace(/^(projects|ideas)\/|\.json$/g, '')
   const rec: StoredConflict = {
     branch,
     path,
@@ -1281,7 +1395,7 @@ async function writeOps(branch: string, path: string, chosen: Chosen[]): Promise
     } catch (e) {
       throw new ApiError(422, 'validation', e instanceof Error ? e.message : 'Файл не проходит проверку')
     }
-    if (sameContent(next, asWritten(doc))) return stale
+    if (sameContent(next, asWritten(path, doc))) return stale
     const text = serialize(next)
     try {
       const { sha } = await remote.putFile(branch, path, text, fresh.sha)

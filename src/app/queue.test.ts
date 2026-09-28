@@ -884,3 +884,69 @@ describe('разбор конфликтов: гонки', () => {
     expect(JSON.parse(srv.text('main', PATH))).toMatchObject({ title: 'С телефона', status: 'paused', nextStep: 'новое' })
   })
 })
+
+describe('идеи в очереди (ADR-004): создание повторяемо', () => {
+  const IDEA = 'ideas/01J8Z6Y0000000000000000001.json'
+  const ideaText = (text: string) => JSON.stringify({ schemaVersion: 1, id: '01J8Z6Y0000000000000000001', text, createdAt: '2026-09-23T14:32:00+03:00' })
+
+  it('ответ на создание потерялся — повтор видит тот же файл в репо: успех, записан один раз', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    const put = srv.remote.putFile.bind(srv.remote)
+    let lost = false
+    srv.remote.putFile = async (...args) => {
+      const res = await put(...args)
+      if (!lost) {
+        lost = true
+        throw new ApiError(0, 'network', 'ответ потерялся')
+      }
+      return res
+    }
+    await useSession.getState().addIdea(IDEA, ideaText('Идея'))
+    expect(useSession.getState().queued).toBe(1)
+    await useSession.getState().flush() // сервер строгий: создание поверх готового файла — 409, дальше сверка
+    expect(srv.state.writes).toEqual([`main ${IDEA}`])
+    expect(srv.text('main', IDEA)).toBe(ideaText('Идея'))
+    expect(useSession.getState().queued).toBe(0)
+    expect(useSession.getState().conflicts).toEqual([])
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('две вкладки отправляют новую идею одновременно — она создаётся один раз', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.down = true
+    await useSession.getState().addIdea(IDEA, ideaText('Из метро'))
+    const b = await secondTab(srv)
+    expect(b.useSession.getState().queued).toBe(1)
+    expect(b.useSession.getState().files.find((f) => f.path === IDEA)?.text).toBe(ideaText('Из метро'))
+    srv.state.down = false
+    await Promise.all([useSession.getState().flush(), b.useSession.getState().flush()])
+    expect(srv.state.writes).toEqual([`main ${IDEA}`])
+    expect(useSession.getState().queued).toBe(0)
+    expect(b.useSession.getState().queued).toBe(0)
+    expect(useSession.getState().conflicts).toEqual([])
+    expect(b.useSession.getState().conflicts).toEqual([])
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('правки идеи из двух вкладок сливаются в одну запись поверх создания; дописанное другой вкладкой не теряется', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.down = true
+    await useSession.getState().addIdea(IDEA, ideaText('Черновик'))
+    const b = await secondTab(srv)
+    await b.useSession.getState().saveIdea(IDEA, { project: 'a' })
+    await useSession.getState().saveIdea(IDEA, { text: 'Чистовик' })
+    const queue = await getQueue()
+    expect(queue).toHaveLength(1)
+    expect(queue[0]).toMatchObject({ kind: 'idea', baseSha: '', patch: { text: 'Чистовик', project: 'a' } })
+    srv.state.down = false
+    // B отправляет свою версию (создание), о правке A не зная; запись A после этого — обычная правка созданного файла.
+    await b.useSession.getState().flush()
+    expect(JSON.parse(srv.text('main', IDEA))).toMatchObject({ text: 'Чистовик', project: 'a' })
+    expect(b.useSession.getState().conflicts).toEqual([])
+    expect(b.useSession.getState().queued).toBe(0)
+    expect(await getQueue()).toEqual([])
+  })
+})

@@ -10,6 +10,12 @@ describe('подписи спорных мест', () => {
   it('поле верхнего уровня — по-русски, незнакомое — как есть', () => {
     expect(conflictLabel(field(['nextStep'], 'а', 'б', 'в'), {}, {})).toBe('следующий шаг')
     expect(conflictLabel(field(['x-custom'], 1, 2, 3), {}, {})).toBe('x-custom')
+    // Поля идеи и ключи, совпадающие со свойствами прототипа.
+    expect(conflictLabel(field(['text'], 'а', 'б', 'в'), {}, {})).toBe('текст')
+    expect(conflictLabel(field(['project'], 'a', 'b', 'c'), {}, {})).toBe('привязка к проекту')
+    expect(conflictLabel(field(['tags'], [], ['x'], ['y']), {}, {})).toBe('теги')
+    expect(conflictLabel(field(['constructor'], 1, 2, 3), {}, {})).toBe('constructor')
+    expect(conflictLabel(field(['toString'], 1, 2, 3), {}, {})).toBe('toString')
   })
 
   it('поле элемента — имя элемента из репо и поле', () => {
