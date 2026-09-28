@@ -330,7 +330,7 @@ export const useSession = create<Session>((set, get) => ({
     if (file) {
       // Прошлая попытка дошла (правило 6 schema/README.md): та же идея — успех, другая — не затираем.
       if (file.text === text) return
-      throw new ApiError(409, 'conflict', 'Идея с таким номером уже есть — сохрани ещё раз')
+      throw new ApiError(409, 'conflict', 'Идея с таким номером уже есть в репо, и она другая — не сохранено')
     }
     await submit(branch, path, 'idea', {}, text)
   },
@@ -338,6 +338,8 @@ export const useSession = create<Session>((set, get) => ({
   async discardNew(path) {
     const branch = get().branch
     const k = key(branch, path)
+    // Запись уже летит на сервер — дождаться ответа: дошла — файл в репо, и его удалит обычное удаление.
+    while (sendingKey === k) await sendingDone
     const live = queue.get(k)
     if (!live || live.edit.baseSha) return false
     const id = storedIds.get(k)
@@ -1047,7 +1049,23 @@ type SendResult = 'next' | 'later' | 'auth'
 
 const snapOf = (live: Live): Snap => ({ rev: live.rev, epoch: live.epoch, n: live.patches.length, id: storedIds.get(key(live.edit.branch, live.edit.path)) })
 
+/** Какой файл эта вкладка сейчас отправляет и когда закончит: discardNew ждёт, чтобы не разойтись с сервером. */
+let sendingKey: string | null = null
+let sendingDone: Promise<unknown> = Promise.resolve()
+
 async function send(live: Live): Promise<SendResult> {
+  const k = key(live.edit.branch, live.edit.path)
+  const p = sendOne(live)
+  sendingKey = k
+  sendingDone = p.catch(() => undefined)
+  try {
+    return await p
+  } finally {
+    if (sendingKey === k) sendingKey = null
+  }
+}
+
+async function sendOne(live: Live): Promise<SendResult> {
   const { branch, path } = live.edit
   // Что успела сделать с этой правкой другая вкладка, сообщает BroadcastChannel; если она уже отправила правку,
   // повтор получит 409 и слияние увидит, что писать нечего.
@@ -1132,7 +1150,8 @@ function parseDoc(text: string, what: string): JsonObject {
   return v as JsonObject
 }
 
-const isIdeaPath = (path: string) => path.startsWith('ideas/')
+/** Файл идеи (ideas/<ulid>.json), а не проекта. */
+export const isIdeaPath = (path: string) => path.startsWith('ideas/')
 
 /** Тот же созданный файл: совпадают id и момент создания (идея — ULID и createdAt из черновика). */
 const sameOrigin = (a: JsonObject, b: JsonObject) => typeof a.id === 'string' && a.id === b.id && typeof a.createdAt === 'string' && a.createdAt === b.createdAt

@@ -681,6 +681,50 @@ describe('идеи через очередь правок (ADR-004)', () => {
     expect(repo.log).toEqual([])
   })
 
+  it('удалить идею, пока её создание летит на сервер, — дождаться ответа и удалить из репо: идея не воскресает', async () => {
+    const repo = await start([])
+    const d = draftOf('Передумал на лету')
+    const put = repo.remote.putFile
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const inFlight = new Promise<void>((r) => (started = r))
+    repo.remote.putFile = async (...a) => {
+      started()
+      await gate
+      return put(...a)
+    }
+    const creating = createIdea(d)
+    await inFlight
+    const deleting = deleteIdea(ID1)
+    // Удаление успевает дойти до конца, если не ждёт ответа на создание: даём ему время, потом сервер отвечает.
+    await new Promise((r) => setTimeout(r, 30))
+    release()
+    await creating
+    await deleting
+    expect(repo.text(d.path)).toBeUndefined()
+    expect(onScreen(d.path)).toBeUndefined()
+    await useSession.getState().syncNow()
+    expect(onScreen(d.path)).toBeUndefined()
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('создание дошло, ответ потерялся, идея ещё в очереди — удаление при сети удаляет её и из репо', async () => {
+    const repo = await start([])
+    const d = draftOf('Дошла молча')
+    repo.hooks.lose = true
+    await createIdea(d)
+    expect(useSession.getState().queued).toBe(1)
+    expect(repo.text(d.path)).toBe(d.text)
+    await deleteIdea(ID1)
+    expect(repo.text(d.path)).toBeUndefined()
+    expect(onScreen(d.path)).toBeUndefined()
+    expect(useSession.getState().queued).toBe(0)
+    await useSession.getState().syncNow()
+    expect(repo.text(d.path)).toBeUndefined()
+    expect(onScreen(d.path)).toBeUndefined()
+  })
+
   it('«Сделать проектом» из идеи с неотправленной правкой — без сети отказ, идея цела', async () => {
     const repo = await start([ideaFile(ID1)])
     repo.hooks.down = true

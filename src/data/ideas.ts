@@ -283,11 +283,25 @@ export async function deleteProject(slug: string): Promise<void> {
   await useSession.getState().deleteFiles((tree) => projectPaths(slug, tree.paths), `Хаб: удалить проект ${slug}`, (files) => unlinkIdeasChanges(slug, files))
 }
 
-/** Удалить идею одним коммитом. Уже удалена — успех. Идея ещё не ушла в репо (создана без сети) — убрать из очереди. */
+/**
+ * Удалить идею одним коммитом. Уже удалена — успех. Идея ещё в очереди (создана без сети) — убрать из очереди,
+ * а при сети всё равно удалить из репо: прошлая попытка создания могла дойти, а ответ потеряться.
+ * Без сети — только с устройства.
+ */
 export async function deleteIdea(id: string): Promise<void> {
   const path = `ideas/${id}.json`
-  if (await useSession.getState().discardNew(path)) return
-  await useSession.getState().deleteFiles(() => [path], `Идеи: удалить ${id}`)
+  const session = useSession.getState()
+  if (await session.discardNew(path)) {
+    try {
+      await useSession.getState().refresh() // свежее дерево: в нём видно, дошло ли создание
+      if (useSession.getState().sync === 'offline') return
+      await useSession.getState().deleteFiles(() => [path], `Идеи: удалить ${id}`)
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 0)) throw e
+    }
+    return
+  }
+  await session.deleteFiles(() => [path], `Идеи: удалить ${id}`)
 }
 
 async function freshTree(previousHead?: string) {
