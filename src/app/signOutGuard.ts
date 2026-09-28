@@ -78,7 +78,22 @@ export async function collectUnsent(): Promise<Unsent> {
 /** Сколько неотправленного на устройстве по всем веткам; конфликты считаются по спорным местам, как в меню. */
 export async function unsentCounts(): Promise<UnsentCounts> {
   const u = await collectUnsent()
-  return { edits: u.edits.length, conflicts: conflictCount(u.conflicts), unknown: u.unknown }
+  return { edits: u.edits.length, conflicts: safeConflictCount(u.conflicts), unknown: u.unknown }
+}
+
+/** Как в меню, но битая запись (без `items`) считается одним конфликтом, а не роняет подсчёт. */
+function safeConflictCount(list: readonly StoredConflict[]): number {
+  try {
+    return conflictCount(list)
+  } catch {
+    return list.reduce((n, c) => {
+      try {
+        return n + conflictCount([c])
+      } catch {
+        return n + 1
+      }
+    }, 0)
+  }
 }
 
 /** «2 неотправленные правки и 1 конфликт сотрутся с этого устройства». */
@@ -98,7 +113,12 @@ let askSeq = 0
 
 /** Спросить перед стиранием устройства. Второй вопрос поверх открытого закрывает первый отказом. */
 export async function confirmDataLoss(scope: SignOutScope): Promise<GuardAnswer> {
-  const counts = await unsentCounts()
+  let counts: UnsentCounts
+  try {
+    counts = await unsentCounts()
+  } catch {
+    counts = { edits: 0, conflicts: 0, unknown: true }
+  }
   if (counts.edits === 0 && counts.conflicts === 0 && !counts.unknown) return 'clean'
   return new Promise((resolve) => {
     useSignOutGuard.getState().ask?.resolve('cancel')
@@ -115,9 +135,10 @@ export function answerSignOut(erase: boolean): void {
 }
 
 /** «Скачать неотправленное»: свежий снимок памяти и IndexedDB в JSON. Из диалога не выходит. */
-export async function downloadUnsent(now = new Date()): Promise<void> {
+export async function downloadUnsent(now = new Date()): Promise<{ unknown: boolean }> {
   const u = await collectUnsent()
   downloadJson(unsentFileName(now), buildUnsentExport(u.edits, u.conflicts, now))
+  return { unknown: u.unknown }
 }
 
 /** Выход с этого устройства через стража: signOut только если стирать нечего или владелец согласился. */

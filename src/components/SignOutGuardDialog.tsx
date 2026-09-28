@@ -17,7 +17,7 @@ export function SignOutGuardDialog() {
 
 function GuardDialog({ ask }: { ask: SignOutAsk }) {
   const ref = useRef<HTMLDialogElement>(null)
-  const [saved, setSaved] = useState(false)
+  const [saved, setSaved] = useState<'ok' | 'unsure' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -30,8 +30,8 @@ function GuardDialog({ ask }: { ask: SignOutAsk }) {
 
   const download = async () => {
     try {
-      await downloadUnsent()
-      setSaved(true)
+      const { unknown } = await downloadUnsent()
+      setSaved(unknown ? 'unsure' : 'ok')
       setError(null)
     } catch (e) {
       setError(`Не удалось скачать: ${e instanceof Error ? e.message : String(e)}`)
@@ -63,7 +63,9 @@ function GuardDialog({ ask }: { ask: SignOutAsk }) {
         </div>
         {saved && (
           <p className={css.saved} role="status">
-            Файл скачан. Проверь, что он сохранился, прежде чем стирать.
+            {saved === 'unsure'
+              ? 'Файл скачан, но проверить устройство не удалось — он может быть неполным.'
+              : 'Файл скачан. Проверь, что он сохранился, прежде чем стирать.'}
           </p>
         )}
         {error && (

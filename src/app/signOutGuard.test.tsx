@@ -155,6 +155,17 @@ describe('signOutGuard: решение', () => {
     expect(signOut).not.toHaveBeenCalled()
   })
 
+  it('битая запись конфликта без items — считается за один, диалог показан', async () => {
+    vi.mocked(localdb.getConflicts).mockResolvedValueOnce([{ branch: 'main', path: 'projects/b.json' } as unknown as StoredConflict])
+    const signOut = vi.fn(async () => undefined)
+    const done = guardedSignOut(signOut)
+    await asked()
+    expect(useSignOutGuard.getState().ask?.counts).toMatchObject({ edits: 0, conflicts: 1 })
+    answerSignOut(false)
+    await expect(done).resolves.toBe(false)
+    expect(signOut).not.toHaveBeenCalled()
+  })
+
   it('IndexedDB не отвечает (заблокирована) — по таймауту вопрос', async () => {
     vi.useFakeTimers()
     try {
@@ -239,6 +250,18 @@ describe('SignOutGuardDialog', () => {
     await click(buttonText('Стереть и выйти'))
     await done
     expect(signOut).toHaveBeenCalledOnce()
+  })
+
+  it('снимок при скачивании неизвестен — «может быть неполным»', async () => {
+    await act(async () => root.render(<SignOutGuardDialog />))
+    snap.edits = [edit('projects/a.json')]
+    const done = guardedSignOut(vi.fn(async () => undefined))
+    await asked()
+    vi.mocked(localdb.getQueue).mockRejectedValueOnce(new Error('сломано'))
+    await click(buttonText('Скачать неотправленное'))
+    await act(() => vi.waitFor(() => expect(host.querySelector('dialog')!.textContent).toContain('он может быть неполным')))
+    answerSignOut(false)
+    await done
   })
 
   it('Esc и «Отмена» — не выходим', async () => {
