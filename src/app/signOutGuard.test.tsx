@@ -206,7 +206,7 @@ describe('signOutGuard: решение', () => {
     const stored = dbEdit('projects/b.json')
     await localdb.putQueued(stored)
     await downloadUnsent(new Date(2026, 8, 29, 14, 30))
-    expect(downloadJson).toHaveBeenCalledWith('hub-unsent-2026-09-29-1430.json', { edits: [snap.edits[0], stored], conflicts: [] })
+    expect(downloadJson).toHaveBeenCalledWith('hub-unsent-2026-09-29-1430.json', { edits: [snap.edits[0], { ...stored, kind: 'project' }], conflicts: [] })
   })
 })
 
