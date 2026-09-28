@@ -16,11 +16,13 @@ interface Props {
   taken: string[]
   open: boolean
   onToggle(open: boolean): void
+  /** Ошибка удаления уходит на экран: к её появлению строка уже может быть размонтирована. */
+  onDeleteError?(text: string): void
 }
 
 const NO_PROJECT = ''
 
-export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
+export function IdeaRow({ idea, projects, taken, open, onToggle, onDeleteError }: Props) {
   const [making, setMaking] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const removeButton = useRef<HTMLButtonElement>(null)
@@ -52,7 +54,14 @@ export function IdeaRow({ idea, projects, taken, open, onToggle }: Props) {
   /** Удаление — после подтверждения внутри страницы (как у тегов). */
   function remove() {
     setConfirming(false)
-    void run('идея не удалена', () => deleteIdea(idea.id))
+    void run('идея не удалена', async () => {
+      try {
+        await deleteIdea(idea.id)
+      } catch (e) {
+        if (!onDeleteError) throw e
+        onDeleteError(ideaErrorText(e, 'идея не удалена'))
+      }
+    })
   }
 
   function cancelRemove() {

@@ -1,6 +1,7 @@
 // «Идеи» по макету 2b: быстрый захват, список с фильтром по привязке к проекту, колонка «Стали проектами».
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
+import { X } from '@phosphor-icons/react'
 import { useSession } from '../app/session'
 import { Cover } from '../components/Cover'
 import { IdeaCapture } from '../components/IdeaCapture'
@@ -29,6 +30,7 @@ export function Ideas() {
   const tree = useSession((s) => s.tree)
   const [filter, setFilter] = useState<IdeaFilter>('all')
   const [openId, setOpenId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const inbox = useMemo(() => buildInbox(files), [files])
   const taken = useMemo(() => takenSlugs(tree?.paths ?? files.map((f) => f.path)), [tree, files])
   const shown = filterIdeas(inbox.ideas, filter)
@@ -42,6 +44,15 @@ export function Ideas() {
       </header>
 
       <IdeaCapture />
+
+      {notice && (
+        <div className={css.notice} role="alert">
+          <span>{notice}</span>
+          <button type="button" className={css.noticeClose} aria-label="Закрыть уведомление" onClick={() => setNotice(null)}>
+            <X size={16} aria-hidden />
+          </button>
+        </div>
+      )}
 
       <div className={css.columns}>
         <div className={css.main}>
@@ -63,6 +74,7 @@ export function Ideas() {
                   taken={taken}
                   open={openId === idea.id}
                   onToggle={(open) => setOpenId(open ? idea.id : null)}
+                  onDeleteError={setNotice}
                 />
               ))}
             </ul>

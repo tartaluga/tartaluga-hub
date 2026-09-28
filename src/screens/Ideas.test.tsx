@@ -1,3 +1,6 @@
+// @vitest-environment happy-dom
+import { act, useSyncExternalStore } from 'react'
+import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
@@ -5,10 +8,31 @@ import { Ideas, ideasEyebrow } from './Ideas'
 
 // Серверный рендер zustand берёт начальное состояние стора, поэтому стор подменяем простым объектом.
 const mockState = vi.hoisted(() => ({ files: [] as { path: string; sha: string; text: string }[], branch: 'main', tree: null }))
+const listeners = vi.hoisted(() => new Set<() => void>())
 vi.mock('../app/session', async (importOriginal) => {
   const real = await importOriginal<typeof import('../app/session')>()
-  const useSession = Object.assign((sel: (s: typeof mockState) => unknown) => sel(mockState), { getState: () => mockState })
+  const useSession = Object.assign(
+    (sel: (s: typeof mockState) => unknown) =>
+      useSyncExternalStore(
+        (l) => (listeners.add(l), () => void listeners.delete(l)),
+        () => sel(mockState),
+        () => sel(mockState),
+      ),
+    { getState: () => mockState },
+  )
   return { ...real, useSession }
+})
+vi.mock('../data/ideas', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../data/ideas')>()
+  return {
+    ...real,
+    // Как настоящая: неотправленная идея убрана с экрана, а сверка не удалась.
+    deleteIdea: vi.fn(async (id: string) => {
+      mockState.files = mockState.files.filter((f) => f.path !== `ideas/${id}.json`)
+      listeners.forEach((l) => l())
+      throw new (await import('../lib/api')).ApiError(0, 'local_only', real.DELETED_ONLY_ON_DEVICE)
+    }),
+  }
 })
 
 const idea = (id: string, extra: object) => ({
@@ -87,5 +111,33 @@ describe('Ideas', () => {
     const html = render()
     expect(html).not.toContain('<img')
     expect(html).toContain('&lt;img')
+  })
+
+  it('ошибка удаления неотправленной идеи видна в уведомлении экрана, когда строки уже нет', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const id = '01J8Z6Y0000000000000000009'
+    mockState.files = [idea(id, { text: 'Летучая идея' })]
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={['/ideas']}>
+          <Ideas />
+        </MemoryRouter>,
+      ),
+    )
+    const button = (text: string) => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === text)!
+    await act(async () => button('Летучая идея').click())
+    await act(async () => button('Удалить').click())
+    await act(async () => button('Удалить идею').click())
+    await act(async () => {})
+    expect(host.textContent).not.toContain('Летучая идея')
+    const alert = host.querySelector('[role="alert"]')!
+    expect(alert.textContent).toContain('Идея удалена только с устройства')
+    await act(async () => alert.querySelector<HTMLButtonElement>('button[aria-label="Закрыть уведомление"]')!.click())
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
   })
 })

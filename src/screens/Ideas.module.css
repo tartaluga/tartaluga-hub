@@ -78,6 +78,30 @@
   color: var(--text-muted);
 }
 
+.notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--magenta);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface);
+  color: var(--magenta);
+  font-size: 14px;
+}
+
+.noticeClose {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  padding: 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
 .broken {
   display: grid;
   gap: var(--space-2);
