@@ -235,10 +235,10 @@ export function unlinkIdeasChanges(slug: string, files: CachedFile[], now = new 
 
 // ---------- Запись ----------
 
-/** Текст ошибки записи для человека. */
 /** Код ошибки: сделано только на устройстве, текст ошибки — для экрана как есть. */
 const LOCAL_ONLY = 'local_only'
 
+/** Текст ошибки записи для человека. */
 export function ideaErrorText(e: unknown, what: string): string {
   if (e instanceof ApiError && e.code === LOCAL_ONLY) return e.message
   if (e instanceof ApiError && e.status === 0) return `Нет связи с сервером хаба — ${what}. Попробуй, когда появится сеть.`

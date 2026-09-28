@@ -1350,6 +1350,16 @@ function withProblem(branch: string, path: string, prev: StoredConflict | undefi
     rec.title = titleOf(problem.deleted.mine) ?? rec.title
     rec.deleted = problem.deleted
     if (prev?.refused) rec.refused = prev.refused
+    // Прежняя моя версия удалённого файла не теряется: уходит в earlier (экран показывает его вместе с refused).
+    const old = prev?.deleted?.mine
+    if (old !== undefined && old !== problem.deleted.mine) {
+      if (prev?.refused) {
+        const earlier = withoutRepeats([...(prev.refused.earlier ?? []), old], problem.deleted.mine).filter((t) => t !== prev.refused!.mine)
+        rec.refused = { ...prev.refused, earlier }
+      } else {
+        rec.refused = { reason: 'Файл удалили в репо, прежняя правка не записана', mine: old }
+      }
+    }
   }
   return rec
 }

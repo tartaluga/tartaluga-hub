@@ -1,4 +1,5 @@
 // Очередь правок (ADR-004) и входящие конфликты (ADR-004 шаг 5, ADR-010): сессия с поддельным сервером.
+import { earlierVersions } from '../screens/Conflicts'
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
@@ -482,6 +483,26 @@ describe('конфликт при отправке (ADR-004 шаги 1–5)', ()
     expect(JSON.parse(srv.text('main', PATH)).tasks).toHaveLength(1) // по умолчанию оставлена
     await useSession.getState().resolveConflict('main', PATH, [{ index: 0, pick: 'repo' }])
     expect(JSON.parse(srv.text('main', PATH))).not.toHaveProperty('tasks')
+  })
+
+  it('два удаления подряд с разными моими версиями: обе видны, прежняя — в earlier', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Первая' })
+    srv.edit('main', PATH, null)
+    srv.state.down = false
+    await useSession.getState().flush()
+    srv.edit('main', PATH, project())
+    await useSession.getState().refresh()
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Вторая' })
+    srv.edit('main', PATH, null)
+    srv.state.down = false
+    await useSession.getState().flush()
+    const [c] = useSession.getState().conflicts
+    expect(JSON.parse(c!.deleted!.mine).title).toBe('Вторая')
+    expect(earlierVersions(c!).map((t) => JSON.parse(t).title)).toEqual(['Первая'])
   })
 
   it('проект удалили в репо — конфликт; «моя» возвращает файл с моей правкой', async () => {
