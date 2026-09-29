@@ -15,6 +15,7 @@ import { guardedSignOut } from './signOutGuard'
 import { conflictCount } from '../screens/Conflicts'
 import { plural } from '../lib/plural'
 import { buildLibrary } from '../data/projects'
+import { trackDockHeight } from '../lib/dockHeight'
 import { persistDrafts } from '../lib/drafts'
 import css from './Shell.module.css'
 
@@ -147,7 +148,7 @@ export function Shell() {
         <Outlet />
       </main>
 
-      <div className={css.dock}>
+      <div className={css.dock} ref={trackDockHeight}>
         <MobileSyncBar />
         <nav className={css.bottom} aria-label="Разделы">
           {nav.map(({ to, label, icon: IconCmp, count, hot }) => (

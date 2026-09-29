@@ -31,7 +31,8 @@
 @media (max-width: 767px) {
   .banner,
   .rescue {
-    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+    /* Над доком (полоска синхронизации + вкладки) любой высоты: её меряет Shell. */
+    bottom: calc(var(--dock-h, 0px) + var(--space-2));
   }
 }
 
