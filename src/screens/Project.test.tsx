@@ -4,7 +4,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSession } from '../app/session'
+import { READ_ONLY, useSession } from '../app/session'
+import { ApiError } from '../lib/api'
+import { buildHandoff } from '../lib/drafts'
 import type { ProjectPatch } from '../data/editProject'
 import { Project } from './Project'
 
@@ -98,6 +100,40 @@ describe('карточка проекта: описание', () => {
     const add = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Добавить описание'))!
     await act(async () => add.click())
     expect(byLabel('Описание').tagName).toBe('TEXTAREA')
+  })
+})
+
+describe('карточка проекта: правка отклонена (вкладка уступила запись, ADR-013)', () => {
+  const refused = async () => {
+    throw new ApiError(423, 'read_only', READ_ONLY)
+  }
+  const typeInto = async (el: HTMLTextAreaElement, value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(el, value)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  const handoffTexts = () => buildHandoff({ route: '#/', scrollY: 0, now: 0, build: 't' }).drafts.map((d) => d.text)
+
+  it('описание: набранное остаётся в поле и в черновиках (уедет в handoff), под полем — почему не сохранено', async () => {
+    await open(refused)
+    const add = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Добавить описание'))!
+    await act(async () => add.click())
+    const area = byLabel<HTMLTextAreaElement>('Описание')
+    await typeInto(area, 'длинный набранный текст')
+    await act(async () => area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true })))
+    expect(byLabel<HTMLTextAreaElement>('Описание').value).toBe('длинный набранный текст')
+    expect(host.textContent).toContain(READ_ONLY)
+    expect(handoffTexts()).toContain('длинный набранный текст')
+  })
+
+  it('лог: запись не сохранилась — текст вернулся в поле', async () => {
+    await open(refused)
+    const area = byLabel<HTMLTextAreaElement>('Текст записи')
+    await typeInto(area, 'что сделано')
+    await act(async () => area.form!.requestSubmit())
+    expect(byLabel<HTMLTextAreaElement>('Текст записи').value).toBe('что сделано')
+    expect(host.textContent).toContain(READ_ONLY)
   })
 })
 

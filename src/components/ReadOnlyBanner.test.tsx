@@ -5,7 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { READ_ONLY, useSession } from '../app/session'
-import { ReadOnlyBanner, TAKEOVER_ASKING, TAKEOVER_NO_ANSWER } from './ReadOnlyBanner'
+import { ReadOnlyBanner, TAKEOVER_ASKING, TAKEOVER_NO_ANSWER, TAKEOVER_REFUSED } from './ReadOnlyBanner'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -60,6 +60,9 @@ describe('ReadOnlyBanner', () => {
     expect(button.disabled).toBe(true)
     act(() => useSession.setState({ takeover: 'noAnswer' }))
     expect(host.textContent).toContain(TAKEOVER_NO_ANSWER)
+    expect(button.disabled).toBe(false) // можно нажать ещё раз
+    act(() => useSession.setState({ takeover: 'refused' }))
+    expect(host.textContent).toContain(TAKEOVER_REFUSED)
     expect(button.disabled).toBe(false)
   })
 })

@@ -29,6 +29,8 @@ function hold(): Promise<void> {
 }
 
 function becameWriter(): Promise<void> {
+  // Лишний запрос (например, ожидание, отменённое слишком поздно) при уже пишущей вкладке — сразу отпустить.
+  if (writer) return Promise.resolve()
   waiting = null
   writer = true
   for (const fn of promoted) fn()
@@ -108,17 +110,19 @@ export function onBecameReader(fn: () => void): () => void {
 }
 
 /**
- * Уступить запись: вкладка становится просмотром (подписчики узнают об этом до того, как лок уйдёт),
+ * Уступить запись (true — уступили): вкладка становится просмотром (подписчики узнают об этом до того, как лок уйдёт),
  * отпускает лок и сама встаёт в очередь за ним — за той вкладкой, что попросила.
  */
-export function yieldWriter(): void {
-  if (!writer || !release || !manager) return
+export function yieldWriter(): boolean {
+  // Без Web Locks отпускать нечего: другая вкладка всё равно не получила бы запись — отказ.
+  if (!writer || !release || !manager) return false
   writer = false
   for (const fn of demoted) fn()
   const r = release
   release = null
   wait(manager)
   r()
+  return true
 }
 
 /** Другая вкладка попросила запись: уступить ей место в очереди — встать в её конец. */

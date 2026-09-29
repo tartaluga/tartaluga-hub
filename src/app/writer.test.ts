@@ -111,6 +111,38 @@ describe('пишущая вкладка', () => {
     expect(a.isReader()).toBe(true)
   })
 
+  it('без Web Locks уступить нечего: yieldWriter — false, вкладка остаётся пишущей', async () => {
+    const m = await tab(undefined)
+    const demoted = vi.fn()
+    m.onBecameReader(demoted)
+    expect(m.yieldWriter()).toBe(false)
+    expect(m.isWriter()).toBe(true)
+    expect(demoted).not.toHaveBeenCalled()
+  })
+
+  it('лишний второй лок уже пишущей вкладке: сообщение о повышении не повторяется, лишний лок сразу отпущен', async () => {
+    const grants: ((lock: Lock | null) => unknown)[] = []
+    const locks = {
+      request: ((_n: string, opts: LockOptions | ((l: Lock | null) => unknown), cb?: (l: Lock | null) => unknown) => {
+        if (typeof opts === 'object' && opts.ifAvailable) return Promise.resolve(cb!(null))
+        grants.push(cb!)
+        return new Promise(() => undefined)
+      }) as LockManager['request'],
+    }
+    const m = await tab(locks)
+    const restore = setLocks(locks)
+    restores.push(restore)
+    m.requeueWriter() // первое ожидание отменено, но браузер успел его выдать
+    const promotedFn = vi.fn()
+    m.onBecameWriter(promotedFn)
+    const lock = { name: 'hub-writer', mode: 'exclusive' } as Lock
+    void grants[0]!(lock)
+    const extra = grants[1]!(lock) as Promise<void>
+    expect(promotedFn).toHaveBeenCalledOnce()
+    await expect(extra).resolves.toBeUndefined()
+    expect(m.isWriter()).toBe(true)
+  })
+
   it('resetWriter отпускает лок: следующая вкладка сразу пишет', async () => {
     const hub = fakeLockHub()
     const a = await tab(hub.tab().locks)

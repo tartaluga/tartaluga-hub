@@ -89,14 +89,15 @@ interface Session {
    */
   readOnly: boolean
   /** «Писать здесь» во вкладке просмотра: asking — попросили пишущую уступить, noAnswer — она не ответила. */
-  takeover: 'asking' | 'noAnswer' | null
+  takeover: 'asking' | 'noAnswer' | 'refused' | null
   remote: Remote
   boot(): Promise<void>
   /** Эта вкладка получила лок записи: поднять очередь и конфликты с устройства и начать отправку. */
   becomeWriter(): Promise<void>
   /**
    * «Писать здесь»: попросить пишущую вкладку уступить. Она сохраняет черновики в handoff, отпускает лок и
-   * становится просмотром. Нет ответа за timeoutMs (вкладка заморожена) — takeover: noAnswer.
+   * становится просмотром. Нет ответа за timeoutMs (вкладка заморожена) — takeover: noAnswer; пишущая не может
+   * уступить (правка не легла на устройство или браузер не даёт отпустить лок) — refused.
    */
   requestWrite(timeoutMs?: number): void
   /** После входа (ключом) — перечитать сессию и данные. */
@@ -176,18 +177,26 @@ export function errorText(e: unknown): string {
 
 /**
  * Единая точка входа правок (ADR-013): во вкладке просмотра любое действие, которое пишет, отклоняется с READ_ONLY
- * до того, как что-то попадёт в очередь, на сервер или в IndexedDB.
+ * до того, как что-то попадёт в очередь, на сервер или в IndexedDB. Принятые действия считаются идущими:
+ * уступая запись, вкладка ждёт их все.
  */
-function onlyWriter<A extends unknown[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+export function onlyWriter<A extends unknown[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
   return (...args) => {
     try {
       assertWriter()
     } catch (e) {
       return Promise.reject(e)
     }
-    return fn(...args)
+    const run = fn(...args)
+    inflight.add(run)
+    const done = () => inflight.delete(run)
+    run.then(done, done)
+    return run
   }
 }
+
+/** Правки, принятые onlyWriter и ещё не закончившиеся (запись на сервер, разбор конфликта, удаление…). */
+const inflight = new Set<Promise<unknown>>()
 
 /** Проверка входа для правок вне сессии (ветки, «Сделать проектом»): во вкладке просмотра — ошибка READ_ONLY. */
 export function assertWriter(): void {
@@ -268,17 +277,10 @@ export const useSession = create<Session>((set, get) => ({
     return run
   },
 
-  async becomeWriter() {
-    await booting.catch(() => undefined) // ветка и данные просмотра уже на месте
-    if (!get().readOnly) return
-    // Пока очередь поднимается с устройства, вкладка ещё просмотр: правки не принимаются.
-    // Открытая здесь ветка становится открытой веткой устройства: её и продолжаем.
-    if (canWrite()) await setCurrentBranch(get().branch).catch(() => undefined)
-    await reloadFromDevice()
-    if (takeoverTimer) clearTimeout(takeoverTimer)
-    takeoverTimer = null
-    set({ readOnly: false, takeover: null })
-    if (get().phase === 'ready') await get().syncNow()
+  becomeWriter() {
+    // Повторный вызов, пока идёт первый, — тот же промис: очередь поднимается один раз.
+    promoting ??= promote().finally(() => (promoting = null))
+    return promoting
   },
 
   requestWrite(timeoutMs = TAKEOVER_TIMEOUT_MS) {
@@ -733,7 +735,8 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null
 // Пишет одна вкладка (ADR-013, writer.ts). Остальные вкладки только смотрят: пишущая сообщает им по
 // BroadcastChannel «перечитай устройство», а выход из любой вкладки — «вышли, сотри своё».
 const CHANNEL = 'hub-data'
-type Message = 'changed' | 'signedOut' | 'takeover'
+/** refused — пишущая не может уступить; вкладки просмотра, попросившие запись, показывают это на плашке. */
+type Message = 'changed' | 'signedOut' | 'takeover' | 'takeoverRefused'
 let channel: BroadcastChannel | null = null
 
 function tell(msg: Message): void {
@@ -1489,6 +1492,14 @@ async function onMessage(msg: unknown): Promise<void> {
     else requeueWriter()
     return
   }
+  if (msg === 'takeoverRefused') {
+    if (state.readOnly && state.takeover) {
+      if (takeoverTimer) clearTimeout(takeoverTimer)
+      takeoverTimer = null
+      useSession.setState({ takeover: 'refused' })
+    }
+    return
+  }
   // «Перечитай» слушает только вкладка просмотра: пишущая одна, и данные на устройстве — её.
   if (msg === 'changed' && state.readOnly) await loadReadOnly()
 }
@@ -1500,17 +1511,43 @@ async function onMessage(msg: unknown): Promise<void> {
 async function yieldWrite(): Promise<void> {
   if (yielding) return
   yielding = true
+  let yielded = false
   try {
+    // Всё, что уже принято: отправка очереди, записи настроек, прямые записи (разбор конфликта, удаление, тег…).
     await running?.catch(() => undefined)
-    await Promise.all([...saving.values()].map((p) => p.catch(() => undefined)))
+    while (inflight.size || saving.size) {
+      await Promise.all([...inflight, ...saving.values()].map((p) => p.catch(() => undefined)))
+    }
+    // Правка, не легшая на устройство, есть только в памяти этой вкладки: ещё раз записать; не вышло — не уступать.
+    for (const [k, live] of queue) if (live.dirty) void persistEntry(k)
     await dbChain
+    if ([...queue.values()].some((l) => l.dirty)) return tell('takeoverRefused')
     await persistDrafts().catch(() => undefined)
+    // Сначала отпустить лок, и только если это удалось — стать просмотром.
+    if (!yieldWriter()) return tell('takeoverRefused')
     useSession.setState({ readOnly: true })
-    yieldWriter()
+    yielded = true
   } finally {
     yielding = false
   }
-  await loadReadOnly()
+  if (yielded) await loadReadOnly()
+}
+
+let promoting: Promise<void> | null = null
+
+/** Эта вкладка получила лок: дождаться старта, поднять очередь с устройства, и только потом снять просмотр. */
+async function promote(): Promise<void> {
+  await booting.catch(() => undefined) // ветка и данные просмотра уже на месте
+  const session = useSession.getState
+  if (!session().readOnly) return
+  // Пока очередь поднимается с устройства, вкладка ещё просмотр: правки не принимаются.
+  // Открытая здесь ветка становится открытой веткой устройства: её и продолжаем.
+  if (canWrite()) await setCurrentBranch(session().branch).catch(() => undefined)
+  await reloadFromDevice()
+  if (takeoverTimer) clearTimeout(takeoverTimer)
+  takeoverTimer = null
+  useSession.setState({ readOnly: false, takeover: null })
+  if (session().phase === 'ready') await session().syncNow()
 }
 
 /** Только для тестов: забыть очередь в памяти, как при перезапуске приложения. */
@@ -1522,6 +1559,8 @@ export function resetQueueMemory(): void {
   wiped = false
   yielding = false
   booting = Promise.resolve()
+  inflight.clear()
+  promoting = null
   if (takeoverTimer) clearTimeout(takeoverTimer)
   takeoverTimer = null
   useSession.setState({ queued: 0, conflicts: [], deviceError: null, readOnly: false, takeover: null })

@@ -3,7 +3,7 @@
 // (ADR-004), как правки проекта; удаление и «Сделать проектом» — прямые коммиты (deleteFiles, commit).
 // Контракт: schema/README.md (идея v1 + project), ADR-009 (fromIdea, привязка к проекту).
 import { ulid } from 'ulid'
-import { applyWrite, assertWriter, errorText, hasQueued, useSession, writeRemote } from '../app/session'
+import { applyWrite, errorText, hasQueued, onlyWriter, useSession, writeRemote } from '../app/session'
 import { ApiError, type CommitChange } from '../lib/api'
 import type { CachedFile } from '../lib/localdb'
 import type { Idea, Project } from '../schema/types'
@@ -343,8 +343,12 @@ function sameIdea(file: CachedFile | undefined, idea: Idea): boolean {
  * Черновик (slug и текст) выбирается до первой попытки и не меняется при повторах; idea — версия идеи,
  * из которой он собран: если файл идеи с тех пор изменили, коммита нет (409 idea_changed).
  */
-export async function makeProjectFromIdea(idea: Idea, draft: { slug: string; path: string; text: string }): Promise<void> {
-  assertWriter() // вкладка просмотра (ADR-013) не коммитит
+export function makeProjectFromIdea(idea: Idea, draft: { slug: string; path: string; text: string }): Promise<void> {
+  // Вкладка просмотра (ADR-013) не коммитит; уступая запись, пишущая дожидается этого коммита.
+  return onlyWriter(makeProject)(idea, draft)
+}
+
+async function makeProject(idea: Idea, draft: { slug: string; path: string; text: string }): Promise<void> {
   const ideaId = idea.id
   const ideaPath = `ideas/${ideaId}.json`
   const branch = useSession.getState().branch

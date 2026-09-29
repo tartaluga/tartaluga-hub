@@ -733,6 +733,82 @@ describe('пишет одна вкладка (ADR-013)', () => {
     expect(JSON.parse(srv.text('main', PATH))).toMatchObject({ title: 'Из A', nextStep: 'из B' })
   })
 
+  it('разбор конфликта в полёте и «Писать здесь»: пишущая дожидается его — конфликт снят и на устройстве, новая его не видит', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b } = await twoTabs(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Моё' })
+    srv.edit('main', PATH, project({ title: 'С телефона' }))
+    srv.state.down = false
+    await useSession.getState().flush()
+    expect(await getConflicts()).toHaveLength(1)
+    const put = srv.remote.putFile.bind(srv.remote)
+    let answer!: () => void
+    let asked!: () => void
+    const waiting = new Promise<void>((resolve) => (asked = resolve))
+    const gate = new Promise<void>((resolve) => (answer = resolve))
+    srv.remote.putFile = async (...args) => {
+      asked()
+      await gate
+      return put(...args)
+    }
+    const resolving = useSession.getState().resolveConflict('main', PATH, [{ index: 0, pick: 'mine' }])
+    await waiting
+    b.useSession.getState().requestWrite()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(useSession.getState().readOnly).toBe(false) // уступит только после разбора
+    answer()
+    await resolving
+    await vi.waitFor(() => expect(b.useSession.getState().readOnly).toBe(false))
+    expect(await getConflicts()).toEqual([])
+    expect(b.useSession.getState().conflicts).toEqual([])
+    expect(JSON.parse(srv.text('main', PATH)).title).toBe('Моё')
+  })
+
+  it('правка не легла на устройство — пишущая пробует ещё раз; не вышло — не уступает, у просящей «не может уступить»', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b } = await twoTabs(srv)
+    srv.state.down = true
+    vi.mocked(putQueued).mockRejectedValueOnce(new Error('QuotaExceededError')).mockRejectedValueOnce(new Error('QuotaExceededError'))
+    await useSession.getState().saveProject('a', { title: 'Только в памяти' })
+    expect(await getQueue()).toEqual([])
+    b.useSession.getState().requestWrite()
+    await vi.waitFor(() => expect(b.useSession.getState().takeover).toBe('refused'))
+    expect(useSession.getState().readOnly).toBe(false)
+    expect(b.useSession.getState().readOnly).toBe(true)
+    // Вторая попытка: запись на устройство прошла — уступает, правка едет через IndexedDB.
+    b.useSession.getState().requestWrite()
+    await vi.waitFor(() => expect(b.useSession.getState().readOnly).toBe(false))
+    expect(useSession.getState().readOnly).toBe(true)
+    expect((await getQueue()).map((e) => JSON.parse(e.text).title)).toEqual(['Только в памяти'])
+    expect(b.useSession.getState().queued).toBe(1)
+  })
+
+  it('пишущая без Web Locks не может отпустить запись — не уступает и остаётся пишущей', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    resetWriter()
+    const restoreA = setLocks(undefined)
+    await start(srv)
+    restoreA()
+    // B видит лок занятым (как если бы A его держала) и ждёт вечно.
+    const busy = { request: ((_n: string, opts: LockOptions | ((l: Lock | null) => unknown), cb?: (l: Lock | null) => unknown) => (typeof opts === 'object' && opts.ifAvailable ? Promise.resolve(cb!(null)) : new Promise(() => undefined))) as LockManager['request'] }
+    const restoreB = setLocks(busy)
+    const b = await secondTab(srv)
+    const t = () => Object.assign(new EventTarget(), { visibilityState: 'hidden' })
+    const stops = [installSyncTriggers(new EventTarget(), t()), b.installSyncTriggers(new EventTarget(), t())]
+    cleanup.push(() => {
+      for (const stop of stops) stop()
+      restoreB()
+      resetWriter()
+    })
+    expect(b.useSession.getState().readOnly).toBe(true)
+    b.useSession.getState().requestWrite()
+    await vi.waitFor(() => expect(b.useSession.getState().takeover).toBe('refused'))
+    expect(useSession.getState().readOnly).toBe(false)
+    await useSession.getState().saveProject('a', { title: 'Всё ещё пишу' })
+    expect(JSON.parse(srv.text('main', PATH)).title).toBe('Всё ещё пишу')
+  })
+
   it('«Писать здесь», а пишущая не отвечает (заморожена) — просмотр остаётся, на плашке «не отвечает»', async () => {
     const srv = server({ main: { [PATH]: project() } })
     const { b, muteA } = await twoTabs(srv)
