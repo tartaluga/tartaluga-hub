@@ -40,7 +40,7 @@ function status(extra: Partial<Status> = {}): Status {
 }
 
 function set(s: Status | null, extra: Partial<ReturnType<typeof useWidgets.getState>> = {}) {
-  useWidgets.setState({ status: s, commits: lastCommits(s), empty: s === null, ...extra })
+  useWidgets.setState({ status: s, commits: lastCommits(s, Date.now()), empty: s === null, ...extra })
 }
 
 let root: Root
@@ -70,6 +70,16 @@ describe('плитка', () => {
     expect(text()).toContain('сайт')
     expect(text()).toContain('коммит 3 ч назад')
     expect(host.querySelector('[data-tone="ok"]')).not.toBeNull()
+  })
+
+  it('последний коммит — самый свежий по дате, а не первый в списке; даты позже generatedAt не в счёт', async () => {
+    const repo = (commits: { sha: string; message: string; date: string }[]) => status({ projects: { x: { repo: { fullName: 'o/x', commits: commits as never } } } })
+    set(repo([{ sha: '1', message: 'a', date: iso(30 * H) }, { sha: '2', message: 'b', date: iso(5 * H) }]))
+    await show(<TileWidgets slug="x" />)
+    expect(text()).toBe('коммит 5 ч назад')
+    set(repo([{ sha: '1', message: 'a', date: '2099-01-01T00:00:00Z' }, { sha: '2', message: 'b', date: iso(7.5 * H) }]))
+    await show(<TileWidgets slug="x" />)
+    expect(text()).toBe('коммит 7 ч назад')
   })
 
   it('blocked — «не проверить», не «упал»; нет данных — ничего', async () => {

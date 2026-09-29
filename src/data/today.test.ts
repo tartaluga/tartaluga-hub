@@ -161,8 +161,9 @@ describe('nextSteps и abandoned', () => {
     const ps = buildLibrary(
       [
         settings(5),
-        project('quiet', { log: [log('A', at(2026, 9, 10))] }),
-        project('quieter', { log: [log('B', at(2026, 9, 1))] }),
+        // Создание — раньше лога: тишина считается от max(лог, коммит, создание).
+        project('quiet', { createdAt: '2026-08-01T10:00:00+03:00', log: [log('A', at(2026, 9, 10))] }),
+        project('quieter', { createdAt: '2026-08-01T10:00:00+03:00', log: [log('B', at(2026, 9, 1))] }),
         project('edge', { log: [log('C', at(2026, 9, 18))] }),
         project('fresh', { log: [log('D', at(2026, 9, 22))] }),
         project('arch', { status: 'archived', log: [log('E', at(2026, 8, 1))] }),

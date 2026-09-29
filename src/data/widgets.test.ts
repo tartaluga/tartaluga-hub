@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Status } from '../schema/types'
+import type { Repo, Status } from '../schema/types'
 import {
   ago,
   commitTitle,
@@ -59,8 +59,18 @@ describe('данные проекта', () => {
         c: { site: { url: 'https://c', state: 'up', checkedAt: '2026-09-29T10:00:00Z' } },
       },
     })
-    expect([...lastCommits(s)]).toEqual([['a', Date.parse('2026-09-29T10:00:00Z')]])
-    expect(lastCommits(null).size).toBe(0)
+    expect([...lastCommits(s, Date.now())]).toEqual([['a', Date.parse('2026-09-29T10:00:00Z')]])
+    expect(lastCommits(null, Date.now()).size).toBe(0)
+  })
+
+  it('коммит позже generatedAt (без него — позже «сейчас») не считается: дату задаёт автор', () => {
+    const repo: Repo = { fullName: 'o/a', commits: [{ sha: '1', message: 'm', date: '2099-01-01T00:00:00Z' }, { sha: '2', message: 'm', date: '2026-09-28T10:00:00Z' }] }
+    const withGen = status({ generatedAt: '2026-09-29T10:00:00Z', projects: { a: { repo } } })
+    expect(lastCommits(withGen, Date.parse('2100-01-01T00:00:00Z')).get('a')).toBe(Date.parse('2026-09-28T10:00:00Z'))
+    const noGen = status({ generatedAt: null, projects: { a: { repo } } })
+    expect(lastCommits(noGen, Date.parse('2026-09-29T20:00:00Z')).get('a')).toBe(Date.parse('2026-09-28T10:00:00Z'))
+    const onlyFuture = status({ projects: { a: { repo: { fullName: 'o/a', commits: [repo.commits![0]!] } } } })
+    expect(lastCommits(onlyFuture, Date.now()).has('a')).toBe(false)
   })
 
   it('ошибки: токен — общие, repo_not_accessible — у своего проекта', () => {

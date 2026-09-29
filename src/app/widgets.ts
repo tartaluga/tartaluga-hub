@@ -52,7 +52,7 @@ let answered = false
 let inflight: Promise<void> | null = null
 
 function setStatus(status: Status | null, extra: Partial<WidgetsState> = {}) {
-  useWidgets.setState({ status, commits: lastCommits(status), problem: null, empty: status === null, ...extra })
+  useWidgets.setState({ status, commits: lastCommits(status, deps.now()), problem: null, empty: status === null, ...extra })
 }
 
 type Fetched = { kind: 'ok'; text: string; status: Status } | { kind: 'empty' } | { kind: 'invalid'; error: string }
@@ -107,10 +107,13 @@ export function loadWidgets(force = false): Promise<void> {
   if (inflight) return inflight
   const now = deps.now()
   if (!force && lastLoad > 0 && now - lastLoad < RELOAD_MIN_MS) return Promise.resolve()
-  lastLoad = now
   const gen = generation
   inflight = fetchStatus()
-    .then((got) => apply(got, gen))
+    .then((got) => {
+      // Паузу отсчитываем от ответа сервера: неудачная попытка (офлайн) не откладывает следующую на 5 минут.
+      if (gen === generation) lastLoad = deps.now()
+      return apply(got, gen)
+    })
     .catch(() => {
       /* нет сети или GitHub не ответил: показываем, что есть; следующая попытка — по триггеру */
     })
@@ -136,6 +139,9 @@ export async function refreshWidgets(): Promise<void> {
   if (useWidgets.getState().polling) return
   const gen = generation
   const before = useWidgets.getState().status?.generatedAt ?? null
+  // Виджетов ещё не было: успех — только status.json, собранный после нажатия (а не прежний, до него).
+  const pressedAt = deps.now()
+  const fresh = (s: Status) => s.generatedAt !== null && s.generatedAt !== before && (before !== null || (Date.parse(s.generatedAt) || 0) >= pressedAt)
   useWidgets.setState({ polling: true, refreshNote: null })
   const finish = (refreshNote: string | null) => {
     if (gen === generation) useWidgets.setState({ polling: false, refreshNote })
@@ -151,13 +157,17 @@ export async function refreshWidgets(): Promise<void> {
     if (gen !== generation) return
     try {
       const got = await fetchStatus()
-      if (got.kind === 'ok' && got.status.generatedAt !== before) {
+      if (got.kind === 'ok' && fresh(got.status)) {
         lastLoad = deps.now()
         await apply(got, gen)
         finish(null)
         return
       }
-      if (got.kind === 'invalid') await apply(got, gen)
+      // Промежуточный ответ (прежний файл, «ещё не собирались», не прошёл схему) — только на экран, опрос идёт
+      // дальше; на устройство ляжет итог опроса или следующая обычная загрузка.
+      if (gen !== generation) return
+      if (got.kind === 'invalid') useWidgets.setState({ problem: got.error })
+      else if (got.kind === 'ok' && got.status.generatedAt !== before) setStatus(got.status, { empty: false })
     } catch {
       /* временный сбой одного опроса — ждём следующий */
     }

@@ -144,6 +144,18 @@ describe('загрузка status.json', () => {
     expect(gets()).toBe(2)
   })
 
+  it('старт офлайн не удался — «сеть появилась» загружает сразу, без паузы 5 минут', async () => {
+    reply('GET', '/api/status', 'network', ok(status(T1)))
+    const win = new EventTarget()
+    const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+    stop = installWidgets({ now: () => now }, win, doc)
+    await vi.waitFor(() => expect(gets()).toBe(1))
+    await loadWidgets()
+    win.dispatchEvent(new Event('online'))
+    await vi.waitFor(() => expect(useWidgets.getState().status?.generatedAt).toBe(T1))
+    expect(gets()).toBe(2)
+  })
+
   it('выход сбрасывает память; запоздавший ответ ничего не пишет', async () => {
     let release!: () => void
     fetchMock.mockImplementationOnce(async () => {
@@ -218,11 +230,28 @@ describe('«Обновить сейчас»', () => {
     replies['GET /api/status'] = []
     fakeTimers()
     reply('POST', '/api/status/refresh', { status: 202, body: { ok: true } })
-    reply('GET', '/api/status', err(404, 'not_found'), ok(status(T1)))
+    const after = '2100-01-01T00:00:00Z' // позже любого «сейчас» теста
+    reply('GET', '/api/status', err(404, 'not_found'), ok(status(after)))
     const run = refreshWidgets()
     await vi.advanceTimersByTimeAsync(30_000)
     await run
     expect(useWidgets.getState()).toMatchObject({ polling: false, refreshNote: null, empty: false })
+  })
+
+  it('виджетов не было: status.json, собранный до нажатия, — ещё не успех (показан, опрос идёт дальше)', async () => {
+    fakeTimers()
+    reply('POST', '/api/status/refresh', { status: 202, body: { ok: true } })
+    const after = '2100-01-01T00:00:00Z' // позже любого «сейчас» теста
+    reply('GET', '/api/status', ok(status(T1)), ok(status(T1)), ok(status(after)))
+    const run = refreshWidgets()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(useWidgets.getState()).toMatchObject({ polling: true })
+    expect(useWidgets.getState().status?.generatedAt).toBe(T1)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await run
+    expect(gets()).toBe(3)
+    expect(useWidgets.getState()).toMatchObject({ polling: false, refreshNote: null })
+    expect(useWidgets.getState().status?.generatedAt).toBe(after)
   })
 
   it('ошибка запуска — её текст, без опроса', async () => {

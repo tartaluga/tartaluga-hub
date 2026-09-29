@@ -212,10 +212,10 @@ async function checkMergeResult(repo: GitHubClient, oldMain: string, newMain: st
   return { warnings, checkFailed: false }
 }
 
-/** POST /api/status/refresh — запустить status.yml только на main (на другой ветке могла лежать старая версия). */
 /**
  * POST /api/status/refresh — «Обновить сейчас» (ADR-015 п.2): workflow_dispatch для status.yml на main.
- * Тело запроса не читается: ветку и входы задаёт сервер. 204 → 202; 404 — «не настроено» только при видимом репо
+ * Тело запроса не читается: ветку и входы задаёт сервер (только main — на другой ветке могла лежать старая версия).
+ * 204 → 202; 404 (нет status.yml) и 422 (в нём нет workflow_dispatch) — «не настроено» только при видимом репо
  * (ADR-014); 403 (нет права или запуск запрещён) и 5xx — временная ошибка, клиент ничего не меняет.
  */
 export async function refreshStatus(env: Env, fetchImpl?: F): Promise<Response> {
@@ -223,7 +223,7 @@ export async function refreshStatus(env: Env, fetchImpl?: F): Promise<Response> 
   try {
     await repo.dispatchWorkflow('status.yml', MAIN)
   } catch (e) {
-    if (e instanceof GitHubError && e.kind === 'not_found') {
+    if (e instanceof GitHubError && (e.kind === 'not_found' || e.kind === 'validation')) {
       await assertRepoVisible(repo) // 404 и когда токен не видит репо (ADR-014)
       throw new HttpError(404, 'not_found', 'Проверка виджетов не настроена')
     }

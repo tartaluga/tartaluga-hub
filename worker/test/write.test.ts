@@ -448,6 +448,18 @@ describe('обновление виджетов', () => {
     expect((await res.json()).error).toMatchObject({ code: 'not_found', message: 'Проверка виджетов не настроена' })
   })
 
+  it('422 (в status.yml нет workflow_dispatch) — тоже «не настроено», но только при видимом репо', async () => {
+    const repoVisible: Handler = (c) => (c.method === 'GET' && c.url.endsWith('/repos/tartaluga/tartaluga-hub-data') ? jsonResponse({}) : undefined)
+    const unprocessable = () => jsonResponse({ message: "Workflow does not have 'workflow_dispatch' trigger" }, 422)
+    const a = await setup(on('POST', '/dispatches', unprocessable), repoVisible)
+    const res = await a.send(mutation('POST', '/api/status/refresh', a.cookie))
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toMatchObject({ code: 'not_found', message: 'Проверка виджетов не настроена' })
+    const repoHidden: Handler = (c) => (c.method === 'GET' && c.url.endsWith('/repos/tartaluga/tartaluga-hub-data') ? jsonResponse({ message: 'Not Found' }, 404) : undefined)
+    const b = await setup(on('POST', '/dispatches', unprocessable), repoHidden)
+    expect((await b.send(mutation('POST', '/api/status/refresh', b.cookie))).status).toBe(503)
+  })
+
   it('403 и 5xx GitHub — 503 upstream_unavailable, без «не настроено»', async () => {
     for (const status of [403, 500, 502]) {
       const { cookie, send } = await setup(on('POST', '/dispatches', () => jsonResponse({ message: 'nope' }, status)))

@@ -191,6 +191,12 @@ describe('активность и тишина (макет 2a)', () => {
     expect(by).toEqual({ coded: null, oldcommit: null, nolog: 21, none: 22 })
   })
 
+  it('новый проект со старым репо — не тишина: считается и дата создания', () => {
+    const files = [project('fresh', { createdAt: '2026-09-20T10:00:00+03:00' })]
+    const commits = new Map([['fresh', Date.parse('2025-01-01T12:00:00+03:00')]])
+    expect(buildLibrary(files, TODAY, commits).projects[0]!.silentDays).toBeNull()
+  })
+
   it('ровно порог — ещё не тишина («дольше N дней»)', () => {
     const lib = buildLibrary([project('edge', { log: [log('2026-09-09T10:00:00+03:00', 'A')] }), project('over', { log: [log('2026-09-08T10:00:00+03:00', 'B')] })], TODAY)
     expect(lib.projects.map((p) => p.silentDays)).toEqual([null, 15])

@@ -83,9 +83,11 @@ function activityOf(p: Project, today: Date, abandonedAfter: number, lastCommit:
   const lastLog = logTimes.length ? Math.max(...logTimes) : null
   const updated = Date.parse(p.updatedAt)
   const activityAt = lastLog ?? (Number.isNaN(updated) ? 0 : updated)
-  // Тишина — от max(последняя запись лога, последний коммит из status.json); без обоих — от даты создания.
-  const since = lastLog !== null || lastCommit !== undefined ? Math.max(lastLog ?? -Infinity, lastCommit ?? -Infinity) : Date.parse(p.createdAt)
-  const quiet = Number.isNaN(since) ? 0 : daysSince(since, today)
+  // Тишина — от max(последняя запись лога, последний коммит из status.json, создание проекта): новый проект
+  // со старым репо не «заброшен» с первого дня.
+  const created = Date.parse(p.createdAt)
+  const marks = [lastLog, lastCommit, Number.isNaN(created) ? null : created].filter((t): t is number => t != null)
+  const quiet = marks.length ? daysSince(Math.max(...marks), today) : 0
   return {
     activityAt,
     activityDays: Math.max(0, daysSince(activityAt, today)),

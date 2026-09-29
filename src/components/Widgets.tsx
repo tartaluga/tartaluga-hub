@@ -5,10 +5,12 @@ import { ArrowsClockwise, GitCommit, Globe, PlayCircle, RocketLaunch, Warning } 
 import { dismissRefreshNote, refreshWidgets, useWidgets } from '../app/widgets'
 import {
   ago,
+  commitLimit,
   commitTitle,
   deployTarget,
   deployView,
   LATENCY_TEXT,
+  lastCommitAt,
   projectErrors,
   projectStatus,
   runView,
@@ -58,9 +60,10 @@ export function TileWidgets({ slug }: { slug: string }) {
   const status = useWidgets((s) => s.status)
   const now = useNowMinute()
   const ps = projectStatus(status, slug)
-  const commit = ps?.repo?.commits?.[0]
-  if (!ps?.site && !commit) return null
-  const site = ps.site ? siteView(ps.site) : null
+  // Самый свежий коммит, а не первый в списке: порядок в файле не гарантирован; даты «из будущего» не в счёт.
+  const commit = lastCommitAt(ps?.repo, commitLimit(status, now))
+  if (!ps?.site && commit === null) return null
+  const site = ps?.site ? siteView(ps.site) : null
   return (
     <p className={css.tile}>
       {site && (
@@ -69,7 +72,7 @@ export function TileWidgets({ slug }: { slug: string }) {
           <span>{site.tone === 'ok' ? 'сайт' : `сайт ${site.text}`}</span>
         </span>
       )}
-      {commit && <span className={css.tileCommit}>коммит {ago(commit.date, now)}</span>}
+      {commit !== null && <span className={css.tileCommit}>коммит {ago(commit, now)}</span>}
     </p>
   )
 }

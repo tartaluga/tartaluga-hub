@@ -38,22 +38,29 @@ export function projectStatus(status: Status | null, slug: string): ProjectStatu
   return status.projects[slug] ?? null
 }
 
-/** Время самого свежего коммита репо проекта (мс) или null. */
-export function lastCommitAt(repo: Repo | undefined): number | null {
+/**
+ * Время самого свежего коммита репо проекта (мс) или null. Коммиты позже notAfter не считаются: дату коммита
+ * задаёт автор (чужое репо), и коммит «из 2099» иначе навсегда снял бы с проекта «заброшен».
+ */
+export function lastCommitAt(repo: Repo | undefined, notAfter: number): number | null {
   let best: number | null = null
   for (const c of repo?.commits ?? []) {
     const t = time(c.date)
-    if (t !== null && (best === null || t > best)) best = t
+    if (t !== null && t <= notAfter && (best === null || t > best)) best = t
   }
   return best
 }
 
+/** Граница для дат коммитов: момент сборки status.json, без него — «сейчас». */
+export const commitLimit = (status: Status | null, now: number) => time(status?.generatedAt) ?? now
+
 /** slug → время последнего коммита: для «заброшен» (ADR-015 п.7). */
-export function lastCommits(status: Status | null): Map<string, number> {
+export function lastCommits(status: Status | null, now: number): Map<string, number> {
   const out = new Map<string, number>()
   if (!status) return out
+  const limit = commitLimit(status, now)
   for (const slug of Object.keys(status.projects)) {
-    const t = lastCommitAt(status.projects[slug]?.repo)
+    const t = lastCommitAt(status.projects[slug]?.repo, limit)
     if (t !== null) out.set(slug, t)
   }
   return out
@@ -68,8 +75,8 @@ export function staleHours(status: Status | null, now: number): number | null {
 }
 
 /** «только что», «12 мин назад», «3 ч назад», «5 дн назад». Время из будущего — «только что». */
-export function ago(iso: string | null | undefined, now: number): string {
-  const t = time(iso)
+export function ago(at: string | number | null | undefined, now: number): string {
+  const t = typeof at === 'number' ? at : time(at)
   if (t === null) return ''
   const min = Math.floor((now - t) / 60_000)
   if (min < 1) return 'только что'
