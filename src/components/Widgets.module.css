@@ -1,0 +1,327 @@
+/* Живые виджеты в языке «1a Визор»: моно-подписи, точки статуса, маджента — только для «упал». */
+
+.dot {
+  flex: none;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.dot[data-tone='ok'] {
+  background: var(--status-active);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-active) 60%, transparent);
+}
+
+.dot[data-tone='bad'] {
+  background: var(--magenta);
+}
+
+.dot[data-tone='warn'] {
+  background: var(--status-paused);
+}
+
+/* ---------- Плитка ---------- */
+
+.tile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  min-width: 0;
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tileSite {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.tileSite[data-tone='bad'] {
+  color: var(--magenta);
+}
+
+.tileCommit {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Кнопка ---------- */
+
+.refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: 500 14px/1.2 var(--font-sans);
+  cursor: pointer;
+}
+
+.refresh[data-compact] {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.refresh:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.refresh:disabled {
+  cursor: default;
+  color: var(--text-faint);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .spin {
+    animation: spin 1.2s linear infinite;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- Плашка ---------- */
+
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--status-paused) 45%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--status-paused) 10%, var(--surface));
+  font-size: 14px;
+}
+
+.noticeIcon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--status-paused);
+}
+
+.noticeText {
+  /* Узко (телефон) — кнопка уходит под текст, а не сжимает его в столбик. */
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.noticeText p {
+  margin: 0;
+}
+
+.noticeText p + p {
+  margin-top: var(--space-1);
+}
+
+.notice a,
+.error a {
+  color: var(--accent);
+}
+
+.linkButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---------- Карточка ---------- */
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.title {
+  margin: 0;
+  font: 500 13px/1.3 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.meta {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--text-faint);
+}
+
+.muted {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-faint);
+}
+
+.error {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--magenta-soft);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.rows {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.rowMain {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.rowMain > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMain a,
+.commit a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.rowMain a:hover,
+.commit a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--text-muted);
+}
+
+.state[data-tone='bad'] {
+  color: var(--magenta);
+}
+
+.when {
+  flex: none;
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.commitsRow {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.commitsHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 14px;
+}
+
+.branch {
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--text-faint);
+}
+
+.commits {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.commit {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 13px;
+}
+
+.sha {
+  flex: none;
+  font: 400 12px/1.2 var(--font-mono);
+  color: var(--accent);
+}
+
+.commit a.sha {
+  color: var(--accent);
+}
+
+.message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+/* Кнопка в плашке — под текстом, если не влезла в строку: выровнена по тексту, а не по иконке. */
+.notice > .refresh {
+  margin-left: calc(18px + var(--space-3));
+}
+
+@media (min-width: 768px) {
+  .notice > .refresh {
+    margin-left: 0;
+  }
+}

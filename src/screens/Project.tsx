@@ -55,6 +55,8 @@ import { ProjectTasks } from '../components/ProjectTasks'
 import { CopyContext } from '../components/CopyContext'
 import { restoredDraft, useDraftText } from '../lib/drafts'
 import { ProjectLog } from './ProjectLog'
+import { useWidgets } from '../app/widgets'
+import { ProjectWidgets } from '../components/Widgets'
 import css from './Project.module.css'
 
 // Разбор Markdown — отдельный чанк: стартовый экран его не ждёт, офлайн он в кэше service worker.
@@ -79,7 +81,8 @@ function ProjectCard({ slug }: { slug: string }) {
   const files = useSession((s) => s.files)
   const sync = useSession((s) => s.sync)
   const saveProject = useSession((s) => s.saveProject)
-  const lib = useMemo(() => buildLibrary(files, new Date()), [files])
+  const commits = useWidgets((s) => s.commits)
+  const lib = useMemo(() => buildLibrary(files, new Date(), commits), [files, commits])
   const p = lib.projects.find((x) => x.data.slug === slug)
   const broken = lib.broken.find((b) => b.path === `projects/${slug}.json`)
   const [busy, setBusy] = useState(false)
@@ -196,6 +199,7 @@ function ProjectCard({ slug }: { slug: string }) {
           <ProjectLog slug={d.slug} log={d.log ?? []} readOnly={ro} save={save} />
         </div>
         <aside className={css.aside}>
+          <ProjectWidgets slug={d.slug} />
           <Stack slug={d.slug} items={d.stack ?? []} readOnly={ro} save={save} />
           <Tags ids={d.tags ?? []} known={lib.tags} settingsProblem={lib.settingsProblem} readOnly={ro} save={save} />
           <Links slug={d.slug} links={d.links ?? []} readOnly={ro} save={save} />

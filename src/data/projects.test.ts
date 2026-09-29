@@ -175,6 +175,22 @@ describe('активность и тишина (макет 2a)', () => {
     expect(by(buildLibrary([...files, strict], TODAY)).fresh).toBe(8)
   })
 
+  it('тишина — от max(последняя запись лога, последний коммит из status.json) (ADR-015 п.7)', () => {
+    const files = [
+      project('coded', { log: [log('2026-09-01T10:00:00+03:00', 'A')] }),
+      project('oldcommit', { log: [log('2026-09-15T10:00:00+03:00', 'B')] }),
+      project('nolog', { createdAt: '2026-08-01T10:00:00+03:00' }),
+      project('none', { log: [log('2026-09-01T10:00:00+03:00', 'C')] }),
+    ]
+    const commits = new Map([
+      ['coded', Date.parse('2026-09-20T12:00:00+03:00')], // коммит свежее лога — не тишина
+      ['oldcommit', Date.parse('2026-08-01T12:00:00+03:00')], // коммит старше лога — считается лог
+      ['nolog', Date.parse('2026-09-02T12:00:00+03:00')], // без лога — от коммита, а не от создания
+    ])
+    const by = Object.fromEntries(buildLibrary(files, TODAY, commits).projects.map((p) => [p.data.slug, p.silentDays]))
+    expect(by).toEqual({ coded: null, oldcommit: null, nolog: 21, none: 22 })
+  })
+
   it('ровно порог — ещё не тишина («дольше N дней»)', () => {
     const lib = buildLibrary([project('edge', { log: [log('2026-09-09T10:00:00+03:00', 'A')] }), project('over', { log: [log('2026-09-08T10:00:00+03:00', 'B')] })], TODAY)
     expect(lib.projects.map((p) => p.silentDays)).toEqual([null, 15])

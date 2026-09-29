@@ -31,7 +31,10 @@ export interface ProjectView {
   activityAt: number
   /** Сколько календарных дней назад была активность (0 — сегодня). */
   activityDays: number
-  /** «N дн тишины»: проект в работе, а в логе нет записей дольше порога из settings.json. Иначе null. */
+  /**
+   * «N дн тишины»: проект в работе, а ни записей в логе, ни коммитов в его репо (status.json) нет дольше порога
+   * из settings.json (ADR-015 п.7). Иначе null.
+   */
   silentDays: number | null
 }
 
@@ -75,13 +78,13 @@ export function activityText(days: number): string {
 
 export const DEFAULT_ABANDONED_DAYS = 14
 
-function activityOf(p: Project, today: Date, abandonedAfter: number) {
+function activityOf(p: Project, today: Date, abandonedAfter: number, lastCommit: number | undefined) {
   const logTimes = (p.log ?? []).map((e) => Date.parse(e.at)).filter((t) => !Number.isNaN(t))
   const lastLog = logTimes.length ? Math.max(...logTimes) : null
   const updated = Date.parse(p.updatedAt)
   const activityAt = lastLog ?? (Number.isNaN(updated) ? 0 : updated)
-  // Тишина считается по логу, как «заброшенные» на экране «Сегодня»; проект без лога — от даты создания.
-  const since = lastLog ?? Date.parse(p.createdAt)
+  // Тишина — от max(последняя запись лога, последний коммит из status.json); без обоих — от даты создания.
+  const since = lastLog !== null || lastCommit !== undefined ? Math.max(lastLog ?? -Infinity, lastCommit ?? -Infinity) : Date.parse(p.createdAt)
   const quiet = Number.isNaN(since) ? 0 : daysSince(since, today)
   return {
     activityAt,
@@ -105,7 +108,8 @@ function deadlineOf(p: Project, today: Date): ProjectView['deadline'] {
   return { ...first, days: daysUntil(first.due, today) }
 }
 
-export function buildLibrary(files: CachedFile[], today: Date): Library {
+/** commits — slug → время последнего коммита репо проекта из status.json (для тишины); без виджетов — пусто. */
+export function buildLibrary(files: CachedFile[], today: Date, commits: ReadonlyMap<string, number> = new Map()): Library {
   const projects: ProjectView[] = []
   const broken: BrokenFile[] = []
   let tags: Tag[] = []
@@ -141,7 +145,7 @@ export function buildLibrary(files: CachedFile[], today: Date): Library {
       tasksDone: done,
       tasksTotal: tasks.length,
       deadline: deadlineOf(data, today),
-      ...activityOf(data, today, abandonedAfterDays),
+      ...activityOf(data, today, abandonedAfterDays, commits.get(data.slug)),
     })
   }
   return { projects, broken: broken.sort((a, b) => a.path.localeCompare(b.path)), tags, settingsProblem, abandonedAfterDays }

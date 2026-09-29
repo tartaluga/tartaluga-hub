@@ -816,3 +816,8 @@
     background: var(--accent-soft);
   }
 }
+
+/* Общая плашка виджетов (не обновлялись, токен статуса) — над вкладками. */
+.widgetsNotice:empty {
+  display: none;
+}

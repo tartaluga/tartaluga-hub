@@ -8,6 +8,7 @@ import { Cover } from '../components/Cover'
 import { NewProjectDialog } from '../components/NewProjectDialog'
 import { hasNewProjectDraft } from '../data/newProject'
 import { parseLocalDate } from '../data/model'
+import { useWidgets } from '../app/widgets'
 import { buildLibrary, STATUS_LABEL, type ProjectView } from '../data/projects'
 import { abandoned, eyebrowDate, hotItems, hotWhen, localKey, nextSteps, pulse, pulseCaption, statusShares, summary } from '../data/today'
 import { plural } from '../lib/plural'
@@ -39,6 +40,7 @@ function readQuietOrder(): boolean {
 
 export function Today() {
   const files = useSession((s) => s.files)
+  const commits = useWidgets((s) => s.commits)
   const branch = useSession((s) => s.branch)
   const now = useNow()
   const [creating, setCreating] = useState(hasNewProjectDraft)
@@ -48,7 +50,7 @@ export function Today() {
   const view = useMemo(() => {
     // Для сроков и тишины важен только календарный день: берём его полночь.
     const today = parseLocalDate(day)
-    const lib = buildLibrary(files, today)
+    const lib = buildLibrary(files, today, commits)
     return {
       lib,
       today,
@@ -59,7 +61,7 @@ export function Today() {
       shares: statusShares(lib.projects),
       active: lib.projects.filter((p) => p.data.status === 'active').length,
     }
-  }, [files, day, quietestFirst])
+  }, [files, day, quietestFirst, commits])
   const { lib, hot, next, quiet, active } = view
   const total = lib.projects.length
 
@@ -191,7 +193,7 @@ export function Today() {
                             {p.data.nextStep?.trim() || 'Следующий шаг не задан'}
                           </span>
                         </span>
-                        <span className={css.quietDays} title="Дней без записей в логе">
+                        <span className={css.quietDays} title="Дней без записей в логе и коммитов">
                           {p.silentDays} дн
                         </span>
                       </Link>

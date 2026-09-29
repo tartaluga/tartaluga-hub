@@ -275,6 +275,26 @@ export async function setCurrentBranch(branch: string): Promise<void> {
   await (await db()).put('kv', branch, BRANCH_KEY)
 }
 
+const STATUS_KEY = 'status'
+
+/** Живые виджеты с устройства (для офлайна): текст status.json и когда его получили. Хранится в kv, без смены версии базы. */
+export interface CachedStatus {
+  text: string
+  loadedAt: number
+}
+
+export async function getCachedStatus(): Promise<CachedStatus | null> {
+  const v = (await (await db()).get('kv', STATUS_KEY)) as Partial<CachedStatus> | undefined
+  return v && typeof v.text === 'string' && typeof v.loadedAt === 'number' ? { text: v.text, loadedAt: v.loadedAt } : null
+}
+
+/** null — виджеты ещё не собирались: запись стирается. */
+export async function putCachedStatus(value: CachedStatus | null): Promise<void> {
+  const d = await db()
+  if (value) await d.put('kv', value, STATUS_KEY)
+  else await d.delete('kv', STATUS_KEY)
+}
+
 /** «Выйти»: стереть с устройства кэш данных. */
 export async function wipeDevice(): Promise<void> {
   // Не ждать открытия: если оно ждёт другие вкладки (blocked), «Выйти» зависло бы. Закроется, как только откроется.

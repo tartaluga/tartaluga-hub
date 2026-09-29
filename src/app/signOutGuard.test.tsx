@@ -13,6 +13,11 @@ vi.mock('./session', async (importOriginal) => ({
   unsentSnapshot: () => ({ edits: [...snap.edits], conflicts: [...snap.conflicts] }),
   installSyncTriggers: () => () => undefined,
 }))
+// Виджеты ходят в сеть при входе — здесь они не нужны.
+vi.mock('./widgets', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./widgets')>()),
+  installWidgets: () => () => undefined,
+}))
 vi.mock('../lib/localdb', async (importOriginal) => {
   const real = await importOriginal<typeof import('../lib/localdb')>()
   return { ...real, getQueue: vi.fn(real.getQueue), getConflicts: vi.fn(real.getConflicts) }

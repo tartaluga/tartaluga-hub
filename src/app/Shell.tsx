@@ -12,6 +12,7 @@ import { ReadOnlyBanner } from '../components/ReadOnlyBanner'
 import { SignOutGuardDialog } from '../components/SignOutGuardDialog'
 import { Login } from '../screens/Login'
 import { installSyncTriggers, useSession } from './session'
+import { installWidgets } from './widgets'
 import { guardedSignOut } from './signOutGuard'
 import { conflictCount } from '../screens/Conflicts'
 import { plural } from '../lib/plural'
@@ -88,6 +89,10 @@ export function Shell() {
 
   // Вернулись в приложение или появилась сеть — сверка и отправка очереди правок (ADR-004).
   useEffect(() => installSyncTriggers(), [])
+
+  // Живые виджеты (ADR-015): только во входе; выход сбрасывает их память (кэш на устройстве стирает wipeDevice).
+  const ready = phase === 'ready'
+  useEffect(() => (ready ? installWidgets({ canWrite: () => !useSession.getState().readOnly }) : undefined), [ready])
 
   // Сессия кончилась: на случай ухода со страницы (вход через GitHub, закрытие) черновики сразу в handoff.
   const expired = sync === 'sessionExpired'

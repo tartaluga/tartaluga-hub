@@ -124,7 +124,7 @@ function checkFileName(kind: FileKind, path: string, obj: Record<string, unknown
   return null
 }
 
-function describeErrors(errors: ValidationError[] | null | undefined): string {
+export function describeErrors(errors: ValidationError[] | null | undefined): string {
   if (!errors?.length) return 'Файл не соответствует схеме'
   // Ошибки веток if/then дублируют конкретную причину — показываем только конкретные.
   const useful = errors.filter((e) => e.keyword !== 'if')

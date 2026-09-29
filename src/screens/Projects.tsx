@@ -27,6 +27,8 @@ import {
   type SortKey,
   type Status,
 } from '../data/projects'
+import { useWidgets } from '../app/widgets'
+import { TileWidgets, WidgetsNotice } from '../components/Widgets'
 import { useDraft } from '../lib/drafts'
 import { plural } from '../lib/plural'
 import css from './Projects.module.css'
@@ -54,7 +56,8 @@ export function Projects() {
   // Статус не выбран явно — вкладка по умолчанию; правка поиска или тегов её не фиксирует в адресе.
   const implicitStatus = !params.has('status')
   // «Сегодня» для сроков берём один раз на набор файлов: плитки не пересчитываются на каждый ввод в поиск.
-  const lib = useMemo(() => buildLibrary(files, new Date()), [files])
+  const commits = useWidgets((s) => s.commits)
+  const lib = useMemo(() => buildLibrary(files, new Date(), commits), [files, commits])
   const shown = useMemo(() => applyFilter(lib.projects, filter), [lib, filter])
   const counts = useMemo(() => countByStatus(lib.projects), [lib])
   // Строка поиска живёт в адресе и возвращается вместе с экраном; черновик нужен, когда экран не вернулся (ADR-011 §4).
@@ -135,6 +138,11 @@ export function Projects() {
         </div>
       </header>
       <NewProjectDialog open={creating} onClose={() => setCreating(false)} />
+      {lib.projects.length > 0 && (
+        <div className={css.widgetsNotice}>
+          <WidgetsNotice />
+        </div>
+      )}
 
       {lib.projects.length > 0 && (
         <>
@@ -290,7 +298,7 @@ function Tile({ p }: { p: ProjectView }) {
           </span>
         ) : (
           p.silentDays !== null && (
-            <span className={css.badge} data-tone="quiet" title="В логе давно нет записей">
+            <span className={css.badge} data-tone="quiet" title="Давно нет записей в логе и коммитов">
               {p.silentDays} дн тишины
             </span>
           )
@@ -317,7 +325,7 @@ function Tile({ p }: { p: ProjectView }) {
           <span
             className={css.rowMeta}
             data-tone={hot ? 'hot' : p.silentDays !== null ? 'quiet' : undefined}
-            title={hot ? `Срок: ${hot.title}` : p.silentDays !== null ? 'В логе давно нет записей' : 'Последняя активность'}
+            title={hot ? `Срок: ${hot.title}` : p.silentDays !== null ? 'Давно нет записей в логе и коммитов' : 'Последняя активность'}
           >
             {hot ? deadlineText(hot) : activityText(p.activityDays)}
           </span>
@@ -326,6 +334,7 @@ function Tile({ p }: { p: ProjectView }) {
           {d.nextStep ? `→ ${d.nextStep}` : 'Следующий шаг не задан'}
           {p.readOnly && <span className={css.ro}> · только чтение</span>}
         </p>
+        <TileWidgets slug={d.slug} />
         <div className={css.progress} title={p.tasksTotal ? `Задачи: ${p.tasksDone} из ${p.tasksTotal}` : 'Задач пока нет'}>
           <div className={css.track}>
             <div className={css.fill} style={{ width: `${pct}%` }} />

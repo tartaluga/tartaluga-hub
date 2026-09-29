@@ -6,6 +6,11 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+// Виджеты ходят в сеть при входе — здесь они не нужны.
+vi.mock('../app/widgets', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../app/widgets')>()),
+  installWidgets: () => () => undefined,
+}))
 import { Shell } from '../app/Shell'
 import { useSession } from '../app/session'
 import { Project } from '../screens/Project'

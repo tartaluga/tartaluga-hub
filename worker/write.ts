@@ -5,7 +5,7 @@ import { GitHubError, type FileChange, type GitHubClient } from '../src/lib/gith
 import { parseFile } from '../src/data/model'
 import type { Env } from './env'
 import { dataRepo } from './githubApp'
-import { assertRepoVisible, confirmGone } from './gone'
+import { assertRepoVisible, confirmGone, upstreamUnavailable } from './gone'
 import { HttpError, json, readJson } from './http'
 import { assertDataPath, assertSha, branchParam, isBranchName, isDataPath, MAIN, STATUS, writableBranch } from './rules'
 import { isFresh, type Session } from './sessions'
@@ -213,6 +213,11 @@ async function checkMergeResult(repo: GitHubClient, oldMain: string, newMain: st
 }
 
 /** POST /api/status/refresh — запустить status.yml только на main (на другой ветке могла лежать старая версия). */
+/**
+ * POST /api/status/refresh — «Обновить сейчас» (ADR-015 п.2): workflow_dispatch для status.yml на main.
+ * Тело запроса не читается: ветку и входы задаёт сервер. 204 → 202; 404 — «не настроено» только при видимом репо
+ * (ADR-014); 403 (нет права или запуск запрещён) и 5xx — временная ошибка, клиент ничего не меняет.
+ */
 export async function refreshStatus(env: Env, fetchImpl?: F): Promise<Response> {
   const repo = await dataRepo(env, MAIN, fetchImpl)
   try {
@@ -220,7 +225,11 @@ export async function refreshStatus(env: Env, fetchImpl?: F): Promise<Response> 
   } catch (e) {
     if (e instanceof GitHubError && e.kind === 'not_found') {
       await assertRepoVisible(repo) // 404 и когда токен не видит репо (ADR-014)
-      throw new HttpError(404, 'not_found', 'Виджеты ещё не настроены')
+      throw new HttpError(404, 'not_found', 'Проверка виджетов не настроена')
+    }
+    if (e instanceof GitHubError && (e.kind === 'forbidden' || e.kind === 'server' || e.kind === 'network')) {
+      console.error('status dispatch failed', e.kind, e.status)
+      throw upstreamUnavailable()
     }
     throw e
   }

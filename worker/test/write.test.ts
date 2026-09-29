@@ -445,6 +445,29 @@ describe('обновление виджетов', () => {
     const { cookie, send } = await setup(on('POST', '/dispatches', () => jsonResponse({ message: 'Not Found' }, 404)), repoVisible)
     const res = await send(mutation('POST', '/api/status/refresh', cookie))
     expect(res.status).toBe(404)
-    expect((await res.json()).error.message).toBe('Виджеты ещё не настроены')
+    expect((await res.json()).error).toMatchObject({ code: 'not_found', message: 'Проверка виджетов не настроена' })
+  })
+
+  it('403 и 5xx GitHub — 503 upstream_unavailable, без «не настроено»', async () => {
+    for (const status of [403, 500, 502]) {
+      const { cookie, send } = await setup(on('POST', '/dispatches', () => jsonResponse({ message: 'nope' }, status)))
+      const res = await send(mutation('POST', '/api/status/refresh', cookie))
+      expect(res.status).toBe(503)
+      expect((await res.json()).error.code).toBe('upstream_unavailable')
+    }
+  })
+
+  it('лимит GitHub — 429, а не 503', async () => {
+    const limited = () => new Response(JSON.stringify({ message: 'rate' }), { status: 403, headers: { 'x-ratelimit-remaining': '0' } })
+    const { cookie, send } = await setup(on('POST', '/dispatches', limited))
+    expect((await send(mutation('POST', '/api/status/refresh', cookie))).status).toBe(429)
+  })
+
+  it('без сессии и с чужого origin GitHub не вызывается; GET — 405', async () => {
+    const { gh, cookie, send } = await setup(on('POST', '/dispatches', () => new Response(null, { status: 204 })))
+    expect((await send(mutation('POST', '/api/status/refresh', ''))).status).toBe(401)
+    expect((await send(mutation('POST', '/api/status/refresh', cookie, undefined, { Origin: 'https://evil.example' }))).status).toBe(403)
+    expect((await send(new Request(`${ORIGIN}/api/status/refresh`, { headers: { Cookie: cookie } }))).status).toBe(405)
+    expect(gh.repoCalls()).toEqual([])
   })
 })
