@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router'
 import { useSession } from '../app/session'
 import { MobileSyncBar } from './MobileSyncBar'
 
@@ -12,7 +13,12 @@ let root: Root
 let host: HTMLElement
 const syncNow = vi.fn(() => Promise.resolve())
 
+function mockMedia(matches: boolean) {
+  window.matchMedia = ((q: string) => ({ matches, media: q, addEventListener: () => {}, removeEventListener: () => {} })) as unknown as typeof window.matchMedia
+}
+
 beforeEach(() => {
+  mockMedia(true)
   syncNow.mockClear()
   useSession.setState({ phase: 'ready', sync: 'idle', syncError: null, lastSync: new Date(), queued: 0, conflicts: [], deviceError: null, syncNow })
   host = document.createElement('div')
@@ -25,7 +31,14 @@ afterEach(async () => {
   host.remove()
 })
 
-const show = () => act(async () => root.render(<MobileSyncBar />))
+const show = (path = '/') =>
+  act(async () =>
+    root.render(
+      <MemoryRouter initialEntries={[path]}>
+        <MobileSyncBar />
+      </MemoryRouter>,
+    ),
+  )
 
 describe('MobileSyncBar', () => {
   it('в обычном состоянии скрыта', async () => {
@@ -62,5 +75,56 @@ describe('MobileSyncBar', () => {
     await show()
     await act(async () => host.querySelector('button')!.click())
     expect(syncNow).toHaveBeenCalledTimes(1)
+  })
+
+  it('error и sessionExpired видны', async () => {
+    useSession.setState({ sync: 'error' })
+    await show()
+    expect(host.textContent).toContain('SYNC · ошибка')
+    useSession.setState({ sync: 'sessionExpired' })
+    await show()
+    expect(host.textContent).toContain('НУЖЕН ВХОД')
+  })
+
+  it('offline без очереди — «OFFLINE · данные из кэша»', async () => {
+    useSession.setState({ sync: 'offline' })
+    await show()
+    expect(host.textContent).toContain('OFFLINE · данные из кэша')
+  })
+
+  it('syncing с очередью виден', async () => {
+    useSession.setState({ sync: 'syncing', queued: 1 })
+    await show()
+    expect(host.textContent).toContain('SYNC · обновляю…')
+  })
+
+  it('syncing после видимого состояния не прячет полоску, а после конца — прячет', async () => {
+    useSession.setState({ queued: 1 })
+    await show()
+    await act(async () => useSession.setState({ queued: 0, sync: 'syncing' }))
+    expect(host.textContent).toContain('SYNC · обновляю…')
+    await act(async () => useSession.setState({ sync: 'idle' }))
+    expect(host.innerHTML).toBe('')
+  })
+
+  it('на /settings скрыта', async () => {
+    useSession.setState({ queued: 1, deviceError: 'сбой' })
+    await show('/settings')
+    expect(host.innerHTML).toBe('')
+    await show('/settings/security')
+    expect(host.innerHTML).toBe('')
+  })
+
+  it('на ширине ПК не монтируется', async () => {
+    mockMedia(false)
+    useSession.setState({ queued: 1, deviceError: 'сбой' })
+    await show()
+    expect(host.innerHTML).toBe('')
+  })
+
+  it('причина ошибки показана', async () => {
+    useSession.setState({ sync: 'error', syncError: 'GitHub ответил 502' })
+    await show()
+    expect(host.textContent).toContain('GitHub ответил 502')
   })
 })
