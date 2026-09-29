@@ -659,6 +659,20 @@ describe('пишет одна вкладка (ADR-013)', () => {
     expect(JSON.parse(srv.text('main', PATH))).toMatchObject({ title: 'Из A', nextStep: 'из B' })
   })
 
+  it('просмотр, открытый без сети при чужой правке в очереди, показывает её значение и считает её', async () => {
+    const srv = server({ main: { [PATH]: project({ status: 'paused' }) } })
+    const { b } = await twoTabs(srv, false)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { status: 'done' })
+    expect(useSession.getState().queued).toBe(1)
+    await b.useSession.getState().boot()
+    await b.useSession.getState().syncNow()
+    expect(b.useSession.getState().readOnly).toBe(true)
+    expect(b.useSession.getState().sync).toBe('offline')
+    expect(b.useSession.getState().queued).toBe(1)
+    expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).status).toBe('done')
+  })
+
   it('пишущая меняет данные — вкладка просмотра по сообщению перечитывает очередь и файлы', async () => {
     const srv = server({ main: { [PATH]: project() } })
     const { b } = await twoTabs(srv)
