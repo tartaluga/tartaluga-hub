@@ -28,6 +28,9 @@ function server() {
     if (state.down) throw new ApiError(0, 'network', 'нет сети')
   }
   const remote: Remote = {
+    async listBranches() {
+      return ['main']
+    },
     async me() {
       check()
       return ME

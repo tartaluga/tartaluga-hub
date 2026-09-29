@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { resetGitHubAppCaches } from '../githubApp'
+import { UPSTREAM_UNAVAILABLE_TEXT } from '../gone'
 import { jsonResponse, mutation, on, ORIGIN, setup, type Handler } from './helpers'
 
 const PROJECT = readFileSync(new URL('../../schema/examples/valid/project-full.json', import.meta.url), 'utf8') // slug tartaluga-hub
@@ -130,14 +131,26 @@ describe('прочие команды к репо данных', () => {
     expect(await outcome(await b.send(req(b.cookie)))).toEqual(UNAVAILABLE)
   })
 
-  it('удаление и слияние ветки, которой нет — branch_not_found', async () => {
-    const { cookie, send } = await setup(
-      on('DELETE', '/git/refs/heads/draft', () => jsonResponse({ message: 'Reference does not exist' }, 422)),
-      branch('draft', false),
-      repo('visible'),
-    )
-    expect(await outcome(await send(mutation('DELETE', '/api/branches/draft', cookie)))).toEqual({ status: 404, code: 'branch_not_found' })
+  it('слияние ветки, которой нет — branch_not_found', async () => {
+    const { cookie, send } = await setup(branch('draft', false), repo('visible'))
     expect(await outcome(await send(mutation('POST', '/api/branches/draft/merge', cookie)))).toEqual({ status: 404, code: 'branch_not_found' })
+  })
+
+  it('удаление ветки, которой уже нет (подтверждено) — успех; не подтверждено — 503', async () => {
+    const del422 = on('DELETE', '/git/refs/heads/draft', () => jsonResponse({ message: 'Reference does not exist' }, 422))
+    const a = await setup(del422, branch('draft', false), repo('visible'))
+    const res = await a.send(mutation('DELETE', '/api/branches/draft', a.cookie))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, alreadyGone: true })
+    const b = await setup(del422, branch('draft', false), repo('hidden'))
+    expect(await outcome(await b.send(mutation('DELETE', '/api/branches/draft', b.cookie)))).toEqual(UNAVAILABLE)
+  })
+
+  it('текст 503 не обещает автоповтор — его видят и действия без очереди', async () => {
+    const { cookie, send } = await setup(on('GET', '/branches', notFound))
+    const res = await send(get('/api/branches', cookie))
+    expect((await res.json()).error.message).toBe(UPSTREAM_UNAVAILABLE_TEXT)
+    expect(UPSTREAM_UNAVAILABLE_TEXT).not.toMatch(/повторю/)
   })
 
   it('blob: репо видно — not_found; не видно — 503', async () => {

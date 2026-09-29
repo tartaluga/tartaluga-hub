@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router'
-import { useSession } from '../app/session'
+import { ACCESS_HINT, useSession } from '../app/session'
 import { syncText } from './SyncIndicator'
 import css from './MobileSyncBar.module.css'
 
 type State = ReturnType<typeof useSession.getState>['sync']
 
-/** Полоска на телефоне нужна, только когда есть что сказать: очередь, нет сети, ошибка, вход, ошибка устройства. */
-export function syncBarVisible(sync: State, queued: number, deviceError: string | null): boolean {
-  return queued > 0 || sync === 'offline' || sync === 'error' || sync === 'sessionExpired' || Boolean(deviceError)
+/** Полоска на телефоне нужна, только когда есть что сказать: очередь, нет сети, ошибка, вход, ошибка устройства, нет доступа к GitHub. */
+export function syncBarVisible(sync: State, queued: number, deviceError: string | null, accessProblem = false): boolean {
+  return queued > 0 || sync === 'offline' || sync === 'error' || sync === 'sessionExpired' || Boolean(deviceError) || accessProblem
 }
 
 const QUERY = '(max-width: 767px)'
@@ -34,12 +34,13 @@ export function MobileSyncBar() {
   const queued = useSession((s) => s.queued)
   const syncNow = useSession((s) => s.syncNow)
   const deviceError = useSession((s) => s.deviceError)
+  const accessProblem = useSession((s) => s.accessProblem)
   const [now, setNow] = useState(() => Date.now())
   const mobile = useIsMobile()
   const { pathname } = useLocation()
   // В «Настройках» на телефоне уже полный индикатор — второй такой же не нужен.
   const onSettings = pathname === '/settings' || pathname.startsWith('/settings/')
-  const base = syncBarVisible(sync, queued, deviceError)
+  const base = syncBarVisible(sync, queued, deviceError, accessProblem)
   // Без прыжка: если полоска была видна, во время сверки она остаётся до её конца.
   const [held, setHeld] = useState(false)
   useEffect(() => {
@@ -62,9 +63,15 @@ export function MobileSyncBar() {
           <span className={css.dot} aria-hidden />
           <span className={css.text}>
             <span className="mono">{syncText(sync, queued, lastSync, now)}</span>
-            {sync === 'error' && syncError && <span className={css.reason}>{syncError}</span>}
+            {sync === 'error' && syncError && syncError !== ACCESS_HINT && <span className={css.reason}>{syncError}</span>}
           </span>
         </button>
+      )}
+      {accessProblem && (
+        <p className={css.device} role="alert">
+          <span className={css.dot} aria-hidden />
+          <span>{ACCESS_HINT}</span>
+        </p>
       )}
       {deviceError && (
         <p className={css.device} role="alert">

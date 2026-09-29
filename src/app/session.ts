@@ -3,7 +3,7 @@
 // Хаб всегда смотрит на одну ветку репо данных; у каждой ветки свой кэш на устройстве.
 import { create } from 'zustand'
 import { persistDrafts, wipeDrafts } from '../lib/drafts'
-import { ApiError, commitChanges, getMe, isNetworkError, listFiles, logout, putFile, readBlobText, type CommitChange, type Me } from '../lib/api'
+import { ApiError, commitChanges, getMe, isNetworkError, listBranches, listFiles, logout, putFile, readBlobText, type CommitChange, type Me } from '../lib/api'
 import {
   deleteConflict,
   deleteQueued,
@@ -52,9 +52,18 @@ export interface Remote {
   readBlobText(sha: string): Promise<string>
   putFile(branch: string, path: string, text: string, sha?: string): Promise<{ sha: string }>
   commit(branch: string, changes: CommitChange[], expectedHead: string, message: string): Promise<{ head: string; shas: Record<string, string> }>
+  /** Имена веток репо данных: сверка перед тем, как забыть ветку (ADR-014). */
+  listBranches(): Promise<string[]>
 }
 
-const serverRemote: Remote = { me: getMe, listFiles, readBlobText, putFile, commit: commitChanges }
+const serverRemote: Remote = {
+  me: getMe,
+  listFiles,
+  readBlobText,
+  putFile,
+  commit: commitChanges,
+  listBranches: async () => (await listBranches()).branches.map((b) => b.name),
+}
 
 /** Дерево открытой ветки на момент последней сверки: коммит и все пути данных (включая обложки). */
 export interface Tree {
@@ -83,6 +92,8 @@ interface Session {
   conflicts: StoredConflict[]
   /** Беда с хранилищем устройства: правка не легла в IndexedDB или обновление базы ждёт другие вкладки. */
   deviceError: string | null
+  /** GitHub подряд не подтверждает данные (ADR-014): скорее всего, у GitHub App нет доступа к репо данных. */
+  accessProblem: boolean
   /**
    * Хаб открыт в другой вкладке, и пишет она (ADR-013): здесь только просмотр — правки отклоняются с READ_ONLY,
    * очередь не отправляется, на устройство ничего не пишется.
@@ -182,6 +193,39 @@ export const isGone = (e: unknown): boolean => e instanceof ApiError && e.status
  */
 export const isBranchGone = (e: unknown): boolean => e instanceof ApiError && e.status === 404 && e.code === 'branch_not_found'
 
+/** 503 сервера: GitHub не подтвердил ни наличие, ни отсутствие (ADR-014). */
+export const UPSTREAM_UNAVAILABLE = 'upstream_unavailable'
+
+/** Текст сверки и очереди при 503 upstream_unavailable: повтор идёт сам. */
+export const UPSTREAM_RETRY_TEXT = 'GitHub сейчас не отвечает. Данные на устройстве, повторю сам.'
+
+/** Подсказка, когда 503 повторяется подряд ACCESS_STREAK раз (ADR-014). */
+export const ACCESS_HINT =
+  'GitHub не даёт доступ к репо данных. Проверь, что GitHub App tartaluga-hub установлена и видит tartaluga-hub-data. Правки сохранены на устройстве.'
+
+/**
+ * Сколько 503 upstream_unavailable подряд — уже не случайный сбой. Повторы очереди идут через 5, 10, 20 с, так что
+ * третий подряд — это не меньше полуминуты недоступности и хотя бы одна перепроверка. Счёт по попыткам, а не по
+ * времени: не нужен таймер, и на устройстве, которое давно не открывали, подсказка не всплывёт от одного сбоя.
+ */
+export const ACCESS_STREAK = 3
+let upstreamStreak = 0
+
+/** Сверка или запись с репо данных прошла — доступ есть. */
+function upstreamOk(): void {
+  upstreamStreak = 0
+  if (useSession.getState().accessProblem) useSession.setState({ accessProblem: false })
+}
+
+/** Текст ошибки сверки или очереди; 503 upstream_unavailable считается — подряд ACCESS_STREAK раз даёт подсказку. */
+function syncErrorText(e: unknown): string {
+  if (!(e instanceof ApiError && e.code === UPSTREAM_UNAVAILABLE)) return errorText(e)
+  upstreamStreak++
+  if (upstreamStreak < ACCESS_STREAK) return UPSTREAM_RETRY_TEXT
+  useSession.setState({ accessProblem: true })
+  return ACCESS_HINT
+}
+
 export function errorText(e: unknown): string {
   if (isNetworkError(e)) return 'Нет связи с сервером хаба. Показываю данные с устройства.'
   if (e instanceof ApiError || e instanceof QueueConflict) return e.message
@@ -258,6 +302,7 @@ export const useSession = create<Session>((set, get) => ({
   queued: 0,
   conflicts: [],
   deviceError: null,
+  accessProblem: false,
   readOnly: false,
   takeover: null,
   remote: serverRemote,
@@ -678,20 +723,29 @@ async function syncBranch(branch: string): Promise<void> {
     for (const p of removed) next.delete(p)
     for (const f of changed) next.set(f.path, f)
     useSession.setState({ files: overlay(branch, [...next.values()]), tree: { head, paths: remoteFiles.map((f) => f.path) }, sync: 'idle', lastSync: new Date() })
+    upstreamOk()
     if (!useSession.getState().me) void useSession.getState().refreshMe() // запускались без сети — теперь узнаём сессию
-  } catch (e) {
+  } catch (caught) {
     if (!current()) return
-    const status = e instanceof ApiError ? e.status : -1
+    let e = caught
     // Ветку удалили на другом устройстве или на GitHub (сервер это подтвердил) — возвращаемся на main,
     // кэш и очередь ветки больше некуда писать. Любой другой сбой, в том числе 404, ничего не стирает.
     if (isBranchGone(e) && branch !== MAIN) {
-      if (canWrite()) await forgetBranch(branch)
-      await useSession.getState().switchBranch(MAIN, `Ветки «${branch}» больше нет в репо данных — открыта main.`)
-      return
+      // Вторая проверка — списком веток (ADR-014): доступ мог пропасть и вернуться между проверками сервера,
+      // GitHub мог не успеть разнести новую ветку. Стираем, только если ветки нет и в списке; иначе — сбой, повтор.
+      if ((await branchListed(branch)) === false) {
+        if (!current()) return
+        if (canWrite()) await forgetBranch(branch)
+        await useSession.getState().switchBranch(MAIN, `Ветки «${branch}» больше нет в репо данных — открыта main.`)
+        return
+      }
+      if (!current()) return
+      e = new ApiError(503, UPSTREAM_UNAVAILABLE, UPSTREAM_RETRY_TEXT)
     }
+    const status = e instanceof ApiError ? e.status : -1
     useSession.setState({
       sync: status === 401 ? 'sessionExpired' : status === 0 ? 'offline' : 'error',
-      syncError: status === 401 ? 'Сессия закончилась, войди снова.' : errorText(e),
+      syncError: status === 401 ? 'Сессия закончилась, войди снова.' : syncErrorText(e),
     })
   }
 }
@@ -889,10 +943,20 @@ function forgetQueue() {
 /** Стереть с устройства всё своё: память очереди, IndexedDB, черновики — и показать экран входа. */
 async function wipeLocal(): Promise<void> {
   wiped = true
+  upstreamStreak = 0
   forgetQueue()
   await wipeDevice().catch(() => undefined)
   await wipeDrafts().catch(() => undefined) // черновики для обновления хаба (ADR-011)
-  useSession.setState({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [], deviceError: null })
+  useSession.setState({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [], deviceError: null, accessProblem: false })
+}
+
+/** Есть ли ветка в списке веток репо; null — список не получен. */
+async function branchListed(branch: string): Promise<boolean | null> {
+  try {
+    return (await useSession.getState().remote.listBranches()).includes(branch)
+  } catch {
+    return null
+  }
 }
 
 /** Ветку удалили: её кэш, очередь и конфликты больше некуда писать. */
@@ -1105,6 +1169,7 @@ async function written(live: Live, snap: Snap, sha: string, text: string): Promi
   const k = key(branch, path)
   settle(live, snap, { path, sha, text })
   retryDelay = RETRY_FIRST
+  upstreamOk()
   await persistEntry(k)
   publish()
   await applyWrite(branch, [{ path, sha, text }], [])
@@ -1226,6 +1291,7 @@ async function mergeAndSend(live: Live): Promise<void> {
     // Новые правки, пришедшие за это время, ждут от сохранённой версии: разобранные места не всплывут снова.
     settle(live, snap, saved)
     retryDelay = RETRY_FIRST
+    upstreamOk()
     await persistEntry(k)
     publish()
     await applyWrite(branch, [saved], [])
@@ -1254,7 +1320,7 @@ async function failed(live: Live, e: unknown): Promise<SendResult> {
   // от API хаба.
   const transient = e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500 || e.code === STALE_BUILD || e.status === 404
   if (transient) {
-    useSession.setState({ sync: e.status === 0 ? 'offline' : 'error', syncError: errorText(e) })
+    useSession.setState({ sync: e.status === 0 ? 'offline' : 'error', syncError: syncErrorText(e) })
     return 'later'
   }
   // Сервер отказал по существу (схема, размер, путь): повтор не поможет. Правку не теряем — она во «Входящих».
@@ -1581,5 +1647,6 @@ export function resetQueueMemory(): void {
   promoting = null
   if (takeoverTimer) clearTimeout(takeoverTimer)
   takeoverTimer = null
-  useSession.setState({ queued: 0, conflicts: [], deviceError: null, readOnly: false, takeover: null })
+  upstreamStreak = 0
+  useSession.setState({ queued: 0, conflicts: [], deviceError: null, accessProblem: false, readOnly: false, takeover: null })
 }

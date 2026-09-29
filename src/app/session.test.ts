@@ -22,6 +22,9 @@ function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<strin
   const trees: Record<string, Entry[]> = Array.isArray(tree) ? { main: [...tree] } : Object.fromEntries(Object.entries(tree).map(([k, v]) => [k, [...v]]))
   let n = 0
   const remote: Remote = {
+    async listBranches() {
+      return Object.keys(trees)
+    },
     async me() {
       if (meFail) throw meFail
       return ME

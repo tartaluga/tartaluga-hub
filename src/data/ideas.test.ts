@@ -218,6 +218,9 @@ function fakeRepo(files: { path: string; sha: string; text: string }[]) {
     return sha
   }
   const remote: Remote = {
+    async listBranches() {
+      return ['main']
+    },
     async me() {
       return ME
     },

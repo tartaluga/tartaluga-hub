@@ -128,12 +128,20 @@ export async function createBranch(request: Request, env: Env, fetchImpl?: F): P
   return json({ name, head }, 201)
 }
 
-/** DELETE /api/branches/:name — только при свежем входе. */
+/**
+ * DELETE /api/branches/:name — только при свежем входе. Ветки уже нет (подтверждено, ADR-014) — тоже успех:
+ * цель «ветки нет» достигнута, а клиент после успеха забывает её кэш.
+ */
 export async function deleteBranch(name: string, session: Session, now: number, env: Env, fetchImpl?: F): Promise<Response> {
   const branch = userBranch(name)
   requireFresh(session, now)
   const repo = await dataRepo(env, MAIN, fetchImpl)
-  await confirmGone(repo, { branch }, () => repo.deleteBranch(branch))
+  try {
+    await confirmGone(repo, { branch }, () => repo.deleteBranch(branch))
+  } catch (e) {
+    if (e instanceof HttpError && e.code === 'branch_not_found') return json({ ok: true, alreadyGone: true })
+    throw e
+  }
   return json({ ok: true })
 }
 

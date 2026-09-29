@@ -2,7 +2,7 @@
 import { earlierVersions } from '../screens/Conflicts'
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, READ_ONLY, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
+import { ACCESS_HINT, ACCESS_STREAK, UPSTREAM_RETRY_TEXT, DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, READ_ONLY, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
 import { resetWriter } from './writer'
 import { fakeLockHub, setLocks } from '../test/fakeLocks'
 import { ApiError, type Me } from '../lib/api'
@@ -51,13 +51,18 @@ function server(trees: Record<string, Record<string, string>>) {
   for (const [branch, files] of Object.entries(trees)) {
     heads[branch] = new Map(Object.entries(files).map(([p, t]) => [p, store(t)]))
   }
-  const state = { down: false, auth: false, fail: null as ApiError | null, listFail: null as ApiError | null, status: 0, writes: [] as string[] }
+  const state = { down: false, auth: false, fail: null as ApiError | null, listFail: null as ApiError | null, branchesFail: null as ApiError | null, status: 0, writes: [] as string[] }
   const check = () => {
     if (state.down) throw new ApiError(0, 'network', 'нет сети')
     if (state.status) throw new ApiError(state.status, 'server', `Сервер ответил ${state.status}`)
     if (state.auth) throw new ApiError(401, 'unauthorized', 'Нужно войти')
   }
   const remote: Remote = {
+    async listBranches() {
+      check()
+      if (state.branchesFail) throw state.branchesFail
+      return Object.keys(heads)
+    },
     async me() {
       check()
       return ME
@@ -93,7 +98,9 @@ function server(trees: Record<string, Record<string, string>>) {
     else heads[branch]!.set(path, store(text))
   }
   const text = (branch: string, path: string) => blobs.get(heads[branch]!.get(path)!)!
-  return { remote, state, edit, text }
+  /** Удалить ветку «на GitHub». */
+  const drop = (branch: string) => void delete heads[branch]
+  return { remote, state, edit, text, drop }
 }
 
 const shown = () => JSON.parse(useSession.getState().files.find((f) => f.path === PATH)!.text)
@@ -460,21 +467,82 @@ describe('«удалено» — только подтверждённое се�
     expect(JSON.parse(srv.text('feat', PATH)).title).toBe('С ветки')
   })
 
-  it('подтверждённое «ветки нет» — ветка стирается с очередью и кэшем, открыта main', async () => {
+  /** Ветка feat с неотправленной правкой (отложена: нет сети). */
+  async function branchWithEdit() {
     const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
     await start(srv)
     await useSession.getState().switchBranch('feat')
     srv.state.down = true
     await useSession.getState().saveProject('a', { title: 'С ветки' })
     srv.state.down = false
+    return srv
+  }
+
+  async function expectBranchKept() {
+    expect(useSession.getState()).toMatchObject({ branch: 'feat', sync: 'error', branchNotice: null })
+    expect(await getQueue()).toHaveLength(1)
+    expect(useSession.getState().queued).toBe(1)
+    expect(await getCachedFiles('feat')).toHaveLength(1)
+  }
+
+  it('branch_not_found, но ветка есть в списке веток — сбой, ветка и очередь целы', async () => {
+    const srv = await branchWithEdit()
     srv.state.listFail = new ApiError(404, 'branch_not_found', 'Ветки нет в репо данных')
     await useSession.getState().refresh()
-    srv.state.listFail = null
+    await expectBranchKept()
+    expect(useSession.getState().syncError).toBe(UPSTREAM_RETRY_TEXT)
+  })
+
+  it('branch_not_found, а список веток не получен — сбой, ветка и очередь целы', async () => {
+    const srv = await branchWithEdit()
+    srv.state.listFail = new ApiError(404, 'branch_not_found', 'Ветки нет в репо данных')
+    srv.state.branchesFail = new ApiError(503, 'upstream_unavailable', 'GitHub сейчас не отвечает. Попробуй ещё раз чуть позже.')
+    await useSession.getState().refresh()
+    await expectBranchKept()
+  })
+
+  it('branch_not_found и ветки нет в списке — ветка стирается с очередью и кэшем, открыта main', async () => {
+    const srv = await branchWithEdit()
+    srv.drop('feat')
+    await useSession.getState().refresh()
     await vi.waitFor(() => expect(useSession.getState().branch).toBe('main'))
     expect(useSession.getState().branchNotice).toContain('feat')
     expect(await getQueue()).toEqual([])
     expect(useSession.getState().queued).toBe(0)
     expect(await getCachedFiles('feat')).toEqual([])
+  })
+
+  it(`503 upstream_unavailable ${ACCESS_STREAK} раза подряд — подсказка про доступ GitHub App; успех её убирает`, async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.listFail = new ApiError(503, 'upstream_unavailable', 'GitHub сейчас не отвечает. Попробуй ещё раз чуть позже.')
+    for (let i = 1; i < ACCESS_STREAK; i++) {
+      await useSession.getState().refresh()
+      expect(useSession.getState()).toMatchObject({ accessProblem: false, syncError: UPSTREAM_RETRY_TEXT })
+    }
+    // Сбой сети между попытками про доступ к GitHub ничего не говорит: счёт не сбрасывает и не растит.
+    srv.state.down = true
+    await useSession.getState().refresh()
+    expect(useSession.getState().accessProblem).toBe(false)
+    srv.state.down = false
+    await useSession.getState().refresh()
+    expect(useSession.getState()).toMatchObject({ accessProblem: true, syncError: ACCESS_HINT, sync: 'error' })
+    srv.state.listFail = null
+    await useSession.getState().refresh()
+    expect(useSession.getState()).toMatchObject({ accessProblem: false, sync: 'idle', syncError: null })
+  })
+
+  it('503 при отправке очереди тоже считается; записанная правка сбрасывает счёт', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.fail = new ApiError(503, 'upstream_unavailable', 'GitHub сейчас не отвечает. Попробуй ещё раз чуть позже.')
+    for (let i = 0; i < ACCESS_STREAK; i++) await useSession.getState().saveProject('a', { title: `Моё ${i}` })
+    expect(useSession.getState()).toMatchObject({ accessProblem: true, syncError: ACCESS_HINT })
+    expect(useSession.getState().queued).toBe(1)
+    srv.state.fail = null
+    await useSession.getState().flush()
+    expect(useSession.getState().queued).toBe(0)
+    expect(useSession.getState().accessProblem).toBe(false)
   })
 })
 

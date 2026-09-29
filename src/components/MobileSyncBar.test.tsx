@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
-import { useSession } from '../app/session'
+import { ACCESS_HINT, useSession } from '../app/session'
 import { MobileSyncBar } from './MobileSyncBar'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -20,7 +20,7 @@ function mockMedia(matches: boolean) {
 beforeEach(() => {
   mockMedia(true)
   syncNow.mockClear()
-  useSession.setState({ phase: 'ready', sync: 'idle', syncError: null, lastSync: new Date(), queued: 0, conflicts: [], deviceError: null, syncNow })
+  useSession.setState({ phase: 'ready', sync: 'idle', syncError: null, lastSync: new Date(), queued: 0, conflicts: [], deviceError: null, accessProblem: false, syncNow })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -62,6 +62,19 @@ describe('MobileSyncBar', () => {
     useSession.setState({ sync: 'offline' })
     await show()
     expect(host.textContent).toContain('OFFLINE')
+  })
+
+  it('нет доступа к репо данных — подсказка один раз (не дублируется причиной ошибки)', async () => {
+    useSession.setState({ sync: 'error', syncError: ACCESS_HINT, accessProblem: true })
+    await show()
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(ACCESS_HINT)
+    expect(host.textContent!.split('tartaluga-hub-data')).toHaveLength(2)
+  })
+
+  it('подсказка держит полоску видимой и во время сверки', async () => {
+    useSession.setState({ sync: 'syncing', accessProblem: true })
+    await show()
+    expect(host.textContent).toContain(ACCESS_HINT)
   })
 
   it('ошибка устройства — role=alert', async () => {

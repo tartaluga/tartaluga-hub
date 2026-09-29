@@ -8,8 +8,12 @@ import { HttpError } from './http'
 /** Что должно было существовать: ветка; файл в ветке; объект (blob) по sha. */
 export type Target = { branch: string; path?: string } | { blob: string }
 
-/** GitHub не подтвердил ни наличие, ни отсутствие: клиент повторяет позже, ничего не стирая. */
-export const upstreamUnavailable = () => new HttpError(503, 'upstream_unavailable', 'GitHub сейчас не подтверждает данные — повторю позже')
+/**
+ * GitHub не подтвердил ни наличие, ни отсутствие: клиент ничего не стирает. Текст — для действий без автоповтора
+ * (удалить, сделать проектом); очередь и сверка показывают свой текст по коду.
+ */
+export const UPSTREAM_UNAVAILABLE_TEXT = 'GitHub сейчас не отвечает. Попробуй ещё раз чуть позже.'
+export const upstreamUnavailable = () => new HttpError(503, 'upstream_unavailable', UPSTREAM_UNAVAILABLE_TEXT)
 
 export const branchNotFound = () => new HttpError(404, 'branch_not_found', 'Ветки нет в репо данных')
 

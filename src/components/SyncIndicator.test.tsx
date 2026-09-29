@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSession } from '../app/session'
+import { ACCESS_HINT, useSession } from '../app/session'
 import type { StoredConflict } from '../lib/localdb'
 import { downloadJson } from '../data/unsentExport'
 import { SyncIndicator } from './SyncIndicator'
@@ -16,7 +16,7 @@ let root: Root
 let host: HTMLElement
 
 beforeEach(() => {
-  useSession.setState({ phase: 'ready', branch: 'main', sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [], deviceError: null })
+  useSession.setState({ phase: 'ready', branch: 'main', sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [], deviceError: null, accessProblem: false })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -37,6 +37,18 @@ const show = () =>
     ),
   )
 const button = () => [...host.querySelectorAll('button')].find((b) => b.textContent?.includes(LABEL))
+
+describe('нет доступа к репо данных (ADR-014)', () => {
+  it('подсказка видна под индикатором только при accessProblem', async () => {
+    useSession.setState({ sync: 'error', syncError: ACCESS_HINT, queued: 1 })
+    await show()
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    useSession.setState({ accessProblem: true })
+    await show()
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(ACCESS_HINT)
+    expect(host.textContent).toContain('tartaluga-hub-data')
+  })
+})
 
 describe('«Скачать неотправленное»', () => {
   it('нет очереди и конфликтов — кнопки нет', async () => {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { DownloadSimple } from '@phosphor-icons/react'
-import { unsentSnapshot, useSession } from '../app/session'
+import { ACCESS_HINT, unsentSnapshot, useSession } from '../app/session'
 import { buildUnsentExport, downloadJson, hasUnsent, unsentFileName } from '../data/unsentExport'
 import { plural } from '../lib/plural'
 import { conflictCount } from '../screens/Conflicts'
@@ -50,6 +50,7 @@ export function SyncIndicator() {
   const syncNow = useSession((s) => s.syncNow)
   const conflictList = useSession((s) => s.conflicts)
   const deviceError = useSession((s) => s.deviceError)
+  const accessProblem = useSession((s) => s.accessProblem)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -69,6 +70,13 @@ export function SyncIndicator() {
         <span className={css.dot} aria-hidden />
         <span className="mono">{text}</span>
       </button>
+      {/* GitHub подряд не подтверждает данные (ADR-014): что проверить владельцу. Стиль — как беда с устройством. */}
+      {accessProblem && (
+        <p className={css.device} role="alert">
+          <span className={css.dot} aria-hidden />
+          <span>{ACCESS_HINT}</span>
+        </p>
+      )}
       {deviceError && (
         <p className={css.device} role="alert">
           <span className={css.dot} aria-hidden />
