@@ -16,6 +16,9 @@ export const RELOAD_MIN_MS = 5 * 60 * 1000
 export const POLL_EVERY_MS = 15_000
 export const POLL_LIMIT_MS = 3 * 60 * 1000
 
+/** Запас на разброс часов Worker и раннера (оба по NTP): generatedAt ставится в начале скрипта. */
+export const CLOCK_SLACK_MS = 30_000
+
 export const POLL_GAVE_UP = 'Не дождался новых данных — попробуй позже.'
 
 export interface WidgetsState {
@@ -139,25 +142,37 @@ export async function refreshWidgets(): Promise<void> {
   if (useWidgets.getState().polling) return
   const gen = generation
   const before = useWidgets.getState().status?.generatedAt ?? null
-  // Виджетов ещё не было: успех — только status.json, собранный после нажатия (а не прежний, до него).
-  const pressedAt = deps.now()
-  const fresh = (s: Status) => s.generatedAt !== null && s.generatedAt !== before && (before !== null || (Date.parse(s.generatedAt) || 0) >= pressedAt)
   useWidgets.setState({ polling: true, refreshNote: null })
   const finish = (refreshNote: string | null) => {
     if (gen === generation) useWidgets.setState({ polling: false, refreshNote })
   }
+  let startedAt: number | null
   try {
-    await api<{ ok: true }>('/api/status/refresh', { method: 'POST' })
+    const res = await api<{ ok: true; at?: unknown }>('/api/status/refresh', { method: 'POST' })
+    startedAt = typeof res?.at === 'string' && !Number.isNaN(Date.parse(res.at)) ? Date.parse(res.at) : null
   } catch (e) {
     finish(refreshError(e))
     return
+  }
+  // generatedAt, уже виденные до и во время опроса: они не новые.
+  const seen = new Set<string>(before === null ? [] : [before])
+  const fresh = (s: Status): boolean => {
+    const g = s.generatedAt
+    if (g === null || seen.has(g)) return false
+    if (before !== null) return true
+    // Виджетов ещё не было: успех — только файл, собранный после запуска. Сравниваем с часами сервера
+    // (часы телефона могут спешить или отставать); без них — первый увиденный файл считается прежним.
+    if (startedAt !== null) return Date.parse(g) >= startedAt - CLOCK_SLACK_MS
+    return seen.size > 0
   }
   for (let waited = 0; waited < POLL_LIMIT_MS; waited += POLL_EVERY_MS) {
     await sleep(POLL_EVERY_MS)
     if (gen !== generation) return
     try {
       const got = await fetchStatus()
-      if (got.kind === 'ok' && fresh(got.status)) {
+      const isFresh = got.kind === 'ok' && fresh(got.status)
+      if (got.kind === 'ok' && got.status.generatedAt !== null) seen.add(got.status.generatedAt)
+      if (got.kind === 'ok' && isFresh) {
         lastLoad = deps.now()
         await apply(got, gen)
         finish(null)

@@ -437,6 +437,10 @@ describe('обновление виджетов', () => {
     const { gh, cookie, send } = await setup(on('POST', '/actions/workflows/status.yml/dispatches', () => new Response(null, { status: 204 })))
     const res = await send(mutation('POST', '/api/status/refresh', cookie, { ref: 'draft', inputs: { x: 1 } }))
     expect(res.status).toBe(202)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(Number.isNaN(Date.parse(body.at))).toBe(false)
+    expect(body.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
     expect(gh.repoCalls()[0]!.body).toEqual({ ref: 'main' })
   })
 

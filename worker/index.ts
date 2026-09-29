@@ -131,7 +131,7 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
   }
   if (pathname === '/api/status/refresh') {
     allow(method, 'POST')
-    return refreshStatus(env, deps.fetch)
+    return refreshStatus(env, now, deps.fetch)
   }
   if (pathname === '/api/file') {
     allow(method, 'PUT')

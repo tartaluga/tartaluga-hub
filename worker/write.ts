@@ -216,9 +216,9 @@ async function checkMergeResult(repo: GitHubClient, oldMain: string, newMain: st
  * POST /api/status/refresh — «Обновить сейчас» (ADR-015 п.2): workflow_dispatch для status.yml на main.
  * Тело запроса не читается: ветку и входы задаёт сервер (только main — на другой ветке могла лежать старая версия).
  * 204 → 202; 404 (нет status.yml) и 422 (в нём нет workflow_dispatch) — «не настроено» только при видимом репо
- * (ADR-014); 403 (нет права или запуск запрещён) и 5xx — временная ошибка, клиент ничего не меняет.
+ * (ADR-014). Ответ 202 несёт at — момент запуска по часам Worker. 403 (нет права или запуск запрещён) и 5xx — временная ошибка, клиент ничего не меняет.
  */
-export async function refreshStatus(env: Env, fetchImpl?: F): Promise<Response> {
+export async function refreshStatus(env: Env, now: number, fetchImpl?: F): Promise<Response> {
   const repo = await dataRepo(env, MAIN, fetchImpl)
   try {
     await repo.dispatchWorkflow('status.yml', MAIN)
@@ -233,7 +233,8 @@ export async function refreshStatus(env: Env, fetchImpl?: F): Promise<Response> 
     }
     throw e
   }
-  return json({ ok: true }, 202)
+  // at — время запуска по часам сервера: клиент сравнивает с ним generatedAt, а не со своими часами.
+  return json({ ok: true, at: new Date(now).toISOString() }, 202)
 }
 
 export function requireFresh(session: Session, now: number): void {

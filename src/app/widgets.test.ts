@@ -150,7 +150,9 @@ describe('загрузка status.json', () => {
     const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' })
     stop = installWidgets({ now: () => now }, win, doc)
     await vi.waitFor(() => expect(gets()).toBe(1))
-    await loadWidgets()
+    // Первый запрос упал (сеть): дать ему завершиться, и только потом — событие online.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(useWidgets.getState().status).toBeNull()
     win.dispatchEvent(new Event('online'))
     await vi.waitFor(() => expect(useWidgets.getState().status?.generatedAt).toBe(T1))
     expect(gets()).toBe(2)
@@ -229,8 +231,8 @@ describe('«Обновить сейчас»', () => {
     await loadWidgets(true)
     replies['GET /api/status'] = []
     fakeTimers()
-    reply('POST', '/api/status/refresh', { status: 202, body: { ok: true } })
-    const after = '2100-01-01T00:00:00Z' // позже любого «сейчас» теста
+    reply('POST', '/api/status/refresh', { status: 202, body: { ok: true, at: T1 } })
+    const after = '2026-09-29T10:01:00Z' // собран после запуска по часам сервера
     reply('GET', '/api/status', err(404, 'not_found'), ok(status(after)))
     const run = refreshWidgets()
     await vi.advanceTimersByTimeAsync(30_000)
@@ -238,10 +240,48 @@ describe('«Обновить сейчас»', () => {
     expect(useWidgets.getState()).toMatchObject({ polling: false, refreshNote: null, empty: false })
   })
 
-  it('виджетов не было: status.json, собранный до нажатия, — ещё не успех (показан, опрос идёт дальше)', async () => {
+  it('виджетов не было, часы клиента спешат на 5 минут — успех по часам сервера (at)', async () => {
+    const at = Date.parse('2026-09-29T10:00:00Z')
+    now = at + 5 * 60_000
+    stop = installWidgets({ now: () => now }, new EventTarget(), Object.assign(new EventTarget(), { visibilityState: 'hidden' }))
+    replies['GET /api/status'] = [err(404, 'not_found')]
+    await loadWidgets(true)
+    fakeTimers()
+    reply('POST', '/api/status/refresh', { status: 202, body: { ok: true, at: new Date(at).toISOString() } })
+    const generated = new Date(at + 60_000).toISOString() // по часам раннера — раньше «сейчас» клиента
+    replies['GET /api/status'] = [ok(status(generated))]
+    const run = refreshWidgets()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await run
+    expect(useWidgets.getState()).toMatchObject({ polling: false, refreshNote: null })
+    expect(useWidgets.getState().status?.generatedAt).toBe(generated)
+  })
+
+  it('виджетов не было, часы клиента отстают — файл, собранный до запуска (at − 30 с), не засчитывается', async () => {
+    const at = Date.parse('2026-09-29T10:00:00Z')
+    now = at - 5 * 60_000
+    stop = installWidgets({ now: () => now }, new EventTarget(), Object.assign(new EventTarget(), { visibilityState: 'hidden' }))
+    replies['GET /api/status'] = [err(404, 'not_found')]
+    await loadWidgets(true)
+    fakeTimers()
+    reply('POST', '/api/status/refresh', { status: 202, body: { ok: true, at: new Date(at).toISOString() } })
+    const old = new Date(at - 31_000).toISOString() // до запуска, но позже «сейчас» клиента
+    const generated = new Date(at - 20_000).toISOString() // в пределах запаса 30 с
+    replies['GET /api/status'] = [ok(status(old)), ok(status(generated))]
+    const run = refreshWidgets()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(useWidgets.getState()).toMatchObject({ polling: true })
+    expect(useWidgets.getState().status?.generatedAt).toBe(old)
+    await vi.advanceTimersByTimeAsync(15_000)
+    await run
+    expect(useWidgets.getState()).toMatchObject({ polling: false, refreshNote: null })
+    expect(useWidgets.getState().status?.generatedAt).toBe(generated)
+  })
+
+  it('без at в ответе: первый увиденный файл — прежний, успех — generatedAt, которого ещё не было', async () => {
     fakeTimers()
     reply('POST', '/api/status/refresh', { status: 202, body: { ok: true } })
-    const after = '2100-01-01T00:00:00Z' // позже любого «сейчас» теста
+    const after = T2
     reply('GET', '/api/status', ok(status(T1)), ok(status(T1)), ok(status(after)))
     const run = refreshWidgets()
     await vi.advanceTimersByTimeAsync(15_000)
