@@ -70,7 +70,7 @@ export function SyncIndicator() {
         <span className={css.dot} aria-hidden />
         <span className="mono">{text}</span>
       </button>
-      {/* GitHub подряд не подтверждает данные (ADR-014): что проверить владельцу. Стиль — как беда с устройством. */}
+      {/* GitHub минуту и дольше не подтверждает данные (ADR-014): что проверить владельцу. Стиль — как беда с устройством. */}
       {accessProblem && (
         <p className={css.device} role="alert">
           <span className={css.dot} aria-hidden />

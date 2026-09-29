@@ -2,7 +2,7 @@
 import { earlierVersions } from '../screens/Conflicts'
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ACCESS_HINT, ACCESS_STREAK, UPSTREAM_RETRY_TEXT, DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, READ_ONLY, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
+import { ACCESS_HINT, ACCESS_HINT_AFTER_MS, UPSTREAM_RETRY_TEXT, DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, READ_ONLY, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
 import { resetWriter } from './writer'
 import { fakeLockHub, setLocks } from '../test/fakeLocks'
 import { ApiError, type Me } from '../lib/api'
@@ -117,7 +117,12 @@ beforeEach(async () => {
   useSession.setState({ phase: 'booting', me: null, branch: 'main', branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null })
 })
 
+/** Подмена Date.now в тестах подсказки (ADR-014); снимается после каждого теста. */
+let dateNow: { mockRestore(): void } | null = null
+
 afterEach(() => {
+  dateNow?.mockRestore()
+  dateNow = null
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -512,37 +517,94 @@ describe('«удалено» — только подтверждённое се�
     expect(await getCachedFiles('feat')).toEqual([])
   })
 
-  it(`503 upstream_unavailable ${ACCESS_STREAK} раза подряд — подсказка про доступ GitHub App; успех её убирает`, async () => {
+  const unavailable = () => new ApiError(503, 'upstream_unavailable', 'GitHub сейчас не отвечает. Попробуй ещё раз чуть позже.')
+
+  /** Подменяемые часы: Date.now() отдаёт заданное время, реальных задержек нет. */
+  function clock() {
+    let now = 1_000_000
+    dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    return { at: (ms: number) => void (now = 1_000_000 + ms) }
+  }
+
+  it('несколько 503 за 10 с, в том числе от отправки очереди, — подсказки нет', async () => {
+    const t = clock()
     const srv = server({ main: { [PATH]: project() } })
     await start(srv)
-    srv.state.listFail = new ApiError(503, 'upstream_unavailable', 'GitHub сейчас не отвечает. Попробуй ещё раз чуть позже.')
-    for (let i = 1; i < ACCESS_STREAK; i++) {
-      await useSession.getState().refresh()
-      expect(useSession.getState()).toMatchObject({ accessProblem: false, syncError: UPSTREAM_RETRY_TEXT })
+    srv.state.fail = unavailable()
+    for (let i = 0; i < 5; i++) {
+      t.at(i * 2_000)
+      await useSession.getState().saveProject('a', { title: `Моё ${i}` }) // запись 503
+      srv.state.listFail = unavailable()
+      await useSession.getState().refresh() // сверка 503
+      srv.state.listFail = null
     }
-    // Сбой сети между попытками про доступ к GitHub ничего не говорит: счёт не сбрасывает и не растит.
+    expect(useSession.getState()).toMatchObject({ accessProblem: false, syncError: UPSTREAM_RETRY_TEXT })
+  })
+
+  it(`503 без успеха ${ACCESS_HINT_AFTER_MS / 1000} с от первого — подсказка; успех её убирает и начинает отсчёт заново`, async () => {
+    const t = clock()
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.listFail = unavailable()
+    t.at(0)
+    await useSession.getState().refresh()
+    // Сбой сети между попытками про доступ к GitHub ничего не говорит: полосу не рвёт.
     srv.state.down = true
+    t.at(30_000)
+    await useSession.getState().refresh()
+    srv.state.down = false
+    t.at(ACCESS_HINT_AFTER_MS - 1)
     await useSession.getState().refresh()
     expect(useSession.getState().accessProblem).toBe(false)
-    srv.state.down = false
+    t.at(ACCESS_HINT_AFTER_MS)
     await useSession.getState().refresh()
     expect(useSession.getState()).toMatchObject({ accessProblem: true, syncError: ACCESS_HINT, sync: 'error' })
     srv.state.listFail = null
+    t.at(ACCESS_HINT_AFTER_MS + 1_000)
     await useSession.getState().refresh()
     expect(useSession.getState()).toMatchObject({ accessProblem: false, sync: 'idle', syncError: null })
+    // После успеха отсчёт с нуля: 503 через минуту после прошлого — первый в новой полосе.
+    srv.state.listFail = unavailable()
+    t.at(3 * ACCESS_HINT_AFTER_MS)
+    await useSession.getState().refresh()
+    expect(useSession.getState()).toMatchObject({ accessProblem: false, syncError: UPSTREAM_RETRY_TEXT })
   })
 
-  it('503 при отправке очереди тоже считается; записанная правка сбрасывает счёт', async () => {
+  it('первый 503 — не подсказка, даже после долгого перерыва; второй через минуту без успеха — подсказка', async () => {
+    const t = clock()
     const srv = server({ main: { [PATH]: project() } })
     await start(srv)
-    srv.state.fail = new ApiError(503, 'upstream_unavailable', 'GitHub сейчас не отвечает. Попробуй ещё раз чуть позже.')
-    for (let i = 0; i < ACCESS_STREAK; i++) await useSession.getState().saveProject('a', { title: `Моё ${i}` })
+    srv.state.listFail = unavailable()
+    t.at(0)
+    await useSession.getState().refresh()
+    expect(useSession.getState().accessProblem).toBe(false)
+    t.at(10 * ACCESS_HINT_AFTER_MS)
+    await useSession.getState().refresh()
+    expect(useSession.getState().accessProblem).toBe(true)
+  })
+
+  it('записанная правка сбрасывает полосу 503', async () => {
+    const t = clock()
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.fail = unavailable()
+    t.at(0)
+    await useSession.getState().saveProject('a', { title: 'Моё' })
+    t.at(ACCESS_HINT_AFTER_MS)
+    await useSession.getState().flush()
     expect(useSession.getState()).toMatchObject({ accessProblem: true, syncError: ACCESS_HINT })
-    expect(useSession.getState().queued).toBe(1)
     srv.state.fail = null
     await useSession.getState().flush()
     expect(useSession.getState().queued).toBe(0)
     expect(useSession.getState().accessProblem).toBe(false)
+  })
+
+  it('список веток длиннее 1000 не получен — ветка с очередью цела', async () => {
+    const srv = await branchWithEdit()
+    srv.state.listFail = new ApiError(404, 'branch_not_found', 'Ветки нет в репо данных')
+    srv.state.branchesFail = new ApiError(502, 'upstream', 'GitHub не ответил как надо')
+    await useSession.getState().refresh()
+    await expectBranchKept()
   })
 })
 

@@ -7,7 +7,7 @@ import css from './MobileSyncBar.module.css'
 type State = ReturnType<typeof useSession.getState>['sync']
 
 /** Полоска на телефоне нужна, только когда есть что сказать: очередь, нет сети, ошибка, вход, ошибка устройства, нет доступа к GitHub. */
-export function syncBarVisible(sync: State, queued: number, deviceError: string | null, accessProblem = false): boolean {
+export function syncBarVisible(sync: State, queued: number, deviceError: string | null, accessProblem: boolean): boolean {
   return queued > 0 || sync === 'offline' || sync === 'error' || sync === 'sessionExpired' || Boolean(deviceError) || accessProblem
 }
 

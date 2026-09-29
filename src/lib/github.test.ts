@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GitHubClient, GitHubError } from './github'
+import { BRANCH_PAGES, GitHubClient, GitHubError } from './github'
 import { decodeText, encodeText } from './base64'
 
 type Call = { method: string; url: string; init: RequestInit; body: any }
@@ -125,6 +125,38 @@ describe('GitHubClient: чтение', () => {
       on('GET', '/git/blobs/big', { status: 200, json: { encoding: 'base64', content: encodeText('большой') } }),
     )
     expect(await client(f.fn).readFile('big.json')).toEqual({ text: 'большой', sha: 'big' })
+  })
+})
+
+describe('GitHubClient: список веток (ADR-014)', () => {
+  const page = (n: number, count: number) =>
+    Array.from({ length: count }, (_, i) => ({ name: `b${n}-${i}`, commit: { sha: 'c'.repeat(40) } }))
+  const pages = (sizes: number[]) =>
+    fakeFetch((c) => {
+      const m = /[?&]page=(\d+)/.exec(c.url)
+      if (c.method !== 'GET' || !c.url.includes('/branches?') || !m) return undefined
+      const n = Number(m[1])
+      return { status: 200, json: page(n, sizes[n - 1] ?? 0) }
+    })
+
+  it('ветка на второй странице найдена; неполная страница — конец списка', async () => {
+    const f = pages([100, 3])
+    const list = await client(f.fn).listBranches()
+    expect(list).toHaveLength(103)
+    expect(list.map((b) => b.name)).toContain('b2-2')
+    expect(f.calls).toHaveLength(2)
+  })
+
+  it('ровно 100 на странице — идёт за следующей, даже если та пустая', async () => {
+    const f = pages([100])
+    expect(await client(f.fn).listBranches()).toHaveLength(100)
+    expect(f.calls).toHaveLength(2)
+  })
+
+  it(`полная ${BRANCH_PAGES}-я страница — ошибка, а не обрезанный список`, async () => {
+    const f = pages(Array(BRANCH_PAGES).fill(100))
+    await expect(client(f.fn).listBranches()).rejects.toMatchObject({ kind: 'validation' })
+    expect(f.calls).toHaveLength(BRANCH_PAGES)
   })
 })
 

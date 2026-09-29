@@ -165,6 +165,13 @@ describe('прочие команды к репо данных', () => {
     expect(await outcome(await send(get('/api/branches', cookie)))).toEqual(UNAVAILABLE)
   })
 
+  it('веток больше 1000 — список не отдаётся (5xx), клиент не примет обрезанный за полный', async () => {
+    const full = Array.from({ length: 100 }, (_, i) => ({ name: `b${i}`, commit: { sha: HEAD } }))
+    const { cookie, send } = await setup(on('GET', '/branches?', () => jsonResponse(full)))
+    const res = await send(get('/api/branches', cookie))
+    expect(res.status).toBeGreaterThanOrEqual(500)
+  })
+
   it('виджеты: status.json нет при видимом репо — not_found; репо не видно — 503', async () => {
     const a = await setup(on('GET', '/contents/status.json', notFound), repo('visible'))
     expect(await outcome(await a.send(get('/api/status', a.cookie)))).toEqual({ status: 404, code: 'not_found' })

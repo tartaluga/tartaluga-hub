@@ -6,6 +6,8 @@
 import { bytesToBase64, base64ToBytes, decodeText, encodeText } from './base64'
 
 const API = 'https://api.github.com'
+/** Страниц по 100 в списке веток: больше — ошибка (listBranches). */
+export const BRANCH_PAGES = 10
 
 export type GitHubErrorKind =
   | 'unauthorized' // 401: токен неверный, истёк или отозван
@@ -283,15 +285,18 @@ export class GitHubClient {
     return body.object.sha
   }
 
-  /** Все ветки репо: имя и последний коммит. */
+  /**
+   * Все ветки репо: имя и последний коммит. Больше BRANCH_PAGES × 100 — ошибка, а не обрезанный список:
+   * по списку клиент решает, стирать ли ветку с устройства (ADR-014), и неполный список дал бы ложное «ветки нет».
+   */
   async listBranches(): Promise<{ name: string; sha: string }[]> {
     const out: { name: string; sha: string }[] = []
-    for (let page = 1; page <= 10; page++) {
+    for (let page = 1; page <= BRANCH_PAGES; page++) {
       const { body } = await this.request<{ name: string; commit: { sha: string } }[]>(`/branches?per_page=100&page=${page}`)
       out.push(...body.map((b) => ({ name: b.name, sha: b.commit.sha })))
-      if (body.length < 100) break
+      if (body.length < 100) return out
     }
-    return out
+    throw new GitHubError('validation', `В репо данных больше ${BRANCH_PAGES * 100} веток — список неполный`)
   }
 
   /** Новая ветка от коммита. Уже есть — 'already_exists'. */

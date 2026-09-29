@@ -92,7 +92,7 @@ interface Session {
   conflicts: StoredConflict[]
   /** Беда с хранилищем устройства: правка не легла в IndexedDB или обновление базы ждёт другие вкладки. */
   deviceError: string | null
-  /** GitHub подряд не подтверждает данные (ADR-014): скорее всего, у GitHub App нет доступа к репо данных. */
+  /** GitHub минуту и дольше не подтверждает данные (ADR-014): скорее всего, у GitHub App нет доступа к репо данных. */
   accessProblem: boolean
   /**
    * Хаб открыт в другой вкладке, и пишет она (ADR-013): здесь только просмотр — правки отклоняются с READ_ONLY,
@@ -199,29 +199,41 @@ export const UPSTREAM_UNAVAILABLE = 'upstream_unavailable'
 /** Текст сверки и очереди при 503 upstream_unavailable: повтор идёт сам. */
 export const UPSTREAM_RETRY_TEXT = 'GitHub сейчас не отвечает. Данные на устройстве, повторю сам.'
 
-/** Подсказка, когда 503 повторяется подряд ACCESS_STREAK раз (ADR-014). */
+/** Подсказка, когда GitHub долго не подтверждает данные (ADR-014). */
 export const ACCESS_HINT =
   'GitHub не даёт доступ к репо данных. Проверь, что GitHub App tartaluga-hub установлена и видит tartaluga-hub-data. Правки сохранены на устройстве.'
 
 /**
- * Сколько 503 upstream_unavailable подряд — уже не случайный сбой. Повторы очереди идут через 5, 10, 20 с, так что
- * третий подряд — это не меньше полуминуты недоступности и хотя бы одна перепроверка. Счёт по попыткам, а не по
- * времени: не нужен таймер, и на устройстве, которое давно не открывали, подсказка не всплывёт от одного сбоя.
+ * Эвристика «это уже не случайный сбой» (ADR-014): 503 upstream_unavailable идут без единого успеха не меньше
+ * ACCESS_HINT_AFTER_MS от первого из них и их хотя бы ACCESS_HINT_MIN_FAILS. Меряем время, а не число неудач:
+ * одна отправка очереди может дать несколько 503 (сверка и запись), и счёт по штукам срабатывал бы за секунды.
+ * Минимум неудач — явный предохранитель: первая неудача сама начинает отсчёт, так что одна неудача (например, на
+ * устройстве, открытом через сутки) подсказку не покажет и без него.
  */
-export const ACCESS_STREAK = 3
-let upstreamStreak = 0
+export const ACCESS_HINT_AFTER_MS = 60_000
+export const ACCESS_HINT_MIN_FAILS = 2
+/** Начало непрерывной полосы 503 (null — полосы нет) и число неудач в ней. */
+let upstreamSince: number | null = null
+let upstreamFails = 0
+
+function resetUpstream(): void {
+  upstreamSince = null
+  upstreamFails = 0
+}
 
 /** Сверка или запись с репо данных прошла — доступ есть. */
 function upstreamOk(): void {
-  upstreamStreak = 0
+  resetUpstream()
   if (useSession.getState().accessProblem) useSession.setState({ accessProblem: false })
 }
 
-/** Текст ошибки сверки или очереди; 503 upstream_unavailable считается — подряд ACCESS_STREAK раз даёт подсказку. */
+/** Текст ошибки сверки или очереди; долгая полоса 503 upstream_unavailable даёт подсказку про доступ. */
 function syncErrorText(e: unknown): string {
   if (!(e instanceof ApiError && e.code === UPSTREAM_UNAVAILABLE)) return errorText(e)
-  upstreamStreak++
-  if (upstreamStreak < ACCESS_STREAK) return UPSTREAM_RETRY_TEXT
+  const now = Date.now()
+  upstreamSince ??= now
+  upstreamFails++
+  if (upstreamFails < ACCESS_HINT_MIN_FAILS || now - upstreamSince < ACCESS_HINT_AFTER_MS) return UPSTREAM_RETRY_TEXT
   useSession.setState({ accessProblem: true })
   return ACCESS_HINT
 }
@@ -943,7 +955,7 @@ function forgetQueue() {
 /** Стереть с устройства всё своё: память очереди, IndexedDB, черновики — и показать экран входа. */
 async function wipeLocal(): Promise<void> {
   wiped = true
-  upstreamStreak = 0
+  resetUpstream()
   forgetQueue()
   await wipeDevice().catch(() => undefined)
   await wipeDrafts().catch(() => undefined) // черновики для обновления хаба (ADR-011)
@@ -1647,6 +1659,6 @@ export function resetQueueMemory(): void {
   promoting = null
   if (takeoverTimer) clearTimeout(takeoverTimer)
   takeoverTimer = null
-  upstreamStreak = 0
+  resetUpstream()
   useSession.setState({ queued: 0, conflicts: [], deviceError: null, accessProblem: false, readOnly: false, takeover: null })
 }
