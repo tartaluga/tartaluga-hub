@@ -6,6 +6,7 @@ import { ArrowLeft, CaretRight, GitBranch, Minus, Plus, ShieldCheck } from '@pho
 import { errorText, MAIN, useSession } from '../app/session'
 import { buildLibrary } from '../data/projects'
 import { TagEditor } from '../components/TagEditor'
+import { SyncIndicator } from '../components/SyncIndicator'
 import { ThemeSwitch } from '../components/ThemeSwitch'
 import { clampDays, DAYS_MAX, DAYS_MIN, readSettings, setAbandonedDays } from '../components/TagEditor.model'
 import css from './Settings.module.css'
@@ -68,6 +69,13 @@ export function Settings() {
             <div className={css.theme}>
               <ThemeSwitch withLabels />
             </div>
+          </section>
+
+          <section className={`${css.section} ${css.syncSection}`} aria-labelledby="set-sync">
+            <h2 id="set-sync" className={css.label}>
+              Синхронизация
+            </h2>
+            <SyncIndicator />
           </section>
 
           <section className={css.section} aria-labelledby="set-security">

@@ -43,6 +43,11 @@ describe('экран «Настройки»', () => {
     expect(html).toContain('role="radiogroup" aria-label="Тема"')
   })
 
+  it('раздел «Синхронизация» с индикатором есть, скрытие на ПК — классом', () => {
+    const html = render(<Settings />)
+    expect(html).toMatch(/<section class="[^"]*syncSection[^"]*" aria-labelledby="set-sync"><h2[^>]*>Синхронизация<\/h2><div[^>]*><button[^>]*data-state=/)
+  })
+
   it('над заголовком — моно-надзаголовок, как на других экранах', () => {
     expect(render(<Settings />)).toMatch(/<div class="eyebrow">Хаб · общие настройки<\/div><h1[^>]*>Настройки<\/h1>/)
   })

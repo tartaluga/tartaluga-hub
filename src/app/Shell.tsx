@@ -5,6 +5,7 @@ import type { Icon } from '@phosphor-icons/react'
 import { Visor } from '../components/Visor'
 import { ThemeSwitch } from '../components/ThemeSwitch'
 import { SyncIndicator } from '../components/SyncIndicator'
+import { MobileSyncBar, syncBarVisible } from '../components/MobileSyncBar'
 import { SecurityBanner } from '../components/SecurityBanner'
 import { BranchBanner } from '../components/BranchBanner'
 import { SignOutGuardDialog } from '../components/SignOutGuardDialog'
@@ -65,6 +66,7 @@ export function Shell() {
   const files = useSession((s) => s.files)
   const conflicts = useSession((s) => s.conflicts)
   const queued = useSession((s) => s.queued)
+  const deviceError = useSession((s) => s.deviceError)
   // Счётчики в боковой панели, как в макете: проекты без архива и идеи.
   const counts = useMemo<Counts>(
     () => ({
@@ -133,7 +135,7 @@ export function Shell() {
         </div>
       </aside>
 
-      <main className={css.main}>
+      <main className={syncBarVisible(sync, queued, deviceError) ? `${css.main} ${css.mainSync}` : css.main}>
         {GEAR_SCREENS.includes(pathname) && (
           <div className={css.mobileTop}>
             <Link to="/settings" className={css.mobileIcon} aria-label="Настройки">
@@ -146,15 +148,18 @@ export function Shell() {
         <Outlet />
       </main>
 
-      <nav className={css.bottom} aria-label="Разделы">
-        {nav.map(({ to, label, icon: IconCmp, count, hot }) => (
-          <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => (isActive ? `${css.tab} ${css.active}` : css.tab)}>
-            <IconCmp size={22} aria-hidden />
-            <span>{label}</span>
-            {hot && count && <span className={css.tabHot}>{counts[count]}</span>}
-          </NavLink>
-        ))}
-      </nav>
+      <div className={css.dock}>
+        <MobileSyncBar />
+        <nav className={css.bottom} aria-label="Разделы">
+          {nav.map(({ to, label, icon: IconCmp, count, hot }) => (
+            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => (isActive ? `${css.tab} ${css.active}` : css.tab)}>
+              <IconCmp size={22} aria-hidden />
+              <span>{label}</span>
+              {hot && count && <span className={css.tabHot}>{counts[count]}</span>}
+            </NavLink>
+          ))}
+        </nav>
+      </div>
     </div>
   )
 }

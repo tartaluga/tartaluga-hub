@@ -237,3 +237,14 @@
     display: none;
   }
 }
+
+/* Индикатор синхронизации: на ПК он в боковой панели, в настройках нужен только на телефоне. */
+.syncSection {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .syncSection {
+    display: grid;
+  }
+}
