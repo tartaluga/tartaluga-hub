@@ -51,9 +51,10 @@ function server(trees: Record<string, Record<string, string>>) {
   for (const [branch, files] of Object.entries(trees)) {
     heads[branch] = new Map(Object.entries(files).map(([p, t]) => [p, store(t)]))
   }
-  const state = { down: false, auth: false, fail: null as ApiError | null, writes: [] as string[] }
+  const state = { down: false, auth: false, fail: null as ApiError | null, status: 0, writes: [] as string[] }
   const check = () => {
     if (state.down) throw new ApiError(0, 'network', 'нет сети')
+    if (state.status) throw new ApiError(state.status, 'server', `Сервер ответил ${state.status}`)
     if (state.auth) throw new ApiError(401, 'unauthorized', 'Нужно войти')
   }
   const remote: Remote = {
@@ -671,6 +672,57 @@ describe('пишет одна вкладка (ADR-013)', () => {
     expect(b.useSession.getState().sync).toBe('offline')
     expect(b.useSession.getState().queued).toBe(1)
     expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).status).toBe('done')
+  })
+
+  it.each([404, 500])('сервер отвечает %i на старте — просмотр всё равно показывает чужую правку из очереди и считает её', async (status) => {
+    const srv = server({ main: { [PATH]: project({ status: 'paused' }) } })
+    const { b } = await twoTabs(srv, false)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { status: 'done' })
+    srv.state.down = false
+    srv.state.status = status
+    await b.useSession.getState().boot()
+    await b.useSession.getState().syncNow()
+    expect(b.useSession.getState().readOnly).toBe(true)
+    expect(b.useSession.getState().phase).toBe('ready')
+    expect(b.useSession.getState().queued).toBe(1)
+    expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).status).toBe('done')
+  })
+
+  it.each([404, 500])('сервер отвечает %i на старте — пишущая поднимает свою очередь и показывает правку', async (status) => {
+    const srv = server({ main: { [PATH]: project({ status: 'paused' }) } })
+    await start(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { status: 'done' })
+    resetQueueMemory() // перезапуск вкладки
+    useSession.setState({ phase: 'booting', files: [] })
+    srv.state.down = false
+    srv.state.status = status
+    await useSession.getState().boot()
+    await useSession.getState().syncNow()
+    expect(useSession.getState().phase).toBe('ready')
+    expect(useSession.getState().queued).toBe(1)
+    expect(JSON.parse(useSession.getState().files.find((f) => f.path === PATH)!.text).status).toBe('done')
+    // 404 не от API хаба — не «файл удалён»: правка ждёт в очереди, а не уходит во «Входящие».
+    expect(useSession.getState().conflicts).toEqual([])
+    expect(await getQueue()).toHaveLength(1)
+    srv.state.status = 0
+    await useSession.getState().syncNow()
+    expect(JSON.parse(srv.text('main', PATH)).status).toBe('done')
+  })
+
+  it('404 не от API хаба на открытой ветке — ветка и её кэш с правкой остаются', async () => {
+    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
+    await start(srv)
+    await useSession.getState().switchBranch('feat')
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'С ветки' })
+    srv.state.down = false
+    srv.state.status = 404
+    await useSession.getState().refresh()
+    expect(useSession.getState().branch).toBe('feat')
+    expect(await getQueue()).toHaveLength(1)
+    expect(await getCachedFiles('feat')).toHaveLength(1)
   })
 
   it('пишущая меняет данные — вкладка просмотра по сообщению перечитывает очередь и файлы', async () => {

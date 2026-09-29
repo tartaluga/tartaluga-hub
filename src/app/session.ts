@@ -169,6 +169,12 @@ const saving = new Map<string, Promise<void>>()
 // Какие файлы держим в кэше как текст. Обложки грузятся отдельно (этап 8).
 const isDataFile = (path: string) => /^(projects|ideas)\/[^/]+\.json$|^settings\.json$/.test(path)
 
+/**
+ * «Нет такого файла или ветки» — только ответ API хаба: 404 с кодом not_found. 404 без него (ответ не от API:
+ * прокси, превью, страница ошибки) — сбой связи с сервером, а не удаление; по нему ничего не стирается.
+ */
+export const isGone = (e: unknown): boolean => e instanceof ApiError && e.status === 404 && e.code === 'not_found'
+
 export function errorText(e: unknown): string {
   if (isNetworkError(e)) return 'Нет связи с сервером хаба. Показываю данные с устройства.'
   if (e instanceof ApiError || e instanceof QueueConflict) return e.message
@@ -670,7 +676,7 @@ async function syncBranch(branch: string): Promise<void> {
     if (!current()) return
     const status = e instanceof ApiError ? e.status : -1
     // Ветку удалили на другом устройстве или на GitHub — возвращаемся на main, кэш ветки больше не нужен.
-    if (status === 404 && branch !== MAIN) {
+    if (isGone(e) && branch !== MAIN) {
       if (canWrite()) await forgetBranch(branch)
       await useSession.getState().switchBranch(MAIN, `Ветки «${branch}» больше нет в репо данных — открыта main.`)
       return
@@ -1071,7 +1077,7 @@ async function sendOne(live: Live): Promise<SendResult> {
     sha = (await writeRemote().putFile(branch, path, sent.text, sent.baseSha || undefined)).sha
   } catch (e) {
     // Файл изменили (или удалили) в другом месте — перечитываем и сливаем (ADR-004, шаги 1–4).
-    if (e instanceof ApiError && ((e.status === 409 && e.code !== STALE_BUILD) || e.status === 404)) {
+    if (e instanceof ApiError && ((e.status === 409 && e.code !== STALE_BUILD) || isGone(e))) {
       try {
         await mergeAndSend(live)
         return 'next'
@@ -1234,7 +1240,8 @@ async function failed(live: Live, e: unknown): Promise<SendResult> {
     useSession.setState({ sync: 'sessionExpired', syncError: 'Сессия закончилась, войди снова.' })
     return 'auth'
   }
-  const transient = e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500 || e.code === STALE_BUILD
+  // 404 не от API хаба (прокси, превью, сервер без маршрута) — не «файла нет», а сбой: правка ждёт.
+  const transient = e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500 || e.code === STALE_BUILD || (e.status === 404 && !isGone(e))
   if (transient) {
     useSession.setState({ sync: e.status === 0 ? 'offline' : 'error', syncError: errorText(e) })
     return 'later'
