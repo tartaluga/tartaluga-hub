@@ -14,12 +14,16 @@ function lockable(el: EventTarget | null): el is HTMLInputElement | HTMLTextArea
   return !input.readOnly && !SKIP_TYPES.has(input.type)
 }
 
+/** Метка поля, которое заперли мы: снимаем readOnly только с таких и только если он всё ещё наш. */
+const MARK = 'hubLocked'
+
 /** Запретить ввод в поля документа. Возвращает отмену: поля, запертые здесь, снова принимают ввод. */
 export function lockInputs(doc: Pick<Document, 'addEventListener' | 'removeEventListener' | 'activeElement'>): () => void {
   const locked = new Set<HTMLInputElement | HTMLTextAreaElement>()
   const lock = (el: EventTarget | null) => {
     if (!lockable(el)) return
     el.readOnly = true
+    el.dataset[MARK] = ''
     locked.add(el)
   }
   const onFocus = (e: Event) => lock(e.target)
@@ -27,7 +31,10 @@ export function lockInputs(doc: Pick<Document, 'addEventListener' | 'removeEvent
   doc.addEventListener('focusin', onFocus, true)
   return () => {
     doc.removeEventListener('focusin', onFocus, true)
-    for (const el of locked) el.readOnly = false
+    for (const el of locked) {
+      if (el.readOnly && el.dataset[MARK] !== undefined) el.readOnly = false
+      delete el.dataset[MARK]
+    }
     locked.clear()
   }
 }

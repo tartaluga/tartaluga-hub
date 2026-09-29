@@ -7,6 +7,7 @@ import { resetWriter } from './writer'
 import { fakeLockHub, setLocks } from '../test/fakeLocks'
 import { ApiError, type Me } from '../lib/api'
 import { getCachedFiles, getConflicts, getQueue, putQueued, wipeDevice, type QueuedEdit } from '../lib/localdb'
+import { idbStateStore, installDraftPersistence, setDraft, wipeDrafts } from '../lib/drafts'
 
 // Запись в очередь на устройстве настоящая, но её можно уронить в отдельном тесте.
 vi.mock('../lib/localdb', async (importOriginal) => {
@@ -552,10 +553,13 @@ describe('конфликт при отправке (ADR-004 шаги 1–5)', ()
 })
 
 /** Вторая вкладка хаба: свой экземпляр модулей сессии и лока (своя память), та же IndexedDB. */
-async function secondTab(srv: ReturnType<typeof server>) {
+async function secondTab(srv: ReturnType<typeof server>, boot = true) {
   vi.resetModules()
   const tab = await import('./session')
   const guard = await import('./signOutGuard')
+  const writer = await import('./writer')
+  const ideas = await import('../data/ideas')
+  const drafts = await import('../lib/drafts')
   // У вкладки свой экземпляр модулей: ошибки сервера — её ApiError, иначе instanceof в ней не сработает.
   const { ApiError: TabApiError } = await import('../lib/api')
   const remote = new Proxy(srv.remote, {
@@ -572,40 +576,45 @@ async function secondTab(srv: ReturnType<typeof server>) {
     },
   })
   tab.useSession.setState({ remote })
-  await tab.useSession.getState().boot()
-  await tab.useSession.getState().syncNow()
-  return { ...tab, guard }
+  if (boot) {
+    await tab.useSession.getState().boot()
+    await tab.useSession.getState().syncNow()
+  }
+  return { ...tab, guard, writer, ideas, drafts }
 }
 
 /**
  * Две вкладки на одном устройстве (ADR-013): у каждой свой Web Lock-менеджер на общей «машине». Вкладка A
  * (этот модуль) стартует первой и пишет; B — вторая. close() — закрыть вкладку, её лок отпускается.
  */
-async function twoTabs(srv: ReturnType<typeof server>) {
+async function twoTabs(srv: ReturnType<typeof server>, bootB = true) {
   const hub = fakeLockHub()
   const a = hub.tab()
   const b = hub.tab()
   resetWriter() // прежние тесты держат настоящий лок Node: отпускаем, дальше — поддельный
-  let restore = setLocks(a.locks)
+  const restoreA = setLocks(a.locks)
   await start(srv)
-  restore()
-  restore = setLocks(b.locks)
-  const tabB = await secondTab(srv)
-  restore()
+  restoreA()
+  const restoreB = setLocks(b.locks) // до конца теста: B может стартовать позже
+  const tabB = await secondTab(srv, bootB)
   const t = () => Object.assign(new EventTarget(), { visibilityState: 'hidden' })
-  const stops = [installSyncTriggers(new EventTarget(), t()), tabB.installSyncTriggers(new EventTarget(), t())]
+  const stopA = installSyncTriggers(new EventTarget(), t())
+  const stopB = tabB.installSyncTriggers(new EventTarget(), t())
   cleanup.push(() => {
-    for (const stop of stops) stop()
+    stopA()
+    stopB()
+    restoreB()
     a.close()
     b.close()
     resetWriter()
   })
-  return { b: tabB, closeA: a.close }
+  /** «Заморозить» A: она больше не слышит сообщений других вкладок. */
+  return { b: tabB, closeA: a.close, muteA: stopA }
 }
 
-const cleanup: (() => void)[] = []
-afterEach(() => {
-  for (const fn of cleanup.splice(0)) fn()
+const cleanup: (() => unknown)[] = []
+afterEach(async () => {
+  for (const fn of cleanup.splice(0)) await fn()
 })
 
 describe('пишет одна вкладка (ADR-013)', () => {
@@ -677,6 +686,124 @@ describe('пишет одна вкладка (ADR-013)', () => {
     expect(useSession.getState().queued).toBe(0)
     expect(await getQueue()).toEqual([])
     expect(await getCachedFiles('main')).toEqual([])
+  })
+
+  it('просмотр: «Сделать проектом» и запись в обход сессии ничего не коммитят и не пишут', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const commit = vi.fn(srv.remote.commit)
+    srv.remote.commit = commit
+    const { b } = await twoTabs(srv)
+    const idea = { schemaVersion: 1, id: '01J8Z6Y0000000000000000001', text: 'Идея', createdAt: '2026-09-23T14:32:00+03:00' }
+    const draft = { slug: 'idea', path: 'projects/idea.json', text: project({ slug: 'idea' }) }
+    await expect(b.ideas.makeProjectFromIdea(idea as never, draft)).rejects.toMatchObject({ status: 423 })
+    // Защита в глубине: даже если вход пропустили, запись на сервер и на устройство отклоняется.
+    await expect(b.writeRemote().putFile('main', PATH, '{}')).rejects.toMatchObject({ status: 423 })
+    await expect(b.writeRemote().commit('main', [], 'h', 'm')).rejects.toMatchObject({ status: 423 })
+    await b.applyWrite('main', [{ path: 'projects/x.json', sha: 's', text: '{}' }], [PATH])
+    expect(commit).not.toHaveBeenCalled()
+    expect(srv.state.writes).toEqual([])
+    expect((await getCachedFiles('main')).map((f) => f.path)).toEqual([PATH])
+    expect(b.useSession.getState().files.map((f) => f.path)).toEqual([PATH])
+  })
+
+  it('«Писать здесь»: пишущая сохраняет черновик в handoff и уступает; просящая пишет, забирает черновик и очередь', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b } = await twoTabs(srv)
+    const store = idbStateStore()
+    vi.stubGlobal('window', new EventTarget()) // тест в Node: подписки на уход со страницы — в пустоту
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }))
+    const stop = installDraftPersistence(store, () => ({ route: '#/', scrollY: 0, now: Date.now(), build: 't' }))
+    // Закрыть базу черновиков обеих «вкладок»: открытое соединение закрытой вкладки держало бы её стирание.
+    cleanup.push(stop, () => wipeDrafts(), () => b.drafts.wipeDrafts())
+    setDraft('project:a:description', 'А · описание', 'недописанный текст')
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Из A' })
+    // Как main.tsx: ставшая пишущей вкладка забирает черновики из handoff.
+    const taken = new Promise<void>((resolve) => b.writer.onBecameWriter(() => void b.drafts.restoreHandoff(b.drafts.idbStateStore(), Date.now()).then(() => resolve())))
+    srv.state.down = false
+    b.useSession.getState().requestWrite()
+    await vi.waitFor(() => expect(b.useSession.getState().readOnly).toBe(false))
+    await taken
+    expect(b.drafts.restoredDraft('project:a:description')).toBe('недописанный текст')
+    expect(useSession.getState().readOnly).toBe(true)
+    expect(b.useSession.getState().takeover).toBeNull()
+    await vi.waitFor(() => expect(JSON.parse(srv.text('main', PATH)).title).toBe('Из A'))
+    await expect(useSession.getState().saveProject('a', { title: 'Снова A' })).rejects.toMatchObject({ status: 423 })
+    await b.useSession.getState().saveProject('a', { nextStep: 'из B' })
+    expect(JSON.parse(srv.text('main', PATH))).toMatchObject({ title: 'Из A', nextStep: 'из B' })
+  })
+
+  it('«Писать здесь», а пишущая не отвечает (заморожена) — просмотр остаётся, на плашке «не отвечает»', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b, muteA } = await twoTabs(srv)
+    muteA()
+    b.useSession.getState().requestWrite(30)
+    expect(b.useSession.getState().takeover).toBe('asking')
+    await vi.waitFor(() => expect(b.useSession.getState().takeover).toBe('noAnswer'))
+    expect(b.useSession.getState().readOnly).toBe(true)
+    expect(useSession.getState().readOnly).toBe(false)
+  })
+
+  it('становясь пишущей, вкладка сначала поднимает очередь с устройства и только потом принимает правки', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b, closeA } = await twoTabs(srv)
+    // Запись, которую сборка не понимает: разбирает только пишущая (во «Входящие»).
+    await putQueued({ branch: 'main', path: 'projects/b.json', kind: 'unknown', baseSha: 'x', baseText: '{}', patch: {}, text: '{"моя":"версия"}', queuedAt: '2026-09-01T10:00:00+03:00' } as unknown as QueuedEdit)
+    const seen: number[] = []
+    b.useSession.subscribe((st, prev) => {
+      if (prev.readOnly && !st.readOnly) seen.push(st.conflicts.length)
+    })
+    closeA()
+    await vi.waitFor(() => expect(seen).toEqual([1]))
+  })
+
+  it('лок пришёл, пока вкладка ещё стартует, — становится пишущей только после старта', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b, closeA } = await twoTabs(srv, false)
+    let answer!: () => void
+    const me = srv.remote.me.bind(srv.remote)
+    const gate = new Promise<void>((resolve) => (answer = resolve))
+    b.useSession.setState({ remote: { ...b.useSession.getState().remote, me: async () => (await gate, me()) } })
+    const booting = b.useSession.getState().boot()
+    await vi.waitFor(() => expect(b.useSession.getState().readOnly).toBe(true))
+    closeA()
+    await vi.waitFor(() => expect(b.writer.isWriter()).toBe(true))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(b.useSession.getState().readOnly).toBe(true) // старт не закончен — ещё просмотр
+    answer()
+    await booting
+    await vi.waitFor(() => expect(b.useSession.getState().readOnly).toBe(false))
+    expect(b.useSession.getState().phase).toBe('ready')
+  })
+
+  it.each([
+    ['запись дошла', null],
+    ['сервер отказал — конфликт', new ApiError(422, 'validation', 'отказ')],
+  ])('выход из просмотра, пока пишущая ждёт ответа (%s), — на устройстве ничего не остаётся', async (_name, failure) => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b } = await twoTabs(srv)
+    const put = srv.remote.putFile.bind(srv.remote)
+    let answer!: () => void
+    let asked!: () => void
+    const waiting = new Promise<void>((resolve) => (asked = resolve))
+    const gate = new Promise<void>((resolve) => (answer = resolve))
+    srv.remote.putFile = async (...args) => {
+      asked()
+      await gate
+      if (failure) throw failure
+      return put(...args)
+    }
+    const saving = useSession.getState().saveProject('a', { title: 'Из A' }).catch(() => undefined)
+    await waiting
+    await b.useSession.getState().signOut()
+    await vi.waitFor(() => expect(useSession.getState().phase).toBe('signedOut'))
+    answer()
+    await saving
+    await new Promise((r) => setTimeout(r, 20))
+    expect(await getQueue()).toEqual([])
+    expect(await getConflicts()).toEqual([])
+    expect(await getCachedFiles('main')).toEqual([])
+    expect(useSession.getState().conflicts).toEqual([])
   })
 
   it('без Web Locks (старый браузер) вкладка пишет, как одна', async () => {

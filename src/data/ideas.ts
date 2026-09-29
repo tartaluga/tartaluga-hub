@@ -3,7 +3,7 @@
 // (ADR-004), как правки проекта; удаление и «Сделать проектом» — прямые коммиты (deleteFiles, commit).
 // Контракт: schema/README.md (идея v1 + project), ADR-009 (fromIdea, привязка к проекту).
 import { ulid } from 'ulid'
-import { applyWrite, errorText, hasQueued, useSession } from '../app/session'
+import { applyWrite, assertWriter, errorText, hasQueued, useSession, writeRemote } from '../app/session'
 import { ApiError, type CommitChange } from '../lib/api'
 import type { CachedFile } from '../lib/localdb'
 import type { Idea, Project } from '../schema/types'
@@ -344,6 +344,7 @@ function sameIdea(file: CachedFile | undefined, idea: Idea): boolean {
  * из которой он собран: если файл идеи с тех пор изменили, коммита нет (409 idea_changed).
  */
 export async function makeProjectFromIdea(idea: Idea, draft: { slug: string; path: string; text: string }): Promise<void> {
+  assertWriter() // вкладка просмотра (ADR-013) не коммитит
   const ideaId = idea.id
   const ideaPath = `ideas/${ideaId}.json`
   const branch = useSession.getState().branch
@@ -373,7 +374,7 @@ export async function makeProjectFromIdea(idea: Idea, draft: { slug: string; pat
       { path: ideaPath, text: null },
     ]
     try {
-      const res = await useSession.getState().remote.commit(branch, changes, tree.head, `Идеи: ${ideaId} → проект ${draft.slug}`)
+      const res = await writeRemote().commit(branch, changes, tree.head, `Идеи: ${ideaId} → проект ${draft.slug}`)
       await applyWrite(branch, [{ path: draft.path, sha: res.shas[draft.path] ?? '', text: draft.text }], [ideaPath], res.head)
       void useSession.getState().refresh()
       return

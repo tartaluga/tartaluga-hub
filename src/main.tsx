@@ -6,7 +6,7 @@ import { router } from './app/router'
 import { UpdateNotice } from './components/UpdateNotice'
 import { idbStateStore, installDraftPersistence, restoreHandoff, saveHandoff, type HandoffInput } from './lib/drafts'
 import { BUILD_ID, installUpdater } from './lib/update'
-import { claimWriter, isWriter, onBecameWriter } from './app/writer'
+import { claimWriter, isWriter, onBecameReader, onBecameWriter } from './app/writer'
 import './styles/global.css'
 
 // Тема до первого кадра, чтобы не мигала светлая (inline-скрипты запрещены CSP).
@@ -41,14 +41,22 @@ async function takeDrafts(): Promise<Restored> {
   } catch (e) {
     console.warn('handoff не прочитан:', e instanceof Error ? e.message : e)
   }
-  installDraftPersistence(store, handoffInput)
+  stopDrafts?.()
+  stopDrafts = installDraftPersistence(store, handoffInput)
   return restored
 }
+
+let stopDrafts: (() => void) | undefined
 
 async function boot() {
   // Пишет одна вкладка (ADR-013): черновики и handoff — её. Вкладка просмотра их не трогает, пока не станет пишущей.
   const writer = await claimWriter()
   onBecameWriter(() => void takeDrafts())
+  // Уступили запись («Писать здесь» в другой вкладке): черновики уже в handoff, дальше их пишет та вкладка.
+  onBecameReader(() => {
+    stopDrafts?.()
+    stopDrafts = undefined
+  })
 
   // Обновление хаба (ADR-011): без плашки, незаконченное переезжает через handoff.
   // Прежний handoff сначала читаем, потом пишем новый — иначе ранний сигнал SW затёр бы непрочитанные черновики.

@@ -1,6 +1,7 @@
 // Пишущая вкладка (ADR-013): правит, ставит в очередь и отправляет только одна вкладка хаба на устройстве.
-// Она держит эксклюзивный Web Lock всю свою жизнь. Остальные вкладки — только просмотр; каждая ждёт тот же лок
-// и становится пишущей, когда прежняя закрылась. Без Web Locks (старый браузер) вкладка считается пишущей.
+// Она держит эксклюзивный Web Lock, пока жива или пока сама не уступит («Писать здесь» в другой вкладке).
+// Остальные вкладки — только просмотр; каждая ждёт тот же лок и становится пишущей, когда он освободился.
+// Без Web Locks (старый браузер или отказ браузера) вкладка считается пишущей.
 
 export const WRITER_LOCK = 'hub-writer'
 
@@ -8,10 +9,13 @@ type Locks = Pick<LockManager, 'request'>
 
 let claim: Promise<boolean> | null = null
 let writer = false
-/** Отпустить лок: только для тестов («вкладку закрыли»). В жизни лок держится до закрытия вкладки. */
+let claimed = false
+let manager: Locks | undefined
+/** Отпустить удерживаемый лок: уступить другой вкладке (или «закрыть вкладку» в тестах). */
 let release: (() => void) | null = null
 let waiting: AbortController | null = null
 const promoted = new Set<() => void>()
+const demoted = new Set<() => void>()
 
 function locksOf(): Locks | undefined {
   const nav = typeof navigator === 'undefined' ? undefined : (navigator as Partial<Navigator>)
@@ -19,7 +23,7 @@ function locksOf(): Locks | undefined {
   return locks && typeof locks.request === 'function' ? locks : undefined
 }
 
-/** Промис, который держит лок, пока вкладка жива. */
+/** Промис, который держит лок, пока вкладка пишет. */
 function hold(): Promise<void> {
   return new Promise<void>((resolve) => (release = resolve))
 }
@@ -31,35 +35,47 @@ function becameWriter(): Promise<void> {
   return hold()
 }
 
+/** Встать в очередь за локом. Браузер отказал — остаёмся в просмотре: писать рядом с живой пишущей нельзя. */
 function wait(locks: Locks): void {
   const ac = new AbortController()
   waiting = ac
-  locks.request(WRITER_LOCK, { signal: ac.signal }, becameWriter).catch(() => undefined) // отмена ожидания — не ошибка
+  try {
+    locks.request(WRITER_LOCK, { signal: ac.signal }, becameWriter).catch(() => undefined) // отмена ожидания — не ошибка
+  } catch {
+    /* ждать не вышло — вкладка остаётся в просмотре до перезапуска */
+  }
+}
+
+function asWriter(): boolean {
+  writer = true
+  claimed = true
+  return true
 }
 
 function start(locks: Locks | undefined): Promise<boolean> {
-  if (!locks) {
-    writer = true
-    return Promise.resolve(true)
-  }
+  if (!locks) return Promise.resolve(asWriter())
+  manager = locks
   return new Promise<boolean>((resolve) => {
-    locks
-      .request(WRITER_LOCK, { ifAvailable: true }, (lock) => {
-        if (!lock) {
-          writer = false
-          resolve(false)
-          wait(locks)
-          return undefined
-        }
-        writer = true
-        resolve(true)
-        return hold()
-      })
-      .catch(() => {
-        // Браузер отказал в Web Locks (например, особый контекст) — как без них: одна вкладка.
-        writer = true
-        resolve(true)
-      })
+    // Браузер отказал в Web Locks (синхронно или промисом) — как без них: вкладка пишет одна.
+    const refused = () => resolve(asWriter())
+    try {
+      locks
+        .request(WRITER_LOCK, { ifAvailable: true }, (lock) => {
+          claimed = true
+          if (!lock) {
+            writer = false
+            resolve(false)
+            wait(locks)
+            return undefined
+          }
+          writer = true
+          resolve(true)
+          return hold()
+        })
+        .catch(refused)
+    } catch {
+      refused()
+    }
   })
 }
 
@@ -74,10 +90,42 @@ export function isWriter(): boolean {
   return writer
 }
 
-/** Подписка на «эта вкладка стала пишущей» (прежняя закрылась). Возвращает отписку. */
+/** Точно известно, что пишет другая вкладка: лок спрошен и не у нас. До claimWriter — false. */
+export function isReader(): boolean {
+  return claimed && !writer
+}
+
+/** Подписка на «эта вкладка стала пишущей». Возвращает отписку. */
 export function onBecameWriter(fn: () => void): () => void {
   promoted.add(fn)
   return () => promoted.delete(fn)
+}
+
+/** Подписка на «эта вкладка уступила запись и стала просмотром». Возвращает отписку. */
+export function onBecameReader(fn: () => void): () => void {
+  demoted.add(fn)
+  return () => demoted.delete(fn)
+}
+
+/**
+ * Уступить запись: вкладка становится просмотром (подписчики узнают об этом до того, как лок уйдёт),
+ * отпускает лок и сама встаёт в очередь за ним — за той вкладкой, что попросила.
+ */
+export function yieldWriter(): void {
+  if (!writer || !release || !manager) return
+  writer = false
+  for (const fn of demoted) fn()
+  const r = release
+  release = null
+  wait(manager)
+  r()
+}
+
+/** Другая вкладка попросила запись: уступить ей место в очереди — встать в её конец. */
+export function requeueWriter(): void {
+  if (!waiting || !manager) return
+  waiting.abort()
+  wait(manager)
 }
 
 /** Только для тестов: отпустить лок и ожидание, как при закрытии вкладки, и забыть ответ. */
@@ -88,4 +136,6 @@ export function resetWriter(): void {
   waiting = null
   claim = null
   writer = false
+  claimed = false
+  manager = undefined
 }

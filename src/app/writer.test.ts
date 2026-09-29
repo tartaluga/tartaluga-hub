@@ -75,6 +75,42 @@ describe('пишущая вкладка', () => {
     expect(m.isWriter()).toBe(true)
   })
 
+  it('Web Locks бросает синхронно — вкладка пишет, как одна, старт не падает', async () => {
+    const m = await tab({
+      request: (() => {
+        throw new DOMException('нет', 'SecurityError')
+      }) as LockManager['request'],
+    })
+    expect(m.isWriter()).toBe(true)
+    expect(m.isReader()).toBe(false)
+  })
+
+  it('isReader: до спроса лока — false, у вкладки просмотра — true', async () => {
+    vi.resetModules()
+    const fresh = await import('./writer')
+    expect(fresh.isReader()).toBe(false)
+    const hub = fakeLockHub()
+    await tab(hub.tab().locks)
+    const b = await tab(hub.tab().locks)
+    expect(b.isReader()).toBe(true)
+  })
+
+  it('уступить запись: просящая (вставшая в конец очереди) получает лок раньше прочих, уступившая ждёт за ней', async () => {
+    const hub = fakeLockHub()
+    const a = await tab(hub.tab().locks)
+    const c = await tab(hub.tab().locks) // ждёт первой
+    const b = await tab(hub.tab().locks) // просит «Писать здесь»
+    const demoted = vi.fn()
+    a.onBecameReader(demoted)
+    c.requeueWriter() // остальные вкладки просмотра пропускают просящую вперёд
+    a.yieldWriter()
+    expect(demoted).toHaveBeenCalledOnce()
+    expect(a.isWriter()).toBe(false)
+    await vi.waitFor(() => expect(b.isWriter()).toBe(true))
+    expect(c.isWriter()).toBe(false)
+    expect(a.isReader()).toBe(true)
+  })
+
   it('resetWriter отпускает лок: следующая вкладка сразу пишет', async () => {
     const hub = fakeLockHub()
     const a = await tab(hub.tab().locks)

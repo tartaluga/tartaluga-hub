@@ -49,6 +49,16 @@ describe('lockInputs', () => {
     expect(shown.readOnly).toBe(true)
   })
 
+  it('поле, чья метка снята (компонент сам сделал его readOnly заново), после отмены не открывается', () => {
+    const unlock = lockInputs(document)
+    const input = field('<input>')
+    input.focus()
+    expect(input.dataset.hubLocked).toBe('')
+    delete input.dataset.hubLocked
+    unlock()
+    expect(input.readOnly).toBe(true)
+  })
+
   it('после отмены новые поля не запираются', () => {
     lockInputs(document)()
     const input = field('<input>')

@@ -2,7 +2,7 @@
 // Слияние — только «ветка → main» и только если сервер проверил каждый изменённый файл; удаление требует свежего входа.
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ArrowSquareIn, GitBranch, GitMerge, GithubLogo, Plus, Trash } from '@phosphor-icons/react'
-import { MAIN, useSession } from '../app/session'
+import { assertWriter, MAIN, useSession } from '../app/session'
 import { useFreshAction } from '../app/useFreshAction'
 import {
   ApiError,
@@ -60,6 +60,7 @@ export function Branches() {
     if (!nameOk) return
     setOutcome(null)
     void fresh.run(async () => {
+      assertWriter() // вкладка просмотра (ADR-013) веток не создаёт; «Влить» и удаление проверяет settleBranch
       try {
         await createBranch(name)
       } catch (err) {

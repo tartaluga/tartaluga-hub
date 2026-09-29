@@ -2,7 +2,7 @@
 // вход — HttpOnly cookie, которую ставит сервер. Старт работает офлайн: сначала кэш из IndexedDB, потом сверка.
 // Хаб всегда смотрит на одну ветку репо данных; у каждой ветки свой кэш на устройстве.
 import { create } from 'zustand'
-import { wipeDrafts } from '../lib/drafts'
+import { persistDrafts, wipeDrafts } from '../lib/drafts'
 import { ApiError, commitChanges, getMe, isNetworkError, listFiles, logout, putFile, readBlobText, type CommitChange, type Me } from '../lib/api'
 import {
   deleteConflict,
@@ -39,7 +39,7 @@ import { untagProjects } from '../data/projects'
 import { applyEdit, mergePatch, type ProjectPatch } from '../data/editProject'
 import { applyIdeaPatch, firstLine, mergeIdeaPatch, type IdeaPatch } from '../data/ideas'
 import { plural } from '../lib/plural'
-import { claimWriter, isWriter, onBecameWriter } from './writer'
+import { claimWriter, isReader, isWriter, onBecameWriter, requeueWriter, yieldWriter } from './writer'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
 /** sessionExpired: сессия кончилась, пока данные на экране — нужен вход, кэш и очередь правок ждут (ADR-010 §4). */
@@ -88,10 +88,17 @@ interface Session {
    * очередь не отправляется, на устройство ничего не пишется.
    */
   readOnly: boolean
+  /** «Писать здесь» во вкладке просмотра: asking — попросили пишущую уступить, noAnswer — она не ответила. */
+  takeover: 'asking' | 'noAnswer' | null
   remote: Remote
   boot(): Promise<void>
-  /** Прежняя пишущая вкладка закрылась: поднять очередь и конфликты с устройства и начать отправку. */
+  /** Эта вкладка получила лок записи: поднять очередь и конфликты с устройства и начать отправку. */
   becomeWriter(): Promise<void>
+  /**
+   * «Писать здесь»: попросить пишущую вкладку уступить. Она сохраняет черновики в handoff, отпускает лок и
+   * становится просмотром. Нет ответа за timeoutMs (вкладка заморожена) — takeover: noAnswer.
+   */
+  requestWrite(timeoutMs?: number): void
   /** После входа (ключом) — перечитать сессию и данные. */
   signedIn(): Promise<void>
   signOut(): Promise<void>
@@ -172,8 +179,49 @@ export function errorText(e: unknown): string {
  * до того, как что-то попадёт в очередь, на сервер или в IndexedDB.
  */
 function onlyWriter<A extends unknown[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
-  return (...args) => (useSession.getState().readOnly ? Promise.reject(new ApiError(423, 'read_only', READ_ONLY)) : fn(...args))
+  return (...args) => {
+    try {
+      assertWriter()
+    } catch (e) {
+      return Promise.reject(e)
+    }
+    return fn(...args)
+  }
 }
+
+/** Проверка входа для правок вне сессии (ветки, «Сделать проектом»): во вкладке просмотра — ошибка READ_ONLY. */
+export function assertWriter(): void {
+  if (useSession.getState().readOnly || yielding) throw new ApiError(423, 'read_only', READ_ONLY)
+}
+
+/**
+ * Защита в глубине (ADR-013): писать на устройство и на сервер можно, только если лок записи у этой вкладки
+ * (или о локе ещё не спрашивали) и после «Выйти» сессию не начинали заново. Иначе запись отбрасывается.
+ */
+function canWrite(): boolean {
+  return !wiped && !isReader()
+}
+
+/** Запись на сервер — только через этот вход: во вкладке просмотра и после выхода — отказ. */
+export function writeRemote(): Pick<Remote, 'putFile' | 'commit'> {
+  const refuse = () => Promise.reject(new ApiError(423, 'read_only', wiped ? 'Ты вышел из хаба — правка не отправлена' : READ_ONLY))
+  const remote = useSession.getState().remote
+  return {
+    putFile: (...args) => (canWrite() ? remote.putFile(...args) : refuse()),
+    commit: (...args) => (canWrite() ? remote.commit(...args) : refuse()),
+  }
+}
+
+/** Сессия стёрта «Выйти»: ответы уже отправленных запросов на устройство не пишутся. Снимает boot. */
+let wiped = false
+/** Пишущая вкладка уступает запись: новые правки не принимаются, текущая отправка дописывается. */
+let yielding = false
+/** Идущий boot: becomeWriter ждёт его, чтобы не работать с веткой и данными до старта. */
+let booting: Promise<void> = Promise.resolve()
+let takeoverTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Сколько ждать ответа пишущей вкладки на «Писать здесь». */
+export const TAKEOVER_TIMEOUT_MS = 5_000
 
 export const useSession = create<Session>((set, get) => ({
   phase: 'booting',
@@ -189,38 +237,59 @@ export const useSession = create<Session>((set, get) => ({
   conflicts: [],
   deviceError: null,
   readOnly: false,
+  takeover: null,
   remote: serverRemote,
 
-  async boot() {
-    await claimWriter()
-    const readOnly = !isWriter()
-    set({ readOnly })
-    const branch = await getCurrentBranch().catch(() => MAIN)
-    await (readOnly ? loadReadOnly() : reloadFromDevice())
-    const files = overlay(branch, await getCachedFiles(branch).catch(() => []))
-    set({ branch })
-    try {
-      const me = await get().remote.me()
-      set({ phase: 'ready', me, files })
-      void requestPersistence()
-      void get().syncNow()
-    } catch (e) {
-      // Экран входа — только если сервер сказал «не вошёл» (401) или показать нечего. Любой другой сбой
-      // (нет сети, 5xx, 429, ответ не JSON) при данных на устройстве — работаем с ними; вход, сверка и
-      // отправка очереди — при следующем триггере (онлайн, возврат на вкладку, кнопка индикатора).
-      const unauthorized = e instanceof ApiError && e.status === 401
-      if (unauthorized || !files.length) set({ phase: 'signedOut', files })
-      else set({ phase: 'ready', files, sync: isNetworkError(e) ? 'offline' : 'error', syncError: errorText(e) })
-    }
+  boot() {
+    const run = booting.catch(() => undefined).then(async () => {
+      wiped = false
+      await claimWriter()
+      const readOnly = !isWriter()
+      set({ readOnly })
+      const branch = await getCurrentBranch().catch(() => MAIN)
+      await (readOnly ? loadReadOnly() : reloadFromDevice())
+      const files = overlay(branch, await getCachedFiles(branch).catch(() => []))
+      set({ branch })
+      try {
+        const me = await get().remote.me()
+        set({ phase: 'ready', me, files })
+        void requestPersistence()
+        void get().syncNow()
+      } catch (e) {
+        // Экран входа — только если сервер сказал «не вошёл» (401) или показать нечего. Любой другой сбой
+        // (нет сети, 5xx, 429, ответ не JSON) при данных на устройстве — работаем с ними; вход, сверка и
+        // отправка очереди — при следующем триггере (онлайн, возврат на вкладку, кнопка индикатора).
+        const unauthorized = e instanceof ApiError && e.status === 401
+        if (unauthorized || !files.length) set({ phase: 'signedOut', files })
+        else set({ phase: 'ready', files, sync: isNetworkError(e) ? 'offline' : 'error', syncError: errorText(e) })
+      }
+    })
+    booting = run
+    return run
   },
 
   async becomeWriter() {
+    await booting.catch(() => undefined) // ветка и данные просмотра уже на месте
     if (!get().readOnly) return
-    set({ readOnly: false })
+    // Пока очередь поднимается с устройства, вкладка ещё просмотр: правки не принимаются.
     // Открытая здесь ветка становится открытой веткой устройства: её и продолжаем.
-    await setCurrentBranch(get().branch).catch(() => undefined)
+    if (canWrite()) await setCurrentBranch(get().branch).catch(() => undefined)
     await reloadFromDevice()
+    if (takeoverTimer) clearTimeout(takeoverTimer)
+    takeoverTimer = null
+    set({ readOnly: false, takeover: null })
     if (get().phase === 'ready') await get().syncNow()
+  },
+
+  requestWrite(timeoutMs = TAKEOVER_TIMEOUT_MS) {
+    if (!get().readOnly) return
+    set({ takeover: 'asking' })
+    tell('takeover')
+    if (takeoverTimer) clearTimeout(takeoverTimer)
+    takeoverTimer = setTimeout(() => {
+      takeoverTimer = null
+      if (get().readOnly && get().takeover === 'asking') set({ takeover: 'noAnswer' })
+    }, timeoutMs)
   },
 
   async signedIn() {
@@ -269,7 +338,7 @@ export const useSession = create<Session>((set, get) => ({
 
   async switchBranch(name, notice) {
     if (name === get().branch) return
-    if (!get().readOnly) await setCurrentBranch(name).catch(() => undefined)
+    if (canWrite()) await setCurrentBranch(name).catch(() => undefined)
     const files = overlay(name, await getCachedFiles(name).catch(() => []))
     set({ branch: name, files, tree: null, branchNotice: notice ?? null, sync: 'idle', syncError: null, lastSync: null })
     await get().refresh()
@@ -300,14 +369,14 @@ export const useSession = create<Session>((set, get) => ({
   },
 
   createFile: onlyWriter(async (path, text) => {
-    const { branch, remote } = get()
-    const { sha } = await remote.putFile(branch, path, text)
+    const { branch } = get()
+    const { sha } = await writeRemote().putFile(branch, path, text)
     await applyWrite(branch, [{ path, sha, text }], [])
     void get().refresh()
   }),
 
   deleteFiles: onlyWriter(async (pathsOf, message, also) => {
-    const { branch, remote } = get()
+    const { branch } = get()
     const sent = new Set<string>()
     for (let attempt = 0, part = 1; ; ) {
       if (!get().tree) await get().refresh()
@@ -320,7 +389,7 @@ export const useSession = create<Session>((set, get) => ({
       if (extra.some((c) => sent.has(c.path))) throw new ApiError(422, 'validation', 'Не удалось записать связанные файлы — обнови страницу и проверь данные')
       const changes: CommitChange[] = [...paths.map((path) => ({ path, text: null })), ...extra.slice(0, Math.max(0, COMMIT_LIMIT - paths.length))]
       try {
-        const res = await remote.commit(branch, changes, tree.head, part === 1 ? message : `${message} (часть ${part})`)
+        const res = await writeRemote().commit(branch, changes, tree.head, part === 1 ? message : `${message} (часть ${part})`)
         const written = changes.flatMap((c) => ('text' in c && c.text !== null ? [{ path: c.path, text: c.text }] : []))
         // Удалённому файлу ожидающая правка и конфликты больше не нужны.
         await forgetFiles(branch, paths)
@@ -385,7 +454,7 @@ export const useSession = create<Session>((set, get) => ({
       // Мою версию, которую не удалось слить или записать, записать нельзя — можно только отказаться от неё.
       const restore = !!rec.deleted && picks.some((p) => p.pick === 'mine')
       if (restore) {
-        const { sha } = await get().remote.putFile(branch, path, rec.deleted!.mine)
+        const { sha } = await writeRemote().putFile(branch, path, rec.deleted!.mine)
         await applyWrite(branch, [{ path, sha, text: rec.deleted!.mine }], [])
       }
       // Выбор снимает только удаление или отказ: спорные места файла остаются. Согласились с удалением — файла нет, выбирать не в чем.
@@ -491,7 +560,7 @@ async function untagAll(branch: string, id: string): Promise<void> {
     }
 
     try {
-      const res = await session().remote.commit(branch, changes, tree.head, `Хаб: удалить тег ${id}`)
+      const res = await writeRemote().commit(branch, changes, tree.head, `Хаб: удалить тег ${id}`)
       await applyWrite(branch, changes.map((c) => ({ path: c.path, sha: res.shas[c.path] ?? '', text: c.text })), [], res.head)
       void session().refresh()
       return
@@ -520,7 +589,7 @@ function currentSettings(branch: string): { sha?: string; data: SettingsData } {
 }
 
 async function writeSettings(branch: string, change: SettingsChange): Promise<void> {
-  const { remote } = useSession.getState()
+  const remote = writeRemote()
   const put = async (from: { sha?: string; data: SettingsData }) => {
     const before = serialize(from.data)
     const next = change(structuredClone(from.data))
@@ -549,6 +618,7 @@ async function writeSettings(branch: string, change: SettingsChange): Promise<vo
 
 /** Сразу показать результат записи: кэш на устройстве, файлы на экране и дерево ветки. */
 export async function applyWrite(branch: string, changed: CachedFile[], removed: string[], head?: string): Promise<void> {
+  if (!canWrite()) return // вкладка просмотра или уже вышли: ни на устройство, ни на экран
   await putCachedFiles(branch, changed, removed).then(() => tell('changed'), () => undefined)
   const state = useSession.getState()
   if (state.branch !== branch) return
@@ -584,7 +654,7 @@ async function syncBranch(branch: string): Promise<void> {
     const removed = [...cached.keys()].filter((p) => !wantedPaths.has(p))
 
     // Кэш на устройстве пишет только пишущая вкладка (ADR-013); вкладка просмотра держит свежее только на экране.
-    if ((changed.length || removed.length) && !useSession.getState().readOnly) {
+    if ((changed.length || removed.length) && canWrite()) {
       await putCachedFiles(branch, changed, removed)
       tell('changed')
     }
@@ -599,7 +669,7 @@ async function syncBranch(branch: string): Promise<void> {
     const status = e instanceof ApiError ? e.status : -1
     // Ветку удалили на другом устройстве или на GitHub — возвращаемся на main, кэш ветки больше не нужен.
     if (status === 404 && branch !== MAIN) {
-      if (!useSession.getState().readOnly) await forgetBranch(branch)
+      if (canWrite()) await forgetBranch(branch)
       await useSession.getState().switchBranch(MAIN, `Ветки «${branch}» больше нет в репо данных — открыта main.`)
       return
     }
@@ -663,7 +733,7 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null
 // Пишет одна вкладка (ADR-013, writer.ts). Остальные вкладки только смотрят: пишущая сообщает им по
 // BroadcastChannel «перечитай устройство», а выход из любой вкладки — «вышли, сотри своё».
 const CHANNEL = 'hub-data'
-type Message = 'changed' | 'signedOut'
+type Message = 'changed' | 'signedOut' | 'takeover'
 let channel: BroadcastChannel | null = null
 
 function tell(msg: Message): void {
@@ -691,7 +761,8 @@ onBecameWriter(() => void useSession.getState().becomeWriter())
  * op возвращает false, если ничего не записал, — тогда вкладкам просмотра сообщать не о чем.
  */
 function persist(op: () => Promise<void | boolean>, failText = DEVICE_WRITE_FAILED): Promise<void> {
-  dbChain = dbChain.then(op).then(
+  // Проверка в момент записи, а не постановки: вышли или уступили запись, пока запись ждала очереди, — не пишем.
+  dbChain = dbChain.then(() => (canWrite() ? op() : false)).then(
     (wrote) => {
       if (wrote !== false) tell('changed')
       const { deviceError } = useSession.getState()
@@ -800,6 +871,7 @@ function forgetQueue() {
 
 /** Стереть с устройства всё своё: память очереди, IndexedDB, черновики — и показать экран входа. */
 async function wipeLocal(): Promise<void> {
+  wiped = true
   forgetQueue()
   await wipeDevice().catch(() => undefined)
   await wipeDrafts().catch(() => undefined) // черновики для обновления хаба (ADR-011)
@@ -933,7 +1005,7 @@ async function drain(): Promise<void> {
   try {
     for (;;) {
       const state = useSession.getState()
-      if (state.phase !== 'ready' || state.sync === 'sessionExpired') return
+      if (state.phase !== 'ready' || state.sync === 'sessionExpired' || yielding || !canWrite()) return
       const next = [...queue.values()].sort((a, b) => a.edit.queuedAt.localeCompare(b.edit.queuedAt))[0]
       if (!next) {
         retryDelay = RETRY_FIRST
@@ -983,7 +1055,6 @@ async function send(live: Live): Promise<SendResult> {
 async function sendOne(live: Live): Promise<SendResult> {
   const { branch, path } = live.edit
   // Если прошлая попытка дошла, а ответ потерялся, повтор получит 409 и слияние увидит, что писать нечего.
-  const { remote } = useSession.getState()
   const snap = snapOf(live)
   const sent = live.edit
   let sha: string
@@ -994,7 +1065,7 @@ async function sendOne(live: Live): Promise<SendResult> {
   }
   try {
     // Пустой baseSha — создание: без sha, повторяемо (сервер: тот же файл — успех, другой — 409).
-    sha = (await remote.putFile(branch, path, sent.text, sent.baseSha || undefined)).sha
+    sha = (await writeRemote().putFile(branch, path, sent.text, sent.baseSha || undefined)).sha
   } catch (e) {
     // Файл изменили (или удалили) в другом месте — перечитываем и сливаем (ADR-004, шаги 1–4).
     if (e instanceof ApiError && ((e.status === 409 && e.code !== STALE_BUILD) || e.status === 404)) {
@@ -1086,7 +1157,6 @@ const asWritten = (path: string, doc: JsonObject) =>
 async function mergeAndSend(live: Live): Promise<void> {
   const { branch, path } = live.edit
   const k = key(branch, path)
-  const { remote } = useSession.getState()
   for (let attempt = 0; attempt < 3; attempt++) {
     const snap = snapOf(live)
     const mine = live.edit
@@ -1095,7 +1165,7 @@ async function mergeAndSend(live: Live): Promise<void> {
       // Создание (правило 6 schema/README.md): файла нет — повторяем; тот же файл уже есть — прошлая попытка дошла.
       if (!fresh) {
         try {
-          const { sha } = await remote.putFile(branch, path, mine.text)
+          const { sha } = await writeRemote().putFile(branch, path, mine.text)
           return written(live, snap, sha, mine.text)
         } catch (e) {
           if (e instanceof ApiError && e.status === 409 && e.code !== STALE_BUILD) continue
@@ -1113,7 +1183,7 @@ async function mergeAndSend(live: Live): Promise<void> {
     if (fresh.sha === mine.baseSha) {
       // Ветку сдвинул коммит в другой файл: наш файл тот же, повторяем запись как есть.
       try {
-        const { sha } = await remote.putFile(branch, path, mine.text, mine.baseSha)
+        const { sha } = await writeRemote().putFile(branch, path, mine.text, mine.baseSha)
         return written(live, snap, sha, mine.text)
       } catch (e) {
         if (e instanceof ApiError && e.status === 409 && e.code !== STALE_BUILD) continue
@@ -1129,7 +1199,7 @@ async function mergeAndSend(live: Live): Promise<void> {
     if (!sameContent(next, asWritten(path, theirs))) {
       const text = serialize(next)
       try {
-        saved = { path, sha: (await remote.putFile(branch, path, text, fresh.sha)).sha, text }
+        saved = { path, sha: (await writeRemote().putFile(branch, path, text, fresh.sha)).sha, text }
       } catch (e) {
         if (e instanceof ApiError && e.status === 409 && e.code !== STALE_BUILD) continue
         throw e
@@ -1327,7 +1397,6 @@ interface Chosen {
  * Место, которое в репо изменили снова (там уже не то, что было при слиянии), не пишется: возвращается его новое значение.
  */
 async function writeOps(branch: string, path: string, chosen: Chosen[]): Promise<Map<number, Json | undefined>> {
-  const { remote } = useSession.getState()
   for (let attempt = 0; attempt < 3; attempt++) {
     const fresh = await readFresh(branch, path)
     if (!fresh) throw new ApiError(404, 'not_found', 'Файла уже нет в репо — выбор некуда записать')
@@ -1353,7 +1422,7 @@ async function writeOps(branch: string, path: string, chosen: Chosen[]): Promise
     if (sameContent(next, asWritten(path, doc))) return stale
     const text = serialize(next)
     try {
-      const { sha } = await remote.putFile(branch, path, text, fresh.sha)
+      const { sha } = await writeRemote().putFile(branch, path, text, fresh.sha)
       await applyWrite(branch, [{ path, sha, text }], [])
       return stale
     } catch (e) {
@@ -1414,8 +1483,34 @@ async function onMessage(msg: unknown): Promise<void> {
     if (state.phase !== 'signedOut') await wipeLocal()
     return
   }
+  if (msg === 'takeover') {
+    // Пишущая уступает; другие вкладки просмотра пропускают просящую вперёд в очереди за локом.
+    if (isWriter()) await yieldWrite()
+    else requeueWriter()
+    return
+  }
   // «Перечитай» слушает только вкладка просмотра: пишущая одна, и данные на устройстве — её.
   if (msg === 'changed' && state.readOnly) await loadReadOnly()
+}
+
+/**
+ * Уступить запись другой вкладке («Писать здесь»): не принимать новые правки, дождаться текущей отправки,
+ * записей на устройство и настроек, сохранить черновики в handoff — и только потом отпустить лок.
+ */
+async function yieldWrite(): Promise<void> {
+  if (yielding) return
+  yielding = true
+  try {
+    await running?.catch(() => undefined)
+    await Promise.all([...saving.values()].map((p) => p.catch(() => undefined)))
+    await dbChain
+    await persistDrafts().catch(() => undefined)
+    useSession.setState({ readOnly: true })
+    yieldWriter()
+  } finally {
+    yielding = false
+  }
+  await loadReadOnly()
 }
 
 /** Только для тестов: забыть очередь в памяти, как при перезапуске приложения. */
@@ -1424,5 +1519,10 @@ export function resetQueueMemory(): void {
   persistAsked = false
   running = null
   seq = 0
-  useSession.setState({ queued: 0, conflicts: [], deviceError: null, readOnly: false })
+  wiped = false
+  yielding = false
+  booting = Promise.resolve()
+  if (takeoverTimer) clearTimeout(takeoverTimer)
+  takeoverTimer = null
+  useSession.setState({ queued: 0, conflicts: [], deviceError: null, readOnly: false, takeover: null })
 }
