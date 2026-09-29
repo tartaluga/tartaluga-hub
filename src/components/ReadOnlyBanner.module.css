@@ -23,9 +23,10 @@
 }
 
 .banner > span {
-  flex: 1 1 0;
+  flex: 1 1 16em;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  hyphens: none;
 }
 
 .note {

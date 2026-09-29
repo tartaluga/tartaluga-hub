@@ -1,7 +1,7 @@
 // Диалог стража выхода: неотправленные правки и конфликты сотрутся. Выход только по «Стереть и выйти».
 import { useEffect, useRef, useState } from 'react'
 import { DownloadSimple, SignOut, WarningCircle } from '@phosphor-icons/react'
-import { answerSignOut, downloadUnsent, unsentMessage, useSignOutGuard, type SignOutAsk } from '../app/signOutGuard'
+import { answerSignOut, downloadAdvice, downloadUnsent, unsentMessage, useSignOutGuard, type SignOutAsk } from '../app/signOutGuard'
 import css from './SignOutGuardDialog.module.css'
 
 /** Другая вкладка хаба держит свою очередь в памяти — выход сотрёт устройство и под ней. */
@@ -56,7 +56,7 @@ function GuardDialog({ ask }: { ask: SignOutAsk }) {
         </h2>
         <div id="signout-guard-text" className={css.text}>
           <p>
-            {unsentMessage(ask.counts)} Скачай их файлом, чтобы не потерять: там твои версии всех спорных мест.
+            {unsentMessage(ask.counts)} {downloadAdvice(ask.counts)}
             {ask.scope === 'everywhere' && ' Входы на других устройствах тоже завершатся.'}
           </p>
           <p>{OTHER_TABS}</p>

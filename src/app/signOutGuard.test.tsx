@@ -24,7 +24,7 @@ vi.mock('../data/unsentExport', async (importOriginal) => ({
 }))
 
 const { useSession } = await import('./session')
-const { answerSignOut, confirmDataLoss, downloadUnsent, guardedSignOut, unsentCounts, unsentMessage, useSignOutGuard } = await import('./signOutGuard')
+const { answerSignOut, confirmDataLoss, downloadAdvice, downloadUnsent, guardedSignOut, unsentCounts, unsentMessage, useSignOutGuard } = await import('./signOutGuard')
 const { downloadJson } = await import('../data/unsentExport')
 const localdb = await import('../lib/localdb')
 const { SignOutGuardDialog, OTHER_TABS } = await import('../components/SignOutGuardDialog')
@@ -327,5 +327,23 @@ describe('Shell: кнопка «Выйти» идёт через страж', ()
     await click(shellButton())
     await act(() => vi.waitFor(() => expect(signOut).toHaveBeenCalledOnce()))
     expect(useSignOutGuard.getState().ask).toBeNull()
+  })
+})
+
+describe('downloadAdvice', () => {
+  it('одна правка без конфликтов: «её», без спорных мест', () => {
+    expect(downloadAdvice({ edits: 1, conflicts: 0 })).toBe('Скачай её файлом, чтобы не потерять.')
+  })
+  it('несколько правок без конфликтов: «их», без спорных мест', () => {
+    expect(downloadAdvice({ edits: 3, conflicts: 0 })).toBe('Скачай их файлом, чтобы не потерять.')
+  })
+  it('один конфликт: «его», одна версия', () => {
+    expect(downloadAdvice({ edits: 0, conflicts: 1 })).toBe('Скачай его файлом, чтобы не потерять: там твоя версия спорного места.')
+  })
+  it('есть конфликты и правки: про спорные места', () => {
+    expect(downloadAdvice({ edits: 1, conflicts: 2 })).toContain('версии всех спорных мест')
+  })
+  it('ничего не найдено, но проверить не удалось', () => {
+    expect(downloadAdvice({ edits: 0, conflicts: 0, unknown: true })).not.toContain('спорных')
   })
 })

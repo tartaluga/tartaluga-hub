@@ -109,6 +109,14 @@ export function unsentMessage({ edits, conflicts, unknown }: UnsentCounts): stri
   return unknown ? `${main} ${unsure} — может быть и больше.` : main
 }
 
+/** Совет про файл: число и род согласованы с тем, что сотрётся; про спорные места — только если конфликты есть. */
+export function downloadAdvice({ edits, conflicts }: UnsentCounts): string {
+  if (edits === 0 && conflicts === 0) return 'Скачай файл, чтобы не потерять то, что найдётся.'
+  if (conflicts === 0) return edits === 1 ? 'Скачай её файлом, чтобы не потерять.' : 'Скачай их файлом, чтобы не потерять.'
+  if (edits === 0 && conflicts === 1) return 'Скачай его файлом, чтобы не потерять: там твоя версия спорного места.'
+  return 'Скачай их файлом, чтобы не потерять: там твои версии всех спорных мест.'
+}
+
 let askSeq = 0
 
 /** Спросить перед стиранием устройства. Второй вопрос поверх открытого закрывает первый отказом. */
