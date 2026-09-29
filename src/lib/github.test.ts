@@ -105,6 +105,20 @@ describe('GitHubClient: чтение', () => {
     expect(await c.readFile('none.json')).toBeNull()
   })
 
+  it('fileExists: один запрос без чтения содержимого; 404 → false, прочие ошибки — наверх', async () => {
+    const f = fakeFetch(
+      on('GET', '/contents/a.json', { status: 200, json: { sha: 's1', encoding: 'none', content: '' } }),
+      on('GET', '/contents/none.json', { status: 404, json: { message: 'Not Found' } }),
+      on('GET', '/contents/err.json', { status: 502, json: {} }),
+    )
+    const c = client(f.fn)
+    expect(await c.fileExists('a.json', 'feat')).toBe(true)
+    expect(f.calls).toHaveLength(1)
+    expect(f.calls[0]!.url).toContain('ref=feat')
+    expect(await c.fileExists('none.json')).toBe(false)
+    await expect(c.fileExists('err.json')).rejects.toMatchObject({ kind: 'server' })
+  })
+
   it('readFile: файл больше 1 МБ (без content) дочитывается через blob', async () => {
     const f = fakeFetch(
       on('GET', '/contents/big.json', { status: 200, json: { sha: 'big', encoding: 'none', content: '' } }),

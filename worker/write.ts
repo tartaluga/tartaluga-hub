@@ -5,6 +5,7 @@ import { GitHubError, type FileChange, type GitHubClient } from '../src/lib/gith
 import { parseFile } from '../src/data/model'
 import type { Env } from './env'
 import { dataRepo } from './githubApp'
+import { assertRepoVisible, confirmGone } from './gone'
 import { HttpError, json, readJson } from './http'
 import { assertDataPath, assertSha, branchParam, isBranchName, isDataPath, MAIN, STATUS, writableBranch } from './rules'
 import { isFresh, type Session } from './sessions'
@@ -60,10 +61,11 @@ export async function putFile(request: Request, env: Env, fetchImpl?: F): Promis
   if (!path.endsWith('.json')) throw new HttpError(400, 'bad_request', 'Картинки сохраняются через /api/commit')
   const text = validatedText(path, body.text)
   const repo = await dataRepo(env, branch, fetchImpl)
+  // 404 GitHub — «удалено» только после проверки (ADR-014). Создание не может «потерять» файл: там проверяется лишь ветка.
   const saved =
     body.sha === undefined || body.sha === null
-      ? await repo.createFile(path, text, `Хаб: ${path}`)
-      : await repo.updateFile(path, text, assertSha(typeof body.sha === 'string' ? body.sha : undefined), `Хаб: ${path}`)
+      ? await confirmGone(repo, { branch }, () => repo.createFile(path, text, `Хаб: ${path}`))
+      : await confirmGone(repo, { branch, path }, () => repo.updateFile(path, text, assertSha(typeof body.sha === 'string' ? body.sha : undefined), `Хаб: ${path}`))
   return json({ branch, path, sha: saved.sha })
 }
 
@@ -91,7 +93,7 @@ export async function commit(request: Request, env: Env, fetchImpl?: F): Promise
 
   const message = typeof body.message === 'string' && body.message.trim() ? body.message.trim().slice(0, 200) : `Хаб: ${changes.length} файл(ов)`
   const repo = await dataRepo(env, branch, fetchImpl)
-  const result = await repo.commitFiles(changes, message, expectedHead)
+  const result = await confirmGone(repo, { branch }, () => repo.commitFiles(changes, message, expectedHead))
   return json({ branch, head: result.commitSha, shas: result.shas })
 }
 
@@ -131,7 +133,7 @@ export async function deleteBranch(name: string, session: Session, now: number, 
   const branch = userBranch(name)
   requireFresh(session, now)
   const repo = await dataRepo(env, MAIN, fetchImpl)
-  await repo.deleteBranch(branch)
+  await confirmGone(repo, { branch }, () => repo.deleteBranch(branch))
   return json({ ok: true })
 }
 
@@ -144,7 +146,7 @@ export async function mergeBranch(name: string, env: Env, fetchImpl?: F): Promis
   const branch = userBranch(name)
   const repo = await dataRepo(env, MAIN, fetchImpl)
   // Проверяем и вливаем один и тот же коммит: если в ветку допишут между проверкой и слиянием, непроверенное не попадёт в main.
-  const head = await repo.branchHead(branch)
+  const head = await confirmGone(repo, { branch }, () => repo.branchHead(branch))
   const diff = await repo.compare(MAIN, head)
   if (diff.aheadBy === 0) return json({ merged: false, reason: 'nothing_to_merge' })
   if (diff.files.length >= MERGE_FILES_LIMIT) throw new HttpError(422, 'validation', 'Слишком много изменённых файлов, слей ветку на GitHub')
@@ -208,7 +210,10 @@ export async function refreshStatus(env: Env, fetchImpl?: F): Promise<Response> 
   try {
     await repo.dispatchWorkflow('status.yml', MAIN)
   } catch (e) {
-    if (e instanceof GitHubError && e.kind === 'not_found') throw new HttpError(404, 'not_found', 'Виджеты ещё не настроены')
+    if (e instanceof GitHubError && e.kind === 'not_found') {
+      await assertRepoVisible(repo) // 404 и когда токен не видит репо (ADR-014)
+      throw new HttpError(404, 'not_found', 'Виджеты ещё не настроены')
+    }
     throw e
   }
   return json({ ok: true }, 202)

@@ -170,10 +170,17 @@ const saving = new Map<string, Promise<void>>()
 const isDataFile = (path: string) => /^(projects|ideas)\/[^/]+\.json$|^settings\.json$/.test(path)
 
 /**
- * «Нет такого файла или ветки» — только ответ API хаба: 404 с кодом not_found. 404 без него (ответ не от API:
- * прокси, превью, страница ошибки) — сбой связи с сервером, а не удаление; по нему ничего не стирается.
+ * «Файла нет» — только ответ API хаба: 404 с кодом not_found. Сервер даёт его, лишь проверив, что репо данных
+ * читается (ADR-014); не подтвердил — 503 upstream_unavailable. 404 без кода (ответ не от API: прокси, превью,
+ * страница ошибки) и 404 с другим кодом (no_route, branch_not_found) — не «файл удалён».
  */
 export const isGone = (e: unknown): boolean => e instanceof ApiError && e.status === 404 && e.code === 'not_found'
+
+/**
+ * «Ветки нет» — только подтверждённое сервером (ADR-014): 404 branch_not_found. Старый сервер такого кода не знает,
+ * и его неоднозначный not_found ветку не стирает.
+ */
+export const isBranchGone = (e: unknown): boolean => e instanceof ApiError && e.status === 404 && e.code === 'branch_not_found'
 
 export function errorText(e: unknown): string {
   if (isNetworkError(e)) return 'Нет связи с сервером хаба. Показываю данные с устройства.'
@@ -675,8 +682,9 @@ async function syncBranch(branch: string): Promise<void> {
   } catch (e) {
     if (!current()) return
     const status = e instanceof ApiError ? e.status : -1
-    // Ветку удалили на другом устройстве или на GitHub — возвращаемся на main, кэш ветки больше не нужен.
-    if (isGone(e) && branch !== MAIN) {
+    // Ветку удалили на другом устройстве или на GitHub (сервер это подтвердил) — возвращаемся на main,
+    // кэш и очередь ветки больше некуда писать. Любой другой сбой, в том числе 404, ничего не стирает.
+    if (isBranchGone(e) && branch !== MAIN) {
       if (canWrite()) await forgetBranch(branch)
       await useSession.getState().switchBranch(MAIN, `Ветки «${branch}» больше нет в репо данных — открыта main.`)
       return
@@ -1240,8 +1248,11 @@ async function failed(live: Live, e: unknown): Promise<SendResult> {
     useSession.setState({ sync: 'sessionExpired', syncError: 'Сессия закончилась, войди снова.' })
     return 'auth'
   }
-  // 404 не от API хаба (прокси, превью, сервер без маршрута) — не «файла нет», а сбой: правка ждёт.
-  const transient = e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500 || e.code === STALE_BUILD || (e.status === 404 && !isGone(e))
+  // Любой 404 здесь — сбой, а не отказ по существу: правка ждёт (ADR-014). «Файла нет» на первой записи уже ушло
+  // в слияние (sendOne), и оно по свежему списку файлов само решило, удалён ли файл. Сюда 404 доходит, только если
+  // сервер противоречит списку (файл в списке, а запись отвечает «нет»), нет ветки (её сотрёт сверка) или ответ не
+  // от API хаба.
+  const transient = e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500 || e.code === STALE_BUILD || e.status === 404
   if (transient) {
     useSession.setState({ sync: e.status === 0 ? 'offline' : 'error', syncError: errorText(e) })
     return 'later'

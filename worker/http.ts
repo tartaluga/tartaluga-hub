@@ -21,13 +21,16 @@ export type ErrorCode =
   | 'unauthorized'
   | 'fresh_login_required'
   | 'forbidden'
-  | 'not_found'
+  | 'not_found' // файла (объекта) нет — для репо данных только подтверждённое (ADR-014)
+  | 'branch_not_found' // ветки нет — подтверждено: репо данных читается (ADR-014)
+  | 'no_route' // такой команды у сервера нет
   | 'method_not_allowed'
   | 'conflict'
   | 'payload_too_large'
   | 'validation'
   | 'rate_limited'
   | 'upstream'
+  | 'upstream_unavailable' // GitHub не подтвердил ни наличие, ни отсутствие — повторить позже (ADR-014)
   | 'server'
 
 /** Ошибка, которую обработчик бросает, а роутер превращает в ответ { error: { code, message } }. */

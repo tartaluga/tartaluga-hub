@@ -441,7 +441,8 @@ describe('обновление виджетов', () => {
   })
 
   it('workflow ещё нет — понятный 404', async () => {
-    const { cookie, send } = await setup(on('POST', '/dispatches', () => jsonResponse({ message: 'Not Found' }, 404)))
+    const repoVisible: Handler = (c) => (c.method === 'GET' && c.url.endsWith('/repos/tartaluga/tartaluga-hub-data') ? jsonResponse({}) : undefined)
+    const { cookie, send } = await setup(on('POST', '/dispatches', () => jsonResponse({ message: 'Not Found' }, 404)), repoVisible)
     const res = await send(mutation('POST', '/api/status/refresh', cookie))
     expect(res.status).toBe(404)
     expect((await res.json()).error.message).toBe('Виджеты ещё не настроены')

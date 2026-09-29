@@ -29,7 +29,7 @@ function fakeRemote(tree: Entry[] | Record<string, Entry[]>, blobs: Record<strin
     async listFiles(branch) {
       if (fail) throw fail
       const files = trees[branch]
-      if (!files) throw new ApiError(404, 'not_found', 'Не найдено в репо данных')
+      if (!files) throw new ApiError(404, 'branch_not_found', 'Ветки нет в репо данных')
       return { head: `head-${branch}-${n}`, files: [...files] }
     },
     async readBlobText(sha) {

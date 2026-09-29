@@ -51,7 +51,7 @@ function server(trees: Record<string, Record<string, string>>) {
   for (const [branch, files] of Object.entries(trees)) {
     heads[branch] = new Map(Object.entries(files).map(([p, t]) => [p, store(t)]))
   }
-  const state = { down: false, auth: false, fail: null as ApiError | null, status: 0, writes: [] as string[] }
+  const state = { down: false, auth: false, fail: null as ApiError | null, listFail: null as ApiError | null, status: 0, writes: [] as string[] }
   const check = () => {
     if (state.down) throw new ApiError(0, 'network', 'нет сети')
     if (state.status) throw new ApiError(state.status, 'server', `Сервер ответил ${state.status}`)
@@ -64,8 +64,9 @@ function server(trees: Record<string, Record<string, string>>) {
     },
     async listFiles(branch) {
       check()
+      if (state.listFail) throw state.listFail
       const files = heads[branch]
-      if (!files) throw new ApiError(404, 'not_found', 'Нет ветки')
+      if (!files) throw new ApiError(404, 'branch_not_found', 'Ветки нет в репо данных')
       return { head: `h${n}`, files: [...files].map(([path, sha]) => ({ path, sha })) }
     },
     async readBlobText(sha) {
@@ -387,6 +388,93 @@ describe('очередь правок: ветки раздельны (ADR-007)',
     await useSession.getState().branchDeleted('feat')
     expect(await getQueue()).toEqual([])
     expect(useSession.getState().queued).toBe(0)
+  })
+})
+
+describe('«удалено» — только подтверждённое сервером (ADR-014)', () => {
+  const upstream = () => new ApiError(503, 'upstream_unavailable', 'GitHub сейчас не подтверждает данные — повторю позже')
+
+  it.each([
+    ['404 not_found, хотя файл есть в списке', () => new ApiError(404, 'not_found', 'Файла нет в ветке')],
+    ['503 upstream_unavailable', upstream],
+    ['404 no_route', () => new ApiError(404, 'no_route', 'Нет такой команды')],
+  ])('запись отвечает %s — не конфликт: правка ждёт и уходит повтором', async (_name, error) => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.fail = error()
+    await useSession.getState().saveProject('a', { title: 'Моё' })
+    expect(useSession.getState().conflicts).toEqual([])
+    expect(await getConflicts()).toEqual([])
+    expect(useSession.getState().queued).toBe(1)
+    expect(await getQueue()).toHaveLength(1)
+    expect(shown().title).toBe('Моё')
+    srv.state.fail = null
+    await useSession.getState().flush()
+    expect(JSON.parse(srv.text('main', PATH)).title).toBe('Моё')
+    expect(useSession.getState().queued).toBe(0)
+  })
+
+  it('подтверждённое «файла нет» на записи, и в списке его нет — выбор «вернуть или согласиться»', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    await start(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Моё' })
+    srv.edit('main', PATH, null)
+    srv.state.down = false
+    srv.state.fail = new ApiError(404, 'not_found', 'Файла нет в ветке')
+    await useSession.getState().flush()
+    expect(useSession.getState().queued).toBe(0)
+    expect(await getConflicts()).toMatchObject([{ branch: 'main', path: PATH, deleted: { mine: expect.stringContaining('Моё') } }])
+  })
+
+  it('запись в ветку отвечает branch_not_found — правка ждёт, ветку стирает только сверка', async () => {
+    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
+    await start(srv)
+    await useSession.getState().switchBranch('feat')
+    srv.state.fail = new ApiError(404, 'branch_not_found', 'Ветки нет в репо данных')
+    await useSession.getState().saveProject('a', { title: 'С ветки' })
+    expect(useSession.getState().conflicts).toEqual([])
+    expect(await getQueue()).toHaveLength(1)
+    expect(useSession.getState().branch).toBe('feat')
+  })
+
+  it.each([
+    ['503 upstream_unavailable', upstream],
+    ['неоднозначный 404 not_found старого сервера', () => new ApiError(404, 'not_found', 'Не найдено в репо данных')],
+    ['404 no_route', () => new ApiError(404, 'no_route', 'Нет такой команды')],
+  ])('сверка ветки ≠ main отвечает %s — ветка, её очередь и кэш целы', async (_name, error) => {
+    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
+    await start(srv)
+    await useSession.getState().switchBranch('feat')
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'С ветки' })
+    srv.state.down = false
+    srv.state.listFail = error()
+    await useSession.getState().refresh()
+    expect(useSession.getState()).toMatchObject({ branch: 'feat', sync: 'error', branchNotice: null })
+    expect(await getQueue()).toHaveLength(1)
+    expect(useSession.getState().queued).toBe(1)
+    expect(await getCachedFiles('feat')).toHaveLength(1)
+    srv.state.listFail = null
+    await useSession.getState().syncNow()
+    expect(JSON.parse(srv.text('feat', PATH)).title).toBe('С ветки')
+  })
+
+  it('подтверждённое «ветки нет» — ветка стирается с очередью и кэшем, открыта main', async () => {
+    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
+    await start(srv)
+    await useSession.getState().switchBranch('feat')
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'С ветки' })
+    srv.state.down = false
+    srv.state.listFail = new ApiError(404, 'branch_not_found', 'Ветки нет в репо данных')
+    await useSession.getState().refresh()
+    srv.state.listFail = null
+    await vi.waitFor(() => expect(useSession.getState().branch).toBe('main'))
+    expect(useSession.getState().branchNotice).toContain('feat')
+    expect(await getQueue()).toEqual([])
+    expect(useSession.getState().queued).toBe(0)
+    expect(await getCachedFiles('feat')).toEqual([])
   })
 })
 

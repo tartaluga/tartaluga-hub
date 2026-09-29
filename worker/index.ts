@@ -8,6 +8,7 @@ import type { Env } from './env'
 import { deleteOtherSession, listSessions, logoutAll, markSeen, securityLog, unseenCount } from './account'
 import { authenticate, authenticationOptions, deletePasskey, listPasskeys, register, registrationOptions } from './passkeys'
 import { commit, createBranch, deleteBranch, listBranches, mergeBranch, putFile, refreshStatus } from './write'
+import { upstreamUnavailable } from './gone'
 import { assertSameOriginMutation, errorResponse, HttpError, json } from './http'
 import { cleanup, clearSessionCookie, deleteSession, isFresh, logEvent, readSession, SESSION_COOKIE, type Session } from './sessions'
 
@@ -156,7 +157,8 @@ async function route(request: Request, url: URL, env: Env, deps: Deps, onRefresh
     allow(method, 'DELETE')
     return deleteBranch(name, session, now, env, deps.fetch)
   }
-  throw new HttpError(404, 'not_found', 'Нет такой команды')
+  // Свой код, не not_found: клиент не должен принять «нет команды» за «нет файла» (ADR-014).
+  throw new HttpError(404, 'no_route', 'Нет такой команды')
 }
 
 function allow(method: string, expected: string): void {
@@ -194,7 +196,9 @@ function toHttpError(e: unknown): HttpError {
       case 'already_exists':
         return new HttpError(409, 'conflict', 'Данные уже изменили')
       case 'not_found':
-        return new HttpError(404, 'not_found', 'Не найдено в репо данных')
+        // Не подтверждённый обработчиком 404 (токен мог перестать видеть репо) — не «удалено», а временная ошибка (ADR-014).
+        console.error('github 404 unconfirmed', e.status)
+        return upstreamUnavailable()
       case 'rate_limited':
         return new HttpError(429, 'rate_limited', 'GitHub просит подождать')
       default:

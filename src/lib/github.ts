@@ -10,7 +10,7 @@ const API = 'https://api.github.com'
 export type GitHubErrorKind =
   | 'unauthorized' // 401: токен неверный, истёк или отозван
   | 'forbidden' // 403: у токена нет нужного права
-  | 'not_found' // 404: нет файла или токен не видит репо
+  | 'not_found' // 404: нет файла, ветки — или токен не видит репо (что именно, GitHub не говорит; сервер уточняет, ADR-014)
   | 'conflict' // 409/422 на записи: файл или ветку уже изменили
   | 'already_exists' // создание, а файл уже есть с другим содержимым
   | 'validation' // 422: прочие ошибки запроса
@@ -175,6 +175,17 @@ export class GitHubClient {
       return { text: await this.readBlobText(body.sha), sha: body.sha }
     } catch (e) {
       if (e instanceof GitHubError && e.kind === 'not_found') return null
+      throw e
+    }
+  }
+
+  /** Есть ли файл по пути в ветке — без чтения содержимого. Нет — false; прочие ошибки — наверх. */
+  async fileExists(path: string, ref = this.branch): Promise<boolean> {
+    try {
+      await this.request(`/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`)
+      return true
+    } catch (e) {
+      if (e instanceof GitHubError && e.kind === 'not_found') return false
       throw e
     }
   }

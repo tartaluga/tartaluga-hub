@@ -19,6 +19,7 @@ function github(opts: { userId?: number; tree?: { path: string; type: string; sh
     if (url.endsWith('/git/ref/heads/main')) return jsonResponse({ object: { sha: 'c'.repeat(40) } })
     if (url.includes('/git/trees/')) return jsonResponse({ truncated: false, tree: opts.tree ?? [] })
     if (url.includes('/git/blobs/')) return jsonResponse({ message: 'Not Found' }, 404)
+    if (url === 'https://api.github.com/repos/tartaluga/tartaluga-hub-data') return jsonResponse({}) // репо видно (ADR-014)
     throw new Error(`unexpected fetch ${init.method ?? 'GET'} ${url}`)
   })
 }
