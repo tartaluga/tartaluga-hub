@@ -8,6 +8,7 @@ import { SyncIndicator } from '../components/SyncIndicator'
 import { MobileSyncBar } from '../components/MobileSyncBar'
 import { SecurityBanner } from '../components/SecurityBanner'
 import { BranchBanner } from '../components/BranchBanner'
+import { ReadOnlyBanner } from '../components/ReadOnlyBanner'
 import { SignOutGuardDialog } from '../components/SignOutGuardDialog'
 import { Login } from '../screens/Login'
 import { installSyncTriggers, useSession } from './session'
@@ -143,6 +144,7 @@ export function Shell() {
             </Link>
           </div>
         )}
+        <ReadOnlyBanner />
         <BranchBanner />
         <SecurityBanner />
         <Outlet />

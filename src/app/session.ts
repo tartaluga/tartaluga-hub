@@ -14,7 +14,6 @@ import {
   getCurrentBranch,
   dropQueuedKey,
   getQueue,
-  getQueued,
   getUnreadableQueued,
   onDbBlocked,
   putCachedFiles,
@@ -40,6 +39,7 @@ import { untagProjects } from '../data/projects'
 import { applyEdit, mergePatch, type ProjectPatch } from '../data/editProject'
 import { applyIdeaPatch, firstLine, mergeIdeaPatch, type IdeaPatch } from '../data/ideas'
 import { plural } from '../lib/plural'
+import { claimWriter, isWriter, onBecameWriter } from './writer'
 
 type Phase = 'booting' | 'signedOut' | 'ready'
 /** sessionExpired: сессия кончилась, пока данные на экране — нужен вход, кэш и очередь правок ждут (ADR-010 §4). */
@@ -83,8 +83,15 @@ interface Session {
   conflicts: StoredConflict[]
   /** Беда с хранилищем устройства: правка не легла в IndexedDB или обновление базы ждёт другие вкладки. */
   deviceError: string | null
+  /**
+   * Хаб открыт в другой вкладке, и пишет она (ADR-013): здесь только просмотр — правки отклоняются с READ_ONLY,
+   * очередь не отправляется, на устройство ничего не пишется.
+   */
+  readOnly: boolean
   remote: Remote
   boot(): Promise<void>
+  /** Прежняя пишущая вкладка закрылась: поднять очередь и конфликты с устройства и начать отправку. */
+  becomeWriter(): Promise<void>
   /** После входа (ключом) — перечитать сессию и данные. */
   signedIn(): Promise<void>
   signOut(): Promise<void>
@@ -160,6 +167,14 @@ export function errorText(e: unknown): string {
   return 'Что-то пошло не так. Попробуй ещё раз.'
 }
 
+/**
+ * Единая точка входа правок (ADR-013): во вкладке просмотра любое действие, которое пишет, отклоняется с READ_ONLY
+ * до того, как что-то попадёт в очередь, на сервер или в IndexedDB.
+ */
+function onlyWriter<A extends unknown[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+  return (...args) => (useSession.getState().readOnly ? Promise.reject(new ApiError(423, 'read_only', READ_ONLY)) : fn(...args))
+}
+
 export const useSession = create<Session>((set, get) => ({
   phase: 'booting',
   me: null,
@@ -173,11 +188,15 @@ export const useSession = create<Session>((set, get) => ({
   queued: 0,
   conflicts: [],
   deviceError: null,
+  readOnly: false,
   remote: serverRemote,
 
   async boot() {
+    await claimWriter()
+    const readOnly = !isWriter()
+    set({ readOnly })
     const branch = await getCurrentBranch().catch(() => MAIN)
-    await reloadFromDevice()
+    await (readOnly ? loadReadOnly() : reloadFromDevice())
     const files = overlay(branch, await getCachedFiles(branch).catch(() => []))
     set({ branch })
     try {
@@ -195,6 +214,15 @@ export const useSession = create<Session>((set, get) => ({
     }
   },
 
+  async becomeWriter() {
+    if (!get().readOnly) return
+    set({ readOnly: false })
+    // Открытая здесь ветка становится открытой веткой устройства: её и продолжаем.
+    await setCurrentBranch(get().branch).catch(() => undefined)
+    await reloadFromDevice()
+    if (get().phase === 'ready') await get().syncNow()
+  },
+
   async signedIn() {
     set({ sync: 'idle', syncError: null })
     await get().boot()
@@ -206,10 +234,8 @@ export const useSession = create<Session>((set, get) => ({
     } catch {
       /* без сети — всё равно стираем устройство; сессия истечёт сама */
     }
-    forgetQueue()
-    await wipeDevice().catch(() => undefined)
-    await wipeDrafts().catch(() => undefined) // черновики для обновления хаба (ADR-011)
-    set({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [], deviceError: null })
+    await wipeLocal()
+    tell('signedOut') // другие вкладки хаба стирают своё и показывают вход
   },
 
   async refreshMe() {
@@ -231,7 +257,8 @@ export const useSession = create<Session>((set, get) => ({
   },
 
   flush() {
-    running ??= drainLocked()
+    if (get().readOnly) return Promise.resolve() // отправляет пишущая вкладка
+    running ??= drain()
     return running
   },
 
@@ -242,14 +269,13 @@ export const useSession = create<Session>((set, get) => ({
 
   async switchBranch(name, notice) {
     if (name === get().branch) return
-    await setCurrentBranch(name).catch(() => undefined)
+    if (!get().readOnly) await setCurrentBranch(name).catch(() => undefined)
     const files = overlay(name, await getCachedFiles(name).catch(() => []))
     set({ branch: name, files, tree: null, branchNotice: notice ?? null, sync: 'idle', syncError: null, lastSync: null })
     await get().refresh()
   },
 
-  async settleBranch(name) {
-    await reloadFromDevice() // правки и конфликты ветки, записанные другой вкладкой, тоже считаются
+  settleBranch: onlyWriter(async (name) => {
     await get().flush()
     const edits = [...queue.values()].filter((l) => l.edit.branch === name).length
     const disputes = [...conflictMap.values()]
@@ -262,25 +288,25 @@ export const useSession = create<Session>((set, get) => ({
     ]
     const how = [...(edits ? ['правки уйдут, когда будет связь и вход'] : []), ...(disputes ? ['конфликты — во «Входящих конфликтах»'] : [])]
     throw new ApiError(423, 'queue_pending', `В ветке «${name}» ещё ${parts.join(' и ')} — разбери сначала: ${how.join(', ')}.`)
-  },
+  }),
 
-  async branchDeleted(name) {
+  branchDeleted: onlyWriter(async (name) => {
     await forgetBranch(name)
     if (get().branch === name) await get().switchBranch(MAIN)
-  },
+  }),
 
   dismissBranchNotice() {
     set({ branchNotice: null })
   },
 
-  async createFile(path, text) {
+  createFile: onlyWriter(async (path, text) => {
     const { branch, remote } = get()
     const { sha } = await remote.putFile(branch, path, text)
     await applyWrite(branch, [{ path, sha, text }], [])
     void get().refresh()
-  },
+  }),
 
-  async deleteFiles(pathsOf, message, also) {
+  deleteFiles: onlyWriter(async (pathsOf, message, also) => {
     const { branch, remote } = get()
     const sent = new Set<string>()
     for (let attempt = 0, part = 1; ; ) {
@@ -313,17 +339,17 @@ export const useSession = create<Session>((set, get) => ({
         set({ tree: null })
       }
     }
-  },
+  }),
 
-  saveProject(slug, patch) {
+  saveProject: onlyWriter((slug, patch) => {
     return submit(get().branch, `projects/${slug}.json`, 'project', patch)
-  },
+  }),
 
-  saveIdea(path, patch) {
+  saveIdea: onlyWriter((path, patch) => {
     return submit(get().branch, path, 'idea', patch)
-  },
+  }),
 
-  async addIdea(path, text) {
+  addIdea: onlyWriter(async (path, text) => {
     const branch = get().branch
     if (queue.has(key(branch, path))) return // тот же черновик уже ждёт отправки
     const file = get().files.find((f) => f.path === path)
@@ -333,25 +359,24 @@ export const useSession = create<Session>((set, get) => ({
       throw new ApiError(409, 'conflict', 'Идея с таким номером уже есть в репо, и она другая — не сохранено')
     }
     await submit(branch, path, 'idea', {}, text)
-  },
+  }),
 
-  async discardNew(path) {
+  discardNew: onlyWriter(async (path) => {
     const branch = get().branch
     const k = key(branch, path)
     // Запись уже летит на сервер — дождаться ответа: дошла — файл в репо, и его удалит обычное удаление.
     while (sendingKey === k) await sendingDone
     const live = queue.get(k)
     if (!live || live.edit.baseSha) return false
-    const id = storedIds.get(k)
     queue.delete(k)
-    await persistEntry(k, id)
+    await persistEntry(k)
     publish()
     await updateConflict(branch, path, () => null)
     await showCached(branch, path)
     return true
-  },
+  }),
 
-  async resolveConflict(branch, path, picks) {
+  resolveConflict: onlyWriter(async (branch, path, picks) => {
     const k = key(branch, path)
     const rec = conflictMap.get(k)
     if (!rec) return
@@ -377,7 +402,7 @@ export const useSession = create<Session>((set, get) => ({
       return item ? [{ index: p.index, item, pick: p.pick }] : []
     })
     const stale = chosen.some((c) => opsFor(c.item, c.pick).length) ? await writeOps(branch, path, chosen) : new Map<number, Json | undefined>()
-    // Разобранное снимается со свежей записи на устройстве: другая вкладка могла дописать в неё спорные места.
+    // Разобранное снимается со свежей записи на устройстве: пока шла запись, отправка могла дописать в неё спорные места.
     // Место узнаём по пути и содержимому, а не по номеру — номера в свежей записи могли сдвинуться.
     const byPath = new Map(chosen.map((c) => [c.item.path.join('\n'), c]))
     await updateConflict(branch, path, (cur) => {
@@ -401,9 +426,9 @@ export const useSession = create<Session>((set, get) => ({
       return items.length || cur.refused || cur.deleted ? { ...cur, items, labels } : null
     })
     if (stale.size) throw new QueueConflict(chosen.length > stale.size ? PARTLY_WRITTEN : NOTHING_WRITTEN)
-  },
+  }),
 
-  saveSettings(change) {
+  saveSettings: onlyWriter((change) => {
     const branch = get().branch
     const key = `${branch}
 ${SETTINGS}`
@@ -415,9 +440,9 @@ ${SETTINGS}`
     }
     done.then(cleanup, cleanup)
     return done
-  },
+  }),
 
-  deleteTag(id) {
+  deleteTag: onlyWriter((id) => {
     const branch = get().branch
     const key = `${branch}
 ${SETTINGS}`
@@ -432,7 +457,7 @@ ${SETTINGS}`
     }
     done.then(cleanup, cleanup)
     return done
-  },
+  }),
 }))
 
 /** Сколько файлов сервер принимает в одном коммите (worker/write.ts, COMMIT_LIMIT). */
@@ -524,7 +549,7 @@ async function writeSettings(branch: string, change: SettingsChange): Promise<vo
 
 /** Сразу показать результат записи: кэш на устройстве, файлы на экране и дерево ветки. */
 export async function applyWrite(branch: string, changed: CachedFile[], removed: string[], head?: string): Promise<void> {
-  await putCachedFiles(branch, changed, removed).catch(() => undefined)
+  await putCachedFiles(branch, changed, removed).then(() => tell('changed'), () => undefined)
   const state = useSession.getState()
   if (state.branch !== branch) return
   const files = new Map(state.files.map((f) => [f.path, f]))
@@ -558,7 +583,11 @@ async function syncBranch(branch: string): Promise<void> {
     const wantedPaths = new Set(wanted.map((f) => f.path))
     const removed = [...cached.keys()].filter((p) => !wantedPaths.has(p))
 
-    if (changed.length || removed.length) await putCachedFiles(branch, changed, removed)
+    // Кэш на устройстве пишет только пишущая вкладка (ADR-013); вкладка просмотра держит свежее только на экране.
+    if ((changed.length || removed.length) && !useSession.getState().readOnly) {
+      await putCachedFiles(branch, changed, removed)
+      tell('changed')
+    }
     if (!current()) return
     const next = new Map(cached)
     for (const p of removed) next.delete(p)
@@ -570,7 +599,7 @@ async function syncBranch(branch: string): Promise<void> {
     const status = e instanceof ApiError ? e.status : -1
     // Ветку удалили на другом устройстве или на GitHub — возвращаемся на main, кэш ветки больше не нужен.
     if (status === 404 && branch !== MAIN) {
-      await forgetBranch(branch)
+      if (!useSession.getState().readOnly) await forgetBranch(branch)
       await useSession.getState().switchBranch(MAIN, `Ветки «${branch}» больше нет в репо данных — открыта main.`)
       return
     }
@@ -602,29 +631,21 @@ interface Live {
   edit: QueuedEdit
   /** Растёт с каждой правкой, влитой в ожидающую: так видно, что во время отправки пришло новое. */
   rev: number
-  /** Правки с базовой копии по порядку (edit.patch — их слияние). Первые saved уже лежат в IndexedDB. */
+  /** Правки с базовой копии по порядку (edit.patch — их слияние): после записи остаются только пришедшие позже. */
   patches: Patch[]
-  saved: number
   /** В памяти есть то, чего ещё нет в IndexedDB. */
   dirty: boolean
-  /** Растёт, когда правку целиком заменили записью другой вкладки: тогда patches считаются заново. */
-  epoch: number
 }
 
 /** Снимок правки перед отправкой: по нему после записи видно, что пришло за это время. */
 interface Snap {
   rev: number
-  epoch: number
   /** Сколько правок было в patches. */
   n: number
-  /** Какая запись IndexedDB отправляется: после записи удаляем только её. */
-  id: string | undefined
 }
 
 const key = (branch: string, path: string) => `${branch}\n${path}`
 const queue = new Map<string, Live>()
-/** id записи очереди в IndexedDB, которую эта вкладка записала или прочла последней. Другой id — запись переписала другая вкладка. */
-const storedIds = new Map<string, string>()
 const conflictMap = new Map<string, StoredConflict>()
 /** Последняя проблема с файлом: seq — номер правки на момент проблемы (saveProject сообщает только о своих). */
 const problems = new Map<string, { seq: number; error: QueueConflict }>()
@@ -639,58 +660,40 @@ let autoRetry = false
 let retryDelay = RETRY_FIRST
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 
-// Несколько вкладок хаба на одном устройстве (ADR-004): у каждой очередь в памяти, общая — в IndexedDB.
-// Запись в очередь и разбор после отправки идут под блокировкой; другие вкладки узнают о переменах по BroadcastChannel.
-const QUEUE_LOCK = 'hub-queue'
-/** Отдельная блокировка на отправку: под ней берётся QUEUE_LOCK (Web Locks не повторно входимы). */
-const SEND_LOCK = 'hub-queue-send'
+// Пишет одна вкладка (ADR-013, writer.ts). Остальные вкладки только смотрят: пишущая сообщает им по
+// BroadcastChannel «перечитай устройство», а выход из любой вкладки — «вышли, сотри своё».
+const CHANNEL = 'hub-data'
+type Message = 'changed' | 'signedOut'
 let channel: BroadcastChannel | null = null
+
+function tell(msg: Message): void {
+  channel?.postMessage(msg)
+}
 
 export const DEVICE_WRITE_FAILED = 'Правка не сохранилась на устройстве — не закрывай хаб, пока она не отправится.'
 export const DEVICE_READ_FAILED = 'Не удалось прочитать очередь правок с устройства — перезапусти хаб; то, что на экране, не потеряно.'
 export const NOTHING_WRITTEN = 'Пока ты выбирал, это место в репо изменили ещё раз. Ничего не записано: на экране новое значение — выбери снова.'
 export const PARTLY_WRITTEN = 'Часть выбора записана. Остальные места в репо изменили ещё раз, пока ты выбирал: на экране новое значение — выбери снова.'
 export const DB_BLOCKED = 'Хаб обновляется: закрой другие вкладки хаба, чтобы продолжить.'
+export const READ_ONLY = 'Хаб открыт в другой вкладке — правь там. Здесь только просмотр.'
 
 onDbBlocked((blocked) => {
   if (blocked) useSession.setState({ deviceError: DB_BLOCKED })
   else if (useSession.getState().deviceError === DB_BLOCKED) useSession.setState({ deviceError: null })
 })
 
-/** Под блокировкой очереди, если браузер умеет Web Locks; иначе как есть (одна вкладка). */
-function withLock<T>(fn: () => Promise<T>): Promise<T> {
-  const locks = typeof navigator === 'undefined' ? undefined : (navigator as Partial<Navigator>).locks
-  return locks?.request ? (locks.request(QUEUE_LOCK, fn) as Promise<T>) : fn()
-}
-
-/**
- * Отправляет одна вкладка за раз. Если отправку держит другая вкладка, дождаться её и сперва перечитать очередь
- * с устройства: то, что та вкладка уже отправила, второй раз не уходит.
- */
-function drainLocked(): Promise<void> {
-  const locks = typeof navigator === 'undefined' ? undefined : (navigator as Partial<Navigator>).locks
-  if (!locks?.request) return drain()
-  return locks.request(SEND_LOCK, { ifAvailable: true }, async (lock) => {
-    if (lock) return drain()
-    return locks.request(SEND_LOCK, async () => {
-      await reloadFromDevice()
-      return drain()
-    })
-  }) as Promise<void>
-}
-
-const idOf = (edit: QueuedEdit) => edit.id ?? ''
-const newId = () => crypto.randomUUID()
+// Вкладка стала пишущей, когда прежняя закрылась: подхватить очередь, конфликты и отправку.
+onBecameWriter(() => void useSession.getState().becomeWriter())
 
 /**
  * Записи в базу идут одной цепочкой, чтобы порядок сохранения совпадал с порядком правок. Ошибку записи не глотаем
  * молча: правка остаётся в памяти и уходит на сервер, а индикатор говорит, что на устройстве её нет.
- * op возвращает false, если ничего не записал, — тогда другим вкладкам сообщать не о чем.
+ * op возвращает false, если ничего не записал, — тогда вкладкам просмотра сообщать не о чем.
  */
 function persist(op: () => Promise<void | boolean>, failText = DEVICE_WRITE_FAILED): Promise<void> {
   dbChain = dbChain.then(op).then(
     (wrote) => {
-      if (wrote !== false) channel?.postMessage('queue')
+      if (wrote !== false) tell('changed')
       const { deviceError } = useSession.getState()
       if (deviceError === failText && (failText === DEVICE_READ_FAILED || ![...queue.values()].some((l) => l.dirty))) useSession.setState({ deviceError: null })
     },
@@ -699,130 +702,67 @@ function persist(op: () => Promise<void | boolean>, failText = DEVICE_WRITE_FAIL
   return dbChain
 }
 
-/** Свести правку файла в памяти с записью в IndexedDB. sentId — запись, которую только что отправили. */
-function persistEntry(k: string, sentId?: string): Promise<void> {
-  return persist(() => withLock(() => reconcile(k, sentId)))
-}
-
-/**
- * Под блокировкой: запись в IndexedDB — общая для вкладок. Если её переписала другая вкладка, в ней уже всё, что
- * эта вкладка записала раньше: мои ещё не записанные правки ложатся поверх неё, база — самая ранняя.
- * Иначе запись приводится к памяти; удаляется только та запись, которую эта вкладка знает (или отправила).
- */
-async function reconcile(k: string, sentId?: string): Promise<boolean> {
-  const [branch = '', path = ''] = k.split('\n')
-  let stored = await getQueued(branch, path)
-  const live = queue.get(k)
-  const gone = goneAt.get(branch)
-  if (gone !== undefined) {
-    // Ветку удалили: правки, сделанные до этого, не возвращаются в базу.
-    let wrote = false
-    if (stored && stored.queuedAt <= gone) {
-      await deleteQueued(branch, path)
-      stored = undefined
-      wrote = true
-    }
-    if (live && live.edit.queuedAt <= gone && queue.get(k) === live) {
-      queue.delete(k)
-      storedIds.delete(k)
-      publish()
-    }
-    if (!stored && !queue.has(k)) {
-      storedIds.delete(k)
-      return wrote
-    }
-  }
-  const known = stored !== undefined && (idOf(stored) === storedIds.get(k) || (sentId !== undefined && idOf(stored) === sentId))
-  if (!stored || known) {
+/** Привести запись файла в IndexedDB к памяти: правка есть — записать её текущую версию, нет — удалить запись. */
+function persistEntry(k: string): Promise<void> {
+  return persist(async () => {
+    const [branch = '', path = ''] = k.split('\n')
+    const live = queue.get(k)
     if (!live) {
-      if (!stored) return false
       await deleteQueued(branch, path)
-      storedIds.delete(k)
-      return true
+      return
     }
-    if (!live.dirty) {
-      if (stored) return false
-      // Запись убрала другая вкладка: правку она уже отправила (или ветку удалили).
-      queue.delete(k)
-      storedIds.delete(k)
-      publish()
-      return false
-    }
-    return write(k, live)
-  }
-  const pending = live ? live.patches.slice(live.saved) : []
-  const from = live && !storedIds.has(k) && live.edit.queuedAt < stored.queuedAt ? live.edit : stored
-  const patch = pending.reduce((a, p) => mergeAny(kindOf(stored), a, p), stored.patch)
-  const changed = pending.length > 0 || from !== stored
-  const edit: QueuedEdit = changed
-    ? { ...stored, baseSha: from.baseSha, baseText: from.baseText, queuedAt: from.queuedAt, patch, text: render(kindOf(stored), path, from.baseSha, from.baseText, patch), id: newId() }
-    : stored
-  if (changed) await putQueued(edit)
-  storedIds.set(k, idOf(edit))
-  // Правки, пришедшие в эту вкладку, пока шла запись, остаются сверху.
-  const now = queue.get(k)
-  const later = live && now === live ? now.patches.slice(live.saved + pending.length) : []
-  const mine = later.reduce((a, p) => mergeAny(kindOf(edit), a, p), edit.patch)
-  const next: Live = {
-    edit: later.length ? { ...edit, patch: mine, text: render(kindOf(edit), path, edit.baseSha, edit.baseText, mine) } : edit,
-    rev: (now?.rev ?? 0) + 1,
-    patches: [edit.patch, ...later],
-    saved: 1,
-    dirty: later.length > 0,
-    epoch: (now?.epoch ?? 0) + 1,
-  }
-  if (now) Object.assign(now, next)
-  else queue.set(k, next)
-  publish()
-  showEdit(branch)
-  return changed
+    const { rev } = live
+    await putQueued(live.edit)
+    if (queue.get(k) === live && live.rev === rev) live.dirty = false
+  })
 }
 
-async function write(k: string, live: Live): Promise<boolean> {
-  const n = live.patches.length
-  const { rev, epoch } = live
-  const edit: QueuedEdit = { ...live.edit, id: newId() }
-  await putQueued(edit)
-  storedIds.set(k, edit.id!)
-  if (queue.get(k) === live && live.epoch === epoch) {
-    live.saved = n
-    if (live.rev === rev) live.dirty = false
-  }
-  return true
-}
+/** Правка файла из записи на устройстве. */
+const liveOf = (edit: QueuedEdit): Live => ({ edit, rev: 0, patches: [edit.patch], dirty: false })
 
 /**
- * Поднять очередь и конфликты с устройства: старт, вход, сообщение другой вкладки. Правки, которых ещё нет
- * в базе, не теряются — ложатся поверх записанного.
+ * Пишущая вкладка поднимает очередь и конфликты с устройства: старт и момент, когда она стала пишущей.
+ * Записи, которые эта сборка не понимает, уходят во «Входящие». Правки, которых ещё нет в базе, не теряются.
  */
 function reloadFromDevice(): Promise<void> {
-  return persist(() =>
-    withLock(async () => {
-      // Записи, которые эта сборка не понимает (ADR-011 §6): во «Входящие» как отказ с моей версией, из очереди — вон.
-      // Сперва конфликт, потом удаление: упадёт между ними — запись останется в очереди и уйдёт в следующий раз.
-      const unreadable = await getUnreadableQueued()
-      for (const { key: raw, item } of unreadable) {
-        const next = withProblem(item.branch, item.path, await getConflict(item.branch, item.path), { refused: { reason: `запись очереди не разобрана (${item.reason})`, mine: item.mine } })
-        await putConflict(next)
-        await dropQueuedKey(raw)
-      }
-      const records = await getQueue()
-      const keys = new Set([...queue.keys(), ...records.map((r) => key(r.branch, r.path))])
-      let wrote = unreadable.length > 0
-      for (const k of keys) if (await reconcile(k)) wrote = true
-      const conflicts = await getConflicts()
-      conflictMap.clear()
-      for (const c of conflicts) conflictMap.set(key(c.branch, c.path), c)
-      publish()
-      publishConflicts()
-      void showDevice()
-      return wrote
-    }),
-    DEVICE_READ_FAILED,
+  return persist(async () => {
+    // Записи, которые эта сборка не понимает (ADR-011 §6): во «Входящие» как отказ с моей версией, из очереди — вон.
+    // Сперва конфликт, потом удаление: упадёт между ними — запись останется в очереди и уйдёт в следующий раз.
+    const unreadable = await getUnreadableQueued()
+    for (const { key: raw, item } of unreadable) {
+      const next = withProblem(item.branch, item.path, await getConflict(item.branch, item.path), { refused: { reason: `запись очереди не разобрана (${item.reason})`, mine: item.mine } })
+      await putConflict(next)
+      await dropQueuedKey(raw)
+    }
+    await readDevice()
+    return unreadable.length > 0
+  }, DEVICE_READ_FAILED)
+}
+
+/** Вкладка просмотра перечитывает устройство: ничего не пишет, только показывает то, что записала пишущая. */
+function loadReadOnly(): Promise<void> {
+  return readDevice().then(
+    () => {
+      if (useSession.getState().deviceError === DEVICE_READ_FAILED) useSession.setState({ deviceError: null })
+    },
+    () => useSession.setState({ deviceError: DEVICE_READ_FAILED }),
   )
 }
 
-/** Показать файлы открытой ветки с устройства: другая вкладка могла записать правку или разрешить конфликт. */
+/** Очередь и конфликты с устройства — в память и на экран. Правки в памяти, ещё не записанные в базу, остаются. */
+async function readDevice(): Promise<void> {
+  const [records, conflicts] = await Promise.all([getQueue(), getConflicts()])
+  const onDevice = new Map(records.map((r) => [key(r.branch, r.path), r]))
+  for (const [k, live] of queue) if (!live.dirty && !onDevice.has(k)) queue.delete(k)
+  for (const [k, r] of onDevice) if (!queue.get(k)?.dirty) queue.set(k, liveOf(r))
+  conflictMap.clear()
+  for (const c of conflicts) conflictMap.set(key(c.branch, c.path), c)
+  publish()
+  publishConflicts()
+  void showDevice()
+}
+
+/** Показать файлы открытой ветки с устройства (с правками из очереди поверх). */
 async function showDevice(): Promise<void> {
   const { branch, phase } = useSession.getState()
   if (phase !== 'ready') return
@@ -851,8 +791,6 @@ function publishConflicts() {
 /** «Выйти»: очередь и конфликты стираются вместе с устройством. */
 function forgetQueue() {
   queue.clear()
-  storedIds.clear()
-  goneAt.clear()
   conflictMap.clear()
   problems.clear()
   if (retryTimer) clearTimeout(retryTimer)
@@ -860,51 +798,28 @@ function forgetQueue() {
   retryDelay = RETRY_FIRST
 }
 
-/**
- * Когда удалили ветку (по часам этой вкладки): правки ветки, сделанные раньше, больше некуда писать — reconcile
- * не возвращает их в базу, даже если они ещё в памяти какой-то вкладки. Правки новой ветки с тем же именем живут.
- */
-const goneAt = new Map<string, string>()
+/** Стереть с устройства всё своё: память очереди, IndexedDB, черновики — и показать экран входа. */
+async function wipeLocal(): Promise<void> {
+  forgetQueue()
+  await wipeDevice().catch(() => undefined)
+  await wipeDrafts().catch(() => undefined) // черновики для обновления хаба (ADR-011)
+  useSession.setState({ phase: 'signedOut', me: null, branch: MAIN, branchNotice: null, files: [], tree: null, sync: 'idle', syncError: null, lastSync: null, queued: 0, conflicts: [], deviceError: null })
+}
 
-/** Забыть ветку в памяти вкладки. */
-function dropBranchMemory(branch: string, at: string): void {
-  const prev = goneAt.get(branch)
-  if (!prev || prev < at) goneAt.set(branch, at)
-  for (const [k, live] of queue) if (live.edit.branch === branch && live.edit.queuedAt <= at) queue.delete(k)
-  for (const k of storedIds.keys()) if (k.startsWith(`${branch}\n`) && !queue.has(k)) storedIds.delete(k)
+/** Ветку удалили: её кэш, очередь и конфликты больше некуда писать. */
+async function forgetBranch(branch: string): Promise<void> {
+  for (const [k, live] of queue) if (live.edit.branch === branch) queue.delete(k)
   for (const [k, c] of conflictMap) if (c.branch === branch) conflictMap.delete(k)
   publish()
   publishConflicts()
-}
-
-/** Ветку удалили: её кэш, очередь и конфликты больше некуда писать. Другие вкладки узнают об этом по BroadcastChannel. */
-async function forgetBranch(branch: string): Promise<void> {
-  const at = nowIso()
-  dropBranchMemory(branch, at)
-  await persist(() =>
-    withLock(async () => {
-      dropBranchMemory(branch, at) // перечитывание могло вернуть их, пока ждали блокировку
-      await dropBranchCache(branch)
-      channel?.postMessage({ gone: branch, at })
-      return false
-    }),
-  )
+  await persist(() => dropBranchCache(branch))
 }
 
 /** Файлы удалили из ветки: их правки и конфликты больше не нужны. */
 async function forgetFiles(branch: string, paths: string[]): Promise<void> {
   for (const path of paths) {
     const k = key(branch, path)
-    if (queue.delete(k) || storedIds.has(k)) {
-      storedIds.delete(k)
-      await persist(() =>
-        withLock(async () => {
-          queue.delete(k) // перечитывание могло вернуть правку, пока ждали блокировку
-          storedIds.delete(k)
-          await deleteQueued(branch, path)
-        }),
-      )
-    }
+    if (queue.delete(k)) await persistEntry(k)
     await updateConflict(branch, path, () => null)
   }
   publish()
@@ -983,7 +898,7 @@ function enqueue(branch: string, path: string, kind: QueueKind, patch: Patch, cr
     const file = created === undefined ? state.files.find((f) => f.path === path) : { sha: '', text: created }
     if (!file) throw new ApiError(404, 'not_found', kind === 'idea' ? 'Идеи больше нет в этой ветке' : 'Проекта больше нет в этой ветке')
     const text = render(kind, path, file.sha, file.text, patch)
-    queue.set(k, { edit: { kind, branch, path, baseSha: file.sha, baseText: file.text, patch, text, queuedAt: nowIso() }, rev: 0, patches: [patch], saved: 0, dirty: true, epoch: 0 })
+    queue.set(k, { edit: { kind, branch, path, baseSha: file.sha, baseText: file.text, patch, text, queuedAt: nowIso() }, rev: 0, patches: [patch], dirty: true })
   }
   showEdit(branch)
   publish()
@@ -1007,7 +922,7 @@ async function submit(branch: string, path: string, kind: QueueKind, patch: Patc
   if (problem && problem.seq >= mine) throw problem.error
 }
 
-/** Есть ли у файла ветки неотправленная правка (в памяти этой вкладки). */
+/** Есть ли у файла ветки неотправленная правка. */
 export function hasQueued(branch: string, path: string): boolean {
   return queue.has(key(branch, path))
 }
@@ -1047,7 +962,7 @@ function scheduleRetry() {
 
 type SendResult = 'next' | 'later' | 'auth'
 
-const snapOf = (live: Live): Snap => ({ rev: live.rev, epoch: live.epoch, n: live.patches.length, id: storedIds.get(key(live.edit.branch, live.edit.path)) })
+const snapOf = (live: Live): Snap => ({ rev: live.rev, n: live.patches.length })
 
 /** Какой файл эта вкладка сейчас отправляет и когда закончит: discardNew ждёт, чтобы не разойтись с сервером. */
 let sendingKey: string | null = null
@@ -1067,8 +982,7 @@ async function send(live: Live): Promise<SendResult> {
 
 async function sendOne(live: Live): Promise<SendResult> {
   const { branch, path } = live.edit
-  // Что успела сделать с этой правкой другая вкладка, сообщает BroadcastChannel; если она уже отправила правку,
-  // повтор получит 409 и слияние увидит, что писать нечего.
+  // Если прошлая попытка дошла, а ответ потерялся, повтор получит 409 и слияние увидит, что писать нечего.
   const { remote } = useSession.getState()
   const snap = snapOf(live)
   const sent = live.edit
@@ -1103,7 +1017,7 @@ async function written(live: Live, snap: Snap, sha: string, text: string): Promi
   const k = key(branch, path)
   settle(live, snap, { path, sha, text })
   retryDelay = RETRY_FIRST
-  await persistEntry(k, snap.id)
+  await persistEntry(k)
   publish()
   await applyWrite(branch, [{ path, sha, text }], [])
 }
@@ -1119,13 +1033,10 @@ function settle(live: Live, snap: Snap, saved: CachedFile): void {
     queue.delete(k)
     return
   }
-  // Правку целиком заменила запись другой вкладки — какие правки новые, не знаем: берём все.
-  const same = live.epoch === snap.epoch
-  const later = same ? live.patches.slice(snap.n) : live.patches
+  const later = live.patches.slice(snap.n)
   const kind = kindOf(live.edit)
   const patch = later.slice(1).reduce((a, p) => mergeAny(kind, a, p), later[0] ?? live.edit.patch)
   live.edit = { ...live.edit, baseSha: saved.sha, baseText: saved.text, patch, text: render(kind, saved.path, saved.sha, saved.text, patch) }
-  live.saved = same ? Math.max(0, live.saved - snap.n) : live.saved
   live.patches = later.length ? later : [patch]
   live.dirty = true
 }
@@ -1192,7 +1103,7 @@ async function mergeAndSend(live: Live): Promise<void> {
         }
       }
       // Файл уже есть. Если это моя идея (тот же id и момент создания) — прошлая попытка дошла, а потом её могли
-      // править (другая вкладка, другое устройство): обычное трёхстороннее слияние от созданного файла.
+      // править (на другом устройстве): обычное трёхстороннее слияние от созданного файла.
       // Другая идея с тем же именем — не затираем, моя версия уходит во «Входящие».
       if (!sameOrigin(parseDoc(mine.baseText, 'Моя версия'), parseDoc(fresh.text, 'Файл в репо'))) {
         throw new MergeRefused('в репо уже есть другой файл с этим именем — моя версия не записана, чтобы его не затереть')
@@ -1228,7 +1139,7 @@ async function mergeAndSend(live: Live): Promise<void> {
     // Новые правки, пришедшие за это время, ждут от сохранённой версии: разобранные места не всплывут снова.
     settle(live, snap, saved)
     retryDelay = RETRY_FIRST
-    await persistEntry(k, snap.id)
+    await persistEntry(k)
     publish()
     await applyWrite(branch, [saved], [])
     return
@@ -1264,9 +1175,8 @@ async function failed(live: Live, e: unknown): Promise<SendResult> {
 async function refuse(live: Live, reason: string): Promise<void> {
   const { branch, path } = live.edit
   const k = key(branch, path)
-  const id = storedIds.get(k)
   if (queue.get(k) === live) queue.delete(k)
-  await persistEntry(k, id)
+  await persistEntry(k)
   publish()
   await recordConflict(branch, path, { refused: { reason, mine: live.edit.text } })
   await showCached(branch, path)
@@ -1276,9 +1186,8 @@ async function refuse(live: Live, reason: string): Promise<void> {
 async function recordDeleted(live: Live): Promise<void> {
   const { branch, path } = live.edit
   const k = key(branch, path)
-  const id = storedIds.get(k)
   if (queue.get(k) === live) queue.delete(k)
-  await persistEntry(k, id)
+  await persistEntry(k)
   publish()
   await recordConflict(branch, path, { deleted: { mine: live.edit.text } })
   await applyWrite(branch, [], [path])
@@ -1372,9 +1281,8 @@ function withoutRepeats(texts: (string | undefined)[], current: string): string[
 }
 
 /**
- * Изменить конфликт файла: прочитать, изменить и записать запись в IndexedDB под блокировкой очереди, в общей
- * цепочке записей. Так перечитывание по сообщению другой вкладки не вклинится между правкой памяти и записью, а две
- * вкладки не затрут спорные места друг друга. fn: undefined — не менять, null — снять конфликт.
+ * Изменить конфликт файла: прочитать, изменить и записать запись в IndexedDB в общей цепочке записей, чтобы
+ * порядок записей совпадал с порядком правок. fn: undefined — не менять, null — снять конфликт.
  * Если устройство подвело, изменение остаётся в памяти, а индикатор говорит, что на устройстве его нет.
  */
 function updateConflict(branch: string, path: string, fn: (prev: StoredConflict | undefined) => StoredConflict | null | undefined): Promise<void> {
@@ -1384,30 +1292,28 @@ function updateConflict(branch: string, path: string, fn: (prev: StoredConflict 
     else conflictMap.delete(k)
     publishConflicts()
   }
-  return persist(() =>
-    withLock(async () => {
-      let stored: StoredConflict | undefined
-      try {
-        stored = await getConflict(branch, path)
-      } catch (e) {
-        const next = fn(conflictMap.get(k))
-        if (next !== undefined) show(next)
-        throw e
-      }
-      const next = fn(stored)
-      if (next === undefined) {
-        show(stored ?? null)
-        return false
-      }
-      try {
-        if (next) await putConflict(next)
-        else if (stored) await deleteConflict(branch, path)
-      } finally {
-        show(next)
-      }
-      return true
-    }),
-  )
+  return persist(async () => {
+    let stored: StoredConflict | undefined
+    try {
+      stored = await getConflict(branch, path)
+    } catch (e) {
+      const next = fn(conflictMap.get(k))
+      if (next !== undefined) show(next)
+      throw e
+    }
+    const next = fn(stored)
+    if (next === undefined) {
+      show(stored ?? null)
+      return false
+    }
+    try {
+      if (next) await putConflict(next)
+      else if (stored) await deleteConflict(branch, path)
+    } finally {
+      show(next)
+    }
+    return true
+  })
 }
 
 interface Chosen {
@@ -1484,19 +1390,11 @@ export function installSyncTriggers(
   doc.addEventListener('visibilitychange', onVisible)
   win.addEventListener('online', run)
   autoRetry = true
-  // Другая вкладка хаба изменила очередь или конфликты — перечитать их с устройства.
+  // Сообщения других вкладок хаба (ADR-013): пишущая изменила данные — перечитать; вышли в любой вкладке — стереть своё.
   if (typeof BroadcastChannel !== 'undefined') {
     channel?.close()
-    channel = new BroadcastChannel(QUEUE_LOCK)
-    channel.onmessage = (e: MessageEvent<unknown>) => {
-      const d = e.data
-      if (d && typeof d === 'object' && typeof (d as { gone?: unknown }).gone === 'string' && typeof (d as { at?: unknown }).at === 'string') {
-        const { gone, at } = d as { gone: string; at: string }
-        dropBranchMemory(gone, at)
-        if (useSession.getState().branch === gone) void useSession.getState().switchBranch(MAIN, `Ветку «${gone}» удалили в другой вкладке — открыта main.`)
-      }
-      void reloadFromDevice()
-    }
+    channel = new BroadcastChannel(CHANNEL)
+    channel.onmessage = (e: MessageEvent<unknown>) => void onMessage(e.data)
   }
   return () => {
     channel?.close()
@@ -1509,11 +1407,22 @@ export function installSyncTriggers(
   }
 }
 
+/** Сообщение другой вкладки. Чужие и незнакомые сообщения игнорируются. */
+async function onMessage(msg: unknown): Promise<void> {
+  const state = useSession.getState()
+  if (msg === 'signedOut') {
+    if (state.phase !== 'signedOut') await wipeLocal()
+    return
+  }
+  // «Перечитай» слушает только вкладка просмотра: пишущая одна, и данные на устройстве — её.
+  if (msg === 'changed' && state.readOnly) await loadReadOnly()
+}
+
 /** Только для тестов: забыть очередь в памяти, как при перезапуске приложения. */
 export function resetQueueMemory(): void {
   forgetQueue()
   persistAsked = false
   running = null
   seq = 0
-  useSession.setState({ queued: 0, conflicts: [], deviceError: null })
+  useSession.setState({ queued: 0, conflicts: [], deviceError: null, readOnly: false })
 }

@@ -6,6 +6,7 @@ import { router } from './app/router'
 import { UpdateNotice } from './components/UpdateNotice'
 import { idbStateStore, installDraftPersistence, restoreHandoff, saveHandoff, type HandoffInput } from './lib/drafts'
 import { BUILD_ID, installUpdater } from './lib/update'
+import { claimWriter, isWriter, onBecameWriter } from './app/writer'
 import './styles/global.css'
 
 // Тема до первого кадра, чтобы не мигала светлая (inline-скрипты запрещены CSP).
@@ -30,27 +31,38 @@ function restoreScroll(y: number) {
   requestAnimationFrame(step)
 }
 
+type Restored = Awaited<ReturnType<typeof restoreHandoff>>
+
+/** Черновики из handoff — в реестр; дальше они переживают выгрузку из фона, F5, вход заново (не только обновление). */
+async function takeDrafts(): Promise<Restored> {
+  let restored: Restored = { drafts: [], failed: false }
+  try {
+    restored = await restoreHandoff(store, Date.now())
+  } catch (e) {
+    console.warn('handoff не прочитан:', e instanceof Error ? e.message : e)
+  }
+  installDraftPersistence(store, handoffInput)
+  return restored
+}
+
 async function boot() {
+  // Пишет одна вкладка (ADR-013): черновики и handoff — её. Вкладка просмотра их не трогает, пока не станет пишущей.
+  const writer = await claimWriter()
+  onBecameWriter(() => void takeDrafts())
+
   // Обновление хаба (ADR-011): без плашки, незаконченное переезжает через handoff.
   // Прежний handoff сначала читаем, потом пишем новый — иначе ранний сигнал SW затёр бы непрочитанные черновики.
   let restoreDone!: () => void
   const restoring = new Promise<void>((resolve) => (restoreDone = resolve))
   const { applyWaitingAtStartup } = installUpdater(registerSW, async () => {
     await restoring
-    await saveHandoff(store, handoffInput())
+    if (isWriter()) await saveHandoff(store, handoffInput())
   })
   // Новая версия уже скачана — включаем её до первого экрана.
   if (await applyWaitingAtStartup()) return
 
-  let restored: Awaited<ReturnType<typeof restoreHandoff>> = { drafts: [], failed: false }
-  try {
-    restored = await restoreHandoff(store, Date.now())
-  } catch (e) {
-    console.warn('handoff не прочитан:', e instanceof Error ? e.message : e)
-  }
+  const restored: Restored = writer ? await takeDrafts() : { drafts: [], failed: false }
   restoreDone()
-  // Черновики переживают и выгрузку из фона, F5, вход заново (не только обновление).
-  installDraftPersistence(store, handoffInput)
   if (restored.route && restored.route !== location.hash.slice(1)) await router.navigate(restored.route, { replace: true })
 
   createRoot(document.getElementById('root')!).render(

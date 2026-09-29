@@ -40,8 +40,8 @@ export interface QueuedEdit {
   text: string
   queuedAt: string
   /**
-   * Версия записи: новая при каждой записи в базу. По ней вкладка видит, что запись переписала другая вкладка,
-   * и после отправки удаляет только ту запись, которую отправила.
+   * Версия записи из сборок, где очередь писали несколько вкладок. Больше не пишется (ADR-013), но в старых
+   * записях может быть — читается и сохраняется как есть.
    */
   id?: string
 }
@@ -201,13 +201,12 @@ export interface UnreadableQueued {
 }
 
 /**
- * Записи очереди, которые эта сборка не понимает (ADR-011 §6), с сырыми ключами. Базу не меняет: вызывающий под
- * блокировкой очереди сперва кладёт их во «Входящие» (putConflict), потом удаляет (dropQueuedKey) — так не теряются.
+ * Записи очереди, которые эта сборка не понимает (ADR-011 §6), с сырыми ключами. Базу не меняет: пишущая вкладка
+ * сперва кладёт их во «Входящие» (putConflict), потом удаляет (dropQueuedKey) — так не теряются.
  */
 export async function getUnreadableQueued(): Promise<{ key: IDBValidKey; item: UnreadableQueued }[]> {
   const d = await db()
-  // Ключи и записи — одним курсором в одной транзакции: две отдельные выборки могли разойтись,
-  // если между ними другая вкладка записала или удалила правку.
+  // Ключи и записи — одним курсором в одной транзакции: две отдельные выборки могли бы разойтись.
   const rows: { key: IDBValidKey; raw: QueuedEdit }[] = []
   for (let cur = await d.transaction('queue').store.openCursor(); cur; cur = await cur.continue()) rows.push({ key: cur.primaryKey as IDBValidKey, raw: cur.value })
   const out: { key: IDBValidKey; item: UnreadableQueued }[] = []

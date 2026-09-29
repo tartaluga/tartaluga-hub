@@ -2,7 +2,9 @@
 import { earlierVersions } from '../screens/Conflicts'
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
+import { DB_BLOCKED, DEVICE_READ_FAILED, DEVICE_WRITE_FAILED, installSyncTriggers, PARTLY_WRITTEN, QueueConflict, READ_ONLY, resetQueueMemory, unsentSnapshot, useSession, type Remote } from './session'
+import { resetWriter } from './writer'
+import { fakeLockHub, setLocks } from '../test/fakeLocks'
 import { ApiError, type Me } from '../lib/api'
 import { getCachedFiles, getConflicts, getQueue, putQueued, wipeDevice, type QueuedEdit } from '../lib/localdb'
 
@@ -549,10 +551,11 @@ describe('конфликт при отправке (ADR-004 шаги 1–5)', ()
   })
 })
 
-/** Вторая вкладка хаба: свой экземпляр модуля сессии (своя память), та же IndexedDB. */
+/** Вторая вкладка хаба: свой экземпляр модулей сессии и лока (своя память), та же IndexedDB. */
 async function secondTab(srv: ReturnType<typeof server>) {
   vi.resetModules()
   const tab = await import('./session')
+  const guard = await import('./signOutGuard')
   // У вкладки свой экземпляр модулей: ошибки сервера — её ApiError, иначе instanceof в ней не сработает.
   const { ApiError: TabApiError } = await import('../lib/api')
   const remote = new Proxy(srv.remote, {
@@ -571,60 +574,113 @@ async function secondTab(srv: ReturnType<typeof server>) {
   tab.useSession.setState({ remote })
   await tab.useSession.getState().boot()
   await tab.useSession.getState().syncNow()
-  return tab
+  return { ...tab, guard }
 }
 
-describe('две вкладки на одном устройстве', () => {
-  it('правки одного файла из двух вкладок сливаются в одну запись: новая поверх, база — самая ранняя', async () => {
-    const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
-    const baseSha = useSession.getState().files[0]!.sha
-    const b = await secondTab(srv)
-    srv.state.down = true
-    await useSession.getState().saveProject('a', { title: 'Из A' })
-    await b.useSession.getState().saveProject('a', { nextStep: 'из B' })
-    const queue = await getQueue()
-    expect(queue).toHaveLength(1)
-    expect(queue[0]).toMatchObject({ baseSha, patch: { title: 'Из A', nextStep: 'из B' } })
-    srv.state.down = false
-    await b.useSession.getState().flush()
-    expect(JSON.parse(srv.text('main', PATH))).toMatchObject({ title: 'Из A', nextStep: 'из B' })
-    expect(await getQueue()).toEqual([])
+/**
+ * Две вкладки на одном устройстве (ADR-013): у каждой свой Web Lock-менеджер на общей «машине». Вкладка A
+ * (этот модуль) стартует первой и пишет; B — вторая. close() — закрыть вкладку, её лок отпускается.
+ */
+async function twoTabs(srv: ReturnType<typeof server>) {
+  const hub = fakeLockHub()
+  const a = hub.tab()
+  const b = hub.tab()
+  resetWriter() // прежние тесты держат настоящий лок Node: отпускаем, дальше — поддельный
+  let restore = setLocks(a.locks)
+  await start(srv)
+  restore()
+  restore = setLocks(b.locks)
+  const tabB = await secondTab(srv)
+  restore()
+  const t = () => Object.assign(new EventTarget(), { visibilityState: 'hidden' })
+  const stops = [installSyncTriggers(new EventTarget(), t()), tabB.installSyncTriggers(new EventTarget(), t())]
+  cleanup.push(() => {
+    for (const stop of stops) stop()
+    a.close()
+    b.close()
+    resetWriter()
   })
+  return { b: tabB, closeA: a.close }
+}
 
-  it('после отправки вкладка не стирает правку, которую другая вкладка дописала в запись', async () => {
-    const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
-    srv.state.down = true
-    await useSession.getState().saveProject('a', { title: 'Из A' })
-    const b = await secondTab(srv) // вкладка B подняла правку A с устройства
-    expect(b.useSession.getState().queued).toBe(1)
-    await b.useSession.getState().saveProject('a', { nextStep: 'из B' })
-    srv.state.down = false
-    // A отправляет свою версию, о правке B не зная; запись B после этого не стирает, а подхватывает и отправляет.
-    await useSession.getState().flush()
-    expect(JSON.parse(srv.text('main', PATH))).toMatchObject({ title: 'Из A', nextStep: 'из B' })
-    expect(useSession.getState().queued).toBe(0)
-    expect(await getQueue()).toEqual([])
-  })
+const cleanup: (() => void)[] = []
+afterEach(() => {
+  for (const fn of cleanup.splice(0)) fn()
+})
 
-  it('две вкладки отправляют одновременно — правка уходит на сервер один раз', async () => {
+describe('пишет одна вкладка (ADR-013)', () => {
+  it('вторая вкладка не получила лок — только просмотр: правка отклонена, в очередь, на сервер и в IndexedDB ничего не пишется', async () => {
     const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
-    srv.state.down = true
-    await useSession.getState().saveProject('a', { title: 'Из A' })
-    const b = await secondTab(srv) // обе вкладки держат одну правку в памяти
-    expect(b.useSession.getState().queued).toBe(1)
-    srv.state.down = false
-    await Promise.all([useSession.getState().flush(), b.useSession.getState().flush()])
-    expect(srv.state.writes).toEqual([`main ${PATH}`])
-    expect(JSON.parse(srv.text('main', PATH)).title).toBe('Из A')
-    expect(useSession.getState().queued).toBe(0)
+    const { b } = await twoTabs(srv)
+    expect(useSession.getState().readOnly).toBe(false)
+    expect(b.useSession.getState().readOnly).toBe(true)
+    const s = b.useSession.getState()
+    await expect(s.saveProject('a', { title: 'Из B' })).rejects.toMatchObject({ status: 423, message: READ_ONLY })
+    await expect(s.addIdea('ideas/01J8Z6Y0000000000000000001.json', '{}')).rejects.toMatchObject({ status: 423 })
+    await expect(s.createFile('projects/b.json', '{}')).rejects.toMatchObject({ status: 423 })
+    await expect(s.saveSettings((x) => x)).rejects.toMatchObject({ status: 423 })
+    await expect(s.deleteTag('t')).rejects.toMatchObject({ status: 423 })
+    await expect(s.deleteFiles(() => [PATH], 'удалить')).rejects.toMatchObject({ status: 423 })
+    await expect(s.resolveConflict('main', PATH, [])).rejects.toMatchObject({ status: 423 })
+    await expect(s.settleBranch('main')).rejects.toMatchObject({ status: 423 })
     expect(b.useSession.getState().queued).toBe(0)
+    expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).title).toBe('А')
     expect(await getQueue()).toEqual([])
+    expect(srv.state.writes).toEqual([])
+    // Сверка в просмотре показывает свежее на экране, но кэш устройства не трогает: его пишет A.
+    srv.edit('main', PATH, project({ title: 'С телефона' }))
+    await b.useSession.getState().syncNow()
+    expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).title).toBe('С телефона')
+    expect(JSON.parse((await getCachedFiles('main')).find((f) => f.path === PATH)!.text).title).toBe('А')
   })
 
-  it('без Web Locks (старый браузер) очередь работает как в одной вкладке', async () => {
+  it('пишущая закрылась — вторая становится пишущей, подхватывает очередь с устройства и отправляет её', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b, closeA } = await twoTabs(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Из A' })
+    expect(await getQueue()).toHaveLength(1)
+    srv.state.down = false
+    closeA()
+    await vi.waitFor(() => expect(b.useSession.getState().readOnly).toBe(false))
+    await vi.waitFor(() => expect(JSON.parse(srv.text('main', PATH)).title).toBe('Из A'))
+    await vi.waitFor(async () => expect(await getQueue()).toEqual([]))
+    expect(b.useSession.getState().queued).toBe(0)
+    await b.useSession.getState().saveProject('a', { nextStep: 'из B' })
+    expect(JSON.parse(srv.text('main', PATH))).toMatchObject({ title: 'Из A', nextStep: 'из B' })
+  })
+
+  it('пишущая меняет данные — вкладка просмотра по сообщению перечитывает очередь и файлы', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b } = await twoTabs(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Из A' })
+    await vi.waitFor(() => expect(b.useSession.getState().queued).toBe(1))
+    await vi.waitFor(() => expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).title).toBe('Из A'))
+    srv.state.down = false
+    await b.useSession.getState().syncNow() // просмотр видит чужую правку, но не отправляет её
+    expect(srv.state.writes).toEqual([])
+    await useSession.getState().flush()
+    await vi.waitFor(() => expect(b.useSession.getState().queued).toBe(0))
+    expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).title).toBe('Из A')
+  })
+
+  it('выход из вкладки просмотра: страж видит неотправленное пишущей, устройство стёрто, пишущая тоже выходит', async () => {
+    const srv = server({ main: { [PATH]: project() } })
+    const { b } = await twoTabs(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Из A' })
+    expect(await b.guard.unsentCounts()).toMatchObject({ edits: 1, conflicts: 0 })
+    await b.useSession.getState().signOut()
+    expect(b.useSession.getState().phase).toBe('signedOut')
+    await vi.waitFor(() => expect(useSession.getState().phase).toBe('signedOut'))
+    expect(useSession.getState().queued).toBe(0)
+    expect(await getQueue()).toEqual([])
+    expect(await getCachedFiles('main')).toEqual([])
+  })
+
+  it('без Web Locks (старый браузер) вкладка пишет, как одна', async () => {
+    resetWriter()
     vi.stubGlobal('navigator', {})
     const srv = server({ main: { [PATH]: project() } })
     await start(srv)
@@ -637,26 +693,6 @@ describe('две вкладки на одном устройстве', () => {
     expect(await getQueue()).toEqual([])
   })
 
-  it('другая вкладка узнаёт о новой правке по BroadcastChannel и перечитывает очередь', async () => {
-    const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
-    const b = await secondTab(srv)
-    const t = () => Object.assign(new EventTarget(), { visibilityState: 'hidden' })
-    const stopA = installSyncTriggers(new EventTarget(), t())
-    const stopB = b.installSyncTriggers(new EventTarget(), t())
-    try {
-      srv.state.down = true
-      await useSession.getState().saveProject('a', { title: 'Из A' })
-      await vi.waitFor(() => expect(b.useSession.getState().queued).toBe(1))
-      await vi.waitFor(() => expect(JSON.parse(b.useSession.getState().files.find((f) => f.path === PATH)!.text).title).toBe('Из A'))
-      srv.state.down = false
-      await useSession.getState().flush()
-      await vi.waitFor(() => expect(b.useSession.getState().queued).toBe(0))
-    } finally {
-      stopA()
-      stopB()
-    }
-  })
 })
 
 describe('запись на устройство не удалась', () => {
@@ -677,70 +713,13 @@ describe('запись на устройство не удалась', () => {
   })
 })
 
-describe('конфликты из двух вкладок', () => {
-  it('вкладки записывают спорные места одного файла — оба места остаются', async () => {
-    const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
-    const b = await secondTab(srv) // B о будущем конфликте A не знает
-    srv.state.down = true
-    await useSession.getState().saveProject('a', { title: 'Моё' })
-    srv.edit('main', PATH, project({ title: 'С телефона' }))
-    srv.state.down = false
-    await useSession.getState().flush()
-    expect(await getConflicts()).toHaveLength(1)
-    srv.state.down = true
-    await b.useSession.getState().saveProject('a', { nextStep: 'шаг из B' }).catch(() => undefined)
-    srv.edit('main', PATH, project({ title: 'С телефона', nextStep: 'шаг с телефона' }))
-    srv.state.down = false
-    await b.useSession.getState().flush()
-    const [c] = await getConflicts()
-    expect(c!.items.map((it) => it.path.join('.')).sort()).toEqual(['nextStep', 'title'])
-    expect(c!.items.find((it) => it.path[0] === 'title')).toMatchObject({ local: 'Моё' })
-  })
-
-  it('ветку удалили в одной вкладке — другая не возвращает её правки в базу', async () => {
-    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
-    await start(srv)
-    await useSession.getState().switchBranch('feat')
-    srv.state.down = true
-    await useSession.getState().saveProject('a', { title: 'С ветки' })
-    const b = await secondTab(srv) // B открыла ту же ветку и держит правку в памяти
-    expect(b.useSession.getState().queued).toBe(1)
-    const t = () => Object.assign(new EventTarget(), { visibilityState: 'hidden' })
-    const stopA = installSyncTriggers(new EventTarget(), t())
-    const stopB = b.installSyncTriggers(new EventTarget(), t())
-    try {
-      await useSession.getState().branchDeleted('feat')
-      await vi.waitFor(() => expect(b.useSession.getState().queued).toBe(0))
-      await vi.waitFor(() => expect(b.useSession.getState().branch).toBe('main'))
-      expect(await getQueue()).toEqual([])
-    } finally {
-      stopA()
-      stopB()
-    }
-  })
-
-  it('вкладка, не слышавшая об удалении ветки, дописала её правку — удалившая вкладка стирает её при перечитывании', async () => {
-    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
-    await start(srv)
-    await useSession.getState().switchBranch('feat')
-    srv.state.down = true
-    await useSession.getState().saveProject('a', { title: 'С ветки' })
-    const b = await secondTab(srv) // без BroadcastChannel: об удалении B не узнает
-    await useSession.getState().branchDeleted('feat')
-    await b.useSession.getState().saveProject('a', { nextStep: 'из B' })
-    expect(await getQueue()).toHaveLength(1)
-    await useSession.getState().settleBranch('main')
-    expect(await getQueue()).toEqual([])
-  })
-
+describe('очередь с устройства', () => {
   it('очередь не читается с устройства — своё сообщение, не «правка не сохранилась»', async () => {
     const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
     vi.mocked(getQueue).mockRejectedValueOnce(new Error('UnknownError'))
-    await useSession.getState().settleBranch('main')
+    await start(srv)
     expect(useSession.getState().deviceError).toBe(DEVICE_READ_FAILED)
-    await useSession.getState().settleBranch('main')
+    await useSession.getState().boot()
     expect(useSession.getState().deviceError).toBeNull()
   })
 })
@@ -782,17 +761,6 @@ describe('ветка: «Влить» и удаление после отправ
     srv.state.down = false
     await useSession.getState().settleBranch('feat')
     expect(JSON.parse(srv.text('feat', PATH)).title).toBe('С ветки')
-  })
-
-  it('правку ветки, сделанную в другой вкладке, тоже видно: без сети — отказ', async () => {
-    const srv = server({ main: { [PATH]: project() }, feat: { [PATH]: project() } })
-    await start(srv)
-    const b = await secondTab(srv)
-    await b.useSession.getState().switchBranch('feat')
-    srv.state.down = true
-    await b.useSession.getState().saveProject('a', { title: 'Из B' })
-    expect(useSession.getState().queued).toBe(0) // вкладка A о правке ещё не знает
-    await expect(useSession.getState().settleBranch('feat')).rejects.toThrow('В ветке «feat» ещё 1 неотправленная правка')
   })
 
   it('конфликт ветки не разобран — отказ', async () => {
@@ -930,44 +898,6 @@ describe('идеи в очереди (ADR-004): создание повторя�
     expect(srv.text('main', IDEA)).toBe(ideaText('Идея'))
     expect(useSession.getState().queued).toBe(0)
     expect(useSession.getState().conflicts).toEqual([])
-    expect(await getQueue()).toEqual([])
-  })
-
-  it('две вкладки отправляют новую идею одновременно — она создаётся один раз', async () => {
-    const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
-    srv.state.down = true
-    await useSession.getState().addIdea(IDEA, ideaText('Из метро'))
-    const b = await secondTab(srv)
-    expect(b.useSession.getState().queued).toBe(1)
-    expect(b.useSession.getState().files.find((f) => f.path === IDEA)?.text).toBe(ideaText('Из метро'))
-    srv.state.down = false
-    await Promise.all([useSession.getState().flush(), b.useSession.getState().flush()])
-    expect(srv.state.writes).toEqual([`main ${IDEA}`])
-    expect(useSession.getState().queued).toBe(0)
-    expect(b.useSession.getState().queued).toBe(0)
-    expect(useSession.getState().conflicts).toEqual([])
-    expect(b.useSession.getState().conflicts).toEqual([])
-    expect(await getQueue()).toEqual([])
-  })
-
-  it('правки идеи из двух вкладок сливаются в одну запись поверх создания; дописанное другой вкладкой не теряется', async () => {
-    const srv = server({ main: { [PATH]: project() } })
-    await start(srv)
-    srv.state.down = true
-    await useSession.getState().addIdea(IDEA, ideaText('Черновик'))
-    const b = await secondTab(srv)
-    await b.useSession.getState().saveIdea(IDEA, { project: 'a' })
-    await useSession.getState().saveIdea(IDEA, { text: 'Чистовик' })
-    const queue = await getQueue()
-    expect(queue).toHaveLength(1)
-    expect(queue[0]).toMatchObject({ kind: 'idea', baseSha: '', patch: { text: 'Чистовик', project: 'a' } })
-    srv.state.down = false
-    // B отправляет свою версию (создание), о правке A не зная; запись A после этого — обычная правка созданного файла.
-    await b.useSession.getState().flush()
-    expect(JSON.parse(srv.text('main', IDEA))).toMatchObject({ text: 'Чистовик', project: 'a' })
-    expect(b.useSession.getState().conflicts).toEqual([])
-    expect(b.useSession.getState().queued).toBe(0)
     expect(await getQueue()).toEqual([])
   })
 
