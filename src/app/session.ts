@@ -738,7 +738,7 @@ async function syncBranch(branch: string): Promise<void> {
     const next = new Map(cached)
     for (const p of removed) next.delete(p)
     for (const f of changed) next.set(f.path, f)
-    const covers = Object.fromEntries(remoteFiles.filter((f) => f.path.startsWith('covers/')).map((f) => [f.path, f.sha]))
+    const covers = Object.fromEntries(remoteFiles.filter((f) => f.path.startsWith('covers/') || f.path.startsWith('banners/')).map((f) => [f.path, f.sha]))
     // Индекс обложек для офлайна и чистка кэша картинок: в фоне, экран базу не ждёт.
     if (canWrite()) saveCoverIndex(branch, covers)
     useSession.setState({ files: overlay(branch, [...next.values()]), tree: { head, paths: remoteFiles.map((f) => f.path), covers }, sync: 'idle', lastSync: new Date() })

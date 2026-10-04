@@ -1,0 +1,14 @@
+.banner {
+  display: block;
+  width: 100%;
+  aspect-ratio: 5 / 2;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  margin-bottom: var(--space-2);
+}
+
+.muted {
+  filter: saturate(0.5) brightness(0.9);
+}

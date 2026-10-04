@@ -10,6 +10,11 @@ export function ownCoverPath(slug: string, cover: unknown): string | null {
   return typeof cover === 'string' && (cover === `covers/${slug}.webp` || cover === `covers/${slug}.jpg`) ? cover : null
 }
 
+/** Путь шапки проекта: только banners/<этот slug>.webp|.jpg (ADR-016); поле banner — недоверенный ввод. */
+export function ownBannerPath(slug: string, banner: unknown): string | null {
+  return typeof banner === 'string' && (banner === `banners/${slug}.webp` || banner === `banners/${slug}.jpg`) ? banner : null
+}
+
 /** Тип картинки по первым байтам: WebP (RIFF....WEBP) или JPEG (FF D8 FF). Остальное, в том числе SVG и HTML, — null. */
 export function sniffCover(b: Uint8Array): CoverType | null {
   const at = (i: number, s: string) => [...s].every((c, k) => b[i + k] === c.charCodeAt(0))
@@ -61,9 +66,11 @@ async function fetchCover(sha: string, epoch: number): Promise<Blob | null> {
   }
 }
 
+type OwnPath = (slug: string, field: unknown) => string | null
+
 /** Картинка обложки или null (нет в списке, нет сети, плохие байты). Одинаковые запросы объединяются. */
-export async function loadCover(branch: string, slug: string, cover: unknown, liveIndex?: CoverIndex): Promise<Blob | null> {
-  const path = ownCoverPath(slug, cover)
+export async function loadCover(branch: string, slug: string, cover: unknown, liveIndex?: CoverIndex, own: OwnPath = ownCoverPath): Promise<Blob | null> {
+  const path = own(slug, cover)
   if (!path) return null
   const epoch = deviceEpoch() // после «Выйти» базу не открываем заново: запрос, начатый до выхода, молча отменяется
   let sha = liveIndex?.[path]
@@ -85,11 +92,11 @@ export async function loadCover(branch: string, slug: string, cover: unknown, li
  * Показ обложки: грузит картинку и отдаёт её object URL через onUrl (null — заглушка). Возвращает отмену:
  * освобождает созданный URL (revokeObjectURL) и глушит запоздавший ответ.
  */
-export function watchCover(branch: string, slug: string, cover: unknown, index: CoverIndex | undefined, onUrl: (url: string | null) => void): () => void {
+export function watchCover(branch: string, slug: string, cover: unknown, index: CoverIndex | undefined, onUrl: (url: string | null) => void, own: OwnPath = ownCoverPath): () => void {
   let cancelled = false
   let made: string | null = null
   onUrl(null)
-  void loadCover(branch, slug, cover, index).then((blob) => {
+  void loadCover(branch, slug, cover, index, own).then((blob) => {
     if (cancelled || !blob) return
     made = URL.createObjectURL(blob)
     onUrl(made)

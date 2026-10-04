@@ -147,3 +147,16 @@
     align-items: stretch;
   }
 }
+
+/* Рамка шапки 5:2: картинка позиционируется внутри по тем же долям, что вырезает renderBanner. */
+.frameBanner {
+  position: relative;
+  aspect-ratio: 5 / 2;
+}
+
+.frameBanner img {
+  position: absolute;
+  height: auto;
+  max-width: none;
+  object-fit: fill;
+}
