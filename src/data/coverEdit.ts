@@ -11,6 +11,7 @@ import { applyEdit, type ProjectPatch } from './editProject'
 import { serialize } from './model'
 
 export const OFFLINE_HINT = 'Обложку можно сменить только онлайн'
+export const BANNER_OFFLINE_HINT = 'Шапку можно сменить только онлайн'
 export const QUEUE_HINT = 'Сначала дождитесь отправки правок проекта'
 
 export interface NewCover {
@@ -20,25 +21,33 @@ export interface NewCover {
 
 const COVER_EXTS = ['webp', 'jpg'] as const
 
+/** Какая картинка проекта: обложка (covers/, поле cover) или шапка (banners/, поле banner, ADR-016). Конвейер записи общий. */
+export type ImageKind = 'cover' | 'banner'
+const DIR: Record<ImageKind, string> = { cover: 'covers', banner: 'banners' }
+const WORD: Record<ImageKind, { gen: string; acc: string; fail: string; offline: string }> = {
+  cover: { gen: 'обложки', acc: 'обложку', fail: 'Нет связи с сервером хаба — обложка не отправлена', offline: OFFLINE_HINT },
+  banner: { gen: 'шапки', acc: 'шапку', fail: 'Нет связи с сервером хаба — шапка не отправлена', offline: BANNER_OFFLINE_HINT },
+}
+
 /**
  * Набор изменений коммита. cover === null — убрать обложку. Старый файл с другим расширением удаляется в том же
  * коммите; незнакомые поля проекта сохраняются.
  */
-export function buildCoverChanges(slug: string, projectText: string, cover: NewCover | null, treePaths: string[], now = new Date()): CommitChange[] {
+export function buildCoverChanges(slug: string, projectText: string, cover: NewCover | null, treePaths: string[], now = new Date(), kind: ImageKind = 'cover'): CommitChange[] {
   let data: Record<string, unknown>
   try {
     const parsed: unknown = JSON.parse(projectText)
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('not object')
     data = parsed as Record<string, unknown>
   } catch {
-    throw new ApiError(422, 'validation', 'Файл проекта не читается — обложку менять нельзя')
+    throw new ApiError(422, 'validation', `Файл проекта не читается — ${WORD[kind].acc} менять нельзя`)
   }
-  const path = cover ? `covers/${slug}.${cover.ext}` : null
-  const patch = { cover: path } as unknown as ProjectPatch
+  const path = cover ? `${DIR[kind]}/${slug}.${cover.ext}` : null
+  const patch = { [kind]: path } as unknown as ProjectPatch
   const changes: CommitChange[] = []
   if (cover && path) changes.push({ path, base64: bytesToBase64(cover.bytes) })
   for (const ext of COVER_EXTS) {
-    const p = `covers/${slug}.${ext}`
+    const p = `${DIR[kind]}/${slug}.${ext}`
     if (p !== path && treePaths.includes(p)) changes.push({ path: p, base64: null })
   }
   changes.push({ path: `projects/${slug}.json`, text: serialize(applyEdit(data, patch, now)) })
@@ -49,20 +58,25 @@ export function buildCoverChanges(slug: string, projectText: string, cover: NewC
  * Записать (cover) или убрать (null) обложку. 409 — голова ветки сменилась: данные перечитываются, ошибка
  * отдаётся экрану, тот предлагает повторить с тем же выбранным кадром.
  */
-export const saveCover = onlyWriter(async (slug: string, cover: NewCover | null): Promise<void> => {
+export const saveCover = onlyWriter((slug: string, cover: NewCover | null): Promise<void> => saveImage('cover', slug, cover))
+
+/** То же для шапки проекта (banners/<slug>.<ext>, поле banner). */
+export const saveBanner = onlyWriter((slug: string, banner: NewCover | null): Promise<void> => saveImage('banner', slug, banner))
+
+async function saveImage(kind: ImageKind, slug: string, cover: NewCover | null): Promise<void> {
   const branch = useSession.getState().branch
   const epoch = deviceEpoch() // «Выйти» во время коммита: после стирания устройства в базу ничего не пишем
   const jsonPath = `projects/${slug}.json`
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new ApiError(0, 'network', OFFLINE_HINT)
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new ApiError(0, 'network', WORD[kind].offline)
   if (hasQueued(branch, jsonPath)) throw new ApiError(423, 'queue_pending', QUEUE_HINT)
   if (cover && sniffCover(cover.bytes) !== (cover.ext === 'webp' ? 'image/webp' : 'image/jpeg')) throw new ApiError(422, 'validation', 'Картинка не прошла проверку')
   if (!useSession.getState().tree) await useSession.getState().refresh()
   const tree = useSession.getState().tree
   const file = useSession.getState().files.find((f) => f.path === jsonPath)
-  if (!tree || useSession.getState().branch !== branch) throw new ApiError(0, 'network', 'Нет связи с сервером хаба — обложка не отправлена')
+  if (!tree || useSession.getState().branch !== branch) throw new ApiError(0, 'network', WORD[kind].fail)
   if (!file) throw new ApiError(404, 'not_found', 'Проекта нет в этой ветке')
-  const changes = buildCoverChanges(slug, file.text, cover, tree.paths)
-  const message = cover ? `Хаб: обложка проекта ${slug}` : `Хаб: убрать обложку проекта ${slug}`
+  const changes = buildCoverChanges(slug, file.text, cover, tree.paths, new Date(), kind)
+  const message = cover ? `Хаб: ${kind === 'cover' ? 'обложка' : 'шапка'} проекта ${slug}` : `Хаб: убрать ${WORD[kind].acc} проекта ${slug}`
   let res: { head: string; shas: Record<string, string> }
   try {
     res = await writeRemote().commit(branch, changes, tree.head, message)
@@ -80,7 +94,7 @@ export const saveCover = onlyWriter(async (slug: string, cover: NewCover | null)
   const covers = { ...(useSession.getState().tree?.covers ?? tree.covers ?? {}) }
   for (const p of removed) delete covers[p]
   if (cover) {
-    const p = `covers/${slug}.${cover.ext}`
+    const p = `${DIR[kind]}/${slug}.${cover.ext}`
     const sha = res.shas[p]
     if (sha) {
       covers[p] = sha
@@ -92,4 +106,4 @@ export const saveCover = onlyWriter(async (slug: string, cover: NewCover | null)
   if (t && useSession.getState().branch === branch) useSession.setState({ tree: { ...t, covers } })
   if (epoch === deviceEpoch()) saveCoverIndex(branch, covers)
   void useSession.getState().refresh()
-})
+}

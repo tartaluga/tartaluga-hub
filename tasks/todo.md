@@ -175,12 +175,12 @@
 - [x] G2. Загрузка: EXIF-ориентация, 1600 px, webp с откатом на JPEG, ≤ 300 КБ, атомарный коммит (M)
 - [x] G3. Кэш обложек в IndexedDB, object URL (S)
 - [ ] G4. Шапка проекта и страница задачи — по ADR-016 (принят 2026-10-04). Задачи:
-  - [ ] G4.1 (S) Схема: `banner`, `tasks[].description|inProgress|cancelled|links|comments`, `$defs/comment`, `log[].taskId`; примеры valid/invalid, `schema/README.md`, генерация `validators.js`/`types.ts`
-  - [ ] G4.2 (S) Сервер: `banners/<slug>.(webp|jpg)` в `DATA_PATH`, тесты `rules.ts` и лимита картинок
-  - [ ] G4.3 (S) Модель: единый список id-массивов (+ `tasks[].links`, `tasks[].comments`) в `assignMissingIds`/`checkUniqueIds`; `projectPaths` + `banners/`; `normalizeProject` (`inProgress` при done, `cancelled` при !done); `conflicts.ts` (длинный текст `tasks/<id>/description`, `tasks/<id>/comments/<cid>/text`, русские подписи); проверка размера файла (5 МБ) перед очередью
+  - [x] G4.1 (S) Схема: `banner`, `tasks[].description|inProgress|cancelled|links|comments`, `$defs/comment`, `log[].taskId`; примеры valid/invalid, `schema/README.md`, генерация `validators.js`/`types.ts`
+  - [x] G4.2 (S) Сервер: `banners/<slug>.(webp|jpg)` в `DATA_PATH`, тесты `rules.ts` и лимита картинок
+  - [x] G4.3 (S) Модель: единый список id-массивов (+ `tasks[].links`, `tasks[].comments`) в `assignMissingIds`/`checkUniqueIds`; `projectPaths` + `banners/`; `normalizeProject` (`inProgress` при done, `cancelled` при !done); `conflicts.ts` (длинный текст `tasks/<id>/description`, `tasks/<id>/comments/<cid>/text`, русские подписи); проверка размера файла (5 МБ) перед очередью
   - [x] G4.4 (M) Страница задачи `#/projects/<slug>/tasks/<taskId>`: название карандашом, статус из 4 сегментов, срок, веха, удаление, только просмотр, черновики
   - [x] G4.5 (M) Описание, ссылки, комментарии (правка, удаление, метка «Claude»); записи лога `task` при смене статуса/срока (в т.ч. галочкой); метки в списке задач; «отменена» вне прогресса вех и статистики «в срок»
-  - [ ] G4.6 (M) Шапка: загрузка, рамка 5:2 (сдвиг по обеим осям), 1500×600, «Поставить / Убрать шапку», показ в карточке без обрезки
+  - [x] G4.6 (M) Шапка: загрузка, рамка 5:2 (сдвиг по обеим осям), 1500×600, «Поставить / Убрать шапку», показ в карточке без обрезки
   - [ ] G4.7 (S) Схема в скилле Claude и в проверке репо данных
 
 ## Фаза H — Документация (этап 9)

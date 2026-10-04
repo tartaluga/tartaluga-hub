@@ -102,3 +102,65 @@ export async function renderCover(file: File, offset = 0.5): Promise<EncodedCove
     bitmap.close?.()
   }
 }
+
+// ---------- Шапка проекта (G4.6, ADR-016): кадр 5:2, 1500×600 ----------
+export const BANNER_WIDTH = 1500
+export const BANNER_HEIGHT = 600
+export const BANNER_MAX_BYTES = 500 * 1024
+export const BANNER_MAX_ZOOM = 4
+const BANNER_QUALITIES = [0.85, 0.75, 0.65, 0.55, 0.45, 0.35]
+
+/** Положение кадра шапки: x и y — 0..1 по свободной оси, zoom — приближение 1..4 (1 — кадр максимального размера). */
+export interface BannerPos {
+  x: number
+  y: number
+  zoom: number
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : (lo + hi) / 2))
+
+/**
+ * Кадр 5:2 в исходной картинке. При zoom = 1 берётся самый большой кадр 5:2 (по ширине или по высоте, смотря что
+ * тесно); приближение уменьшает его, и тогда двигать можно по обеим осям. x, y: 0 — левый/верхний край, 1 — правый/нижний.
+ */
+export function bannerFrameOf(srcW: number, srcH: number, pos: BannerPos): Frame {
+  const zoom = clamp(pos.zoom, 1, BANNER_MAX_ZOOM)
+  let sw = srcW
+  let sh = (srcW * 2) / 5
+  if (sh > srcH) {
+    sh = srcH
+    sw = (srcH * 5) / 2
+  }
+  sw /= zoom
+  sh /= zoom
+  return { sx: (srcW - sw) * clamp(pos.x, 0, 1), sy: (srcH - sh) * clamp(pos.y, 0, 1), sw, sh }
+}
+
+/** Готовая шапка из файла: кадр 5:2, ровно 1500×600, WebP или JPEG до 500 КБ. */
+export async function renderBanner(file: File, pos: BannerPos = { x: 0.5, y: 0.5, zoom: 1 }): Promise<EncodedCover> {
+  checkSourceFile(file)
+  let bitmap: ImageBitmap
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+  } catch {
+    throw new CoverImageError('Не удалось открыть картинку. Возможно, файл повреждён.')
+  }
+  try {
+    const f = bannerFrameOf(bitmap.width, bitmap.height, pos)
+    const draw = (ctx: Ctx2D) => ctx.drawImage(bitmap, f.sx, f.sy, f.sw, f.sh, 0, 0, BANNER_WIDTH, BANNER_HEIGHT)
+    let format: 'image/webp' | 'image/jpeg' = 'image/webp'
+    for (const q of BANNER_QUALITIES) {
+      let bytes = await encode(BANNER_WIDTH, BANNER_HEIGHT, draw, format, q)
+      // Браузер не умеет WebP и отдал PNG (Safari): переходим на JPEG.
+      if (format === 'image/webp' && (!bytes || sniffCover(bytes) !== 'image/webp')) {
+        format = 'image/jpeg'
+        bytes = await encode(BANNER_WIDTH, BANNER_HEIGHT, draw, format, q)
+      }
+      if (!bytes || sniffCover(bytes) !== format) throw new CoverImageError('Браузер не смог сжать картинку.')
+      if (bytes.length <= BANNER_MAX_BYTES) return { bytes, ext: format === 'image/webp' ? 'webp' : 'jpg' }
+    }
+    throw new CoverImageError('Не удалось сжать шапку до 500 КБ. Выбери другую картинку.')
+  } finally {
+    bitmap.close?.()
+  }
+}
