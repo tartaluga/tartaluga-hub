@@ -153,3 +153,61 @@ describe('renderCover', () => {
     expect(close).toHaveBeenCalled()
   })
 })
+
+describe('renderCover: граничные случаи', () => {
+  it('ровно 20 МБ проходит, на байт больше нет; ровно 300 КБ принимается', async () => {
+    expect(() => checkSourceFile({ type: 'image/png', size: 20 * 1024 * 1024 })).not.toThrow()
+    expect(() => checkSourceFile({ type: 'image/png', size: 20 * 1024 * 1024 + 1 })).toThrow(CoverImageError)
+    fakeBitmap(2000, 2000)
+    fakeCanvas(() => COVER_MAX_BYTES)
+    expect((await renderCover(file())).bytes.length).toBe(COVER_MAX_BYTES)
+  })
+  it('крошечный исходник: высота не ноль', async () => {
+    fakeBitmap(2, 1)
+    const { calls } = fakeCanvas(() => 100)
+    await renderCover(file())
+    expect(calls[0].h).toBeGreaterThanOrEqual(1)
+    expect(calls[0].w).toBe(2)
+  })
+  it('широкая панорама: кадр по высоте, ширина ограничена 1600', async () => {
+    fakeBitmap(10000, 600)
+    const { calls, draws } = fakeCanvas(() => 100)
+    await renderCover(file())
+    expect(calls[0].w).toBe(1600)
+    expect(draws[0][3]).toBe(600)
+  })
+  it('сжатие не опускается ниже 480 px', async () => {
+    fakeBitmap(4000, 4000)
+    const { calls } = fakeCanvas(() => COVER_MAX_BYTES + 1)
+    await expect(renderCover(file())).rejects.toThrow(/300 КБ/)
+    expect(Math.min(...calls.map((c) => c.w))).toBeGreaterThanOrEqual(480)
+  })
+  it('canvas отдаёт PNG даже для JPEG: понятная ошибка', async () => {
+    fakeBitmap(2000, 2000)
+    fakeCanvas(() => 50, false)
+    vi.stubGlobal(
+      'OffscreenCanvas',
+      class {
+        getContext() {
+          return { drawImage: () => undefined }
+        }
+        async convertToBlob() {
+          return new Blob([PNG(50)], { type: 'image/png' })
+        }
+      },
+    )
+    await expect(renderCover(file())).rejects.toThrow(/Браузер не смог/)
+  })
+  it('нет 2d-контекста: ошибка, bitmap закрыт', async () => {
+    const { close } = fakeBitmap(2000, 2000)
+    vi.stubGlobal('OffscreenCanvas', class { getContext() { return null } })
+    await expect(renderCover(file())).rejects.toBeInstanceOf(CoverImageError)
+    expect(close).toHaveBeenCalled()
+  })
+  it('ошибка кодирования закрывает bitmap', async () => {
+    const { close } = fakeBitmap(2000, 2000)
+    vi.stubGlobal('OffscreenCanvas', class { getContext() { return { drawImage() {} } } async convertToBlob() { throw new Error('boom') } })
+    await expect(renderCover(file())).rejects.toThrow('boom')
+    expect(close).toHaveBeenCalled()
+  })
+})
