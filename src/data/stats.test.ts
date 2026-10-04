@@ -276,6 +276,21 @@ describe('activityByProject с коммитами', () => {
   })
 })
 
+describe('activityByProject: границы коммитов', () => {
+  it('коммиты в первый и последний день периода входят, за ними нет', () => {
+    const s = st({ a: { [QUARTER.start]: 1, [QUARTER.end]: 2, '2026-06-21': 9, '2026-09-24': 9 } })
+    const rows = activityByProject(lib([project('a')]), QUARTER, s)
+    expect(rows.map((r) => [r.slug, r.commits])).toEqual([['a', 3]])
+  })
+  it('status без проектов — как без коммитов', () => {
+    expect(activityByProject(lib([project('a')]), QUARTER, st({}))).toEqual([])
+  })
+  it('равные count сортируются по названию', () => {
+    const s = st({ a: { '2026-09-01': 1 }, b: { '2026-09-01': 1 } })
+    expect(activityByProject(lib([project('b'), project('a')]), QUARTER, s).map((r) => r.slug)).toEqual(['a', 'b'])
+  })
+})
+
 describe('published', () => {
   it('готовые проекты с doneAt в периоде, свежие сверху; без doneAt — нет', () => {
     const ps = lib([
@@ -313,6 +328,22 @@ describe('statsPulse с коммитами', () => {
   it('без commits — прежнее поведение', () => {
     const ps = lib([project('a', { log: log([at(2026, 9, 23)]) })])
     expect(statsPulse(ps, QUARTER).max).toBe(1)
+  })
+})
+
+describe('statsPulse: граничные коммиты', () => {
+  it('нулевые и отрицательные коммиты дня не создают активность', () => {
+    const p = statsPulse(lib([project('a')]), QUARTER, new Map([['2026-09-01', 0], ['2026-09-02', -3]]))
+    expect(p.max).toBe(0)
+    expect(p.weeks.flat().every((d) => d.count === 0)).toBe(true)
+  })
+  it('пустая карта коммитов', () => {
+    expect(statsPulse(lib([project('a')]), QUARTER, new Map()).max).toBe(0)
+  })
+  it('границы периода включительно', () => {
+    const p = statsPulse(lib([project('a')]), QUARTER, new Map([[QUARTER.start, 2], [QUARTER.end, 3]])).weeks.flat()
+    expect(p.find((d) => d.date === QUARTER.start)!.count).toBe(2)
+    expect(p.find((d) => d.date === QUARTER.end)!.count).toBe(3)
   })
 })
 

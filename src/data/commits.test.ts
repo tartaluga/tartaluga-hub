@@ -76,3 +76,36 @@ describe('sumDays', () => {
     expect(sumDays(days, '2026-09-10', '2026-09-01')).toBe(0)
   })
 })
+
+describe('недоверенный status.json', () => {
+  it('commitsByDay не объект: строка, число, null, массив', () => {
+    for (const bad of ['2026-09-01', 5, null, true, [3, 4]]) {
+      expect(projectCommitDays(status({ a: repo('o/a', bad) }), 'a').size).toBe(0)
+    }
+  })
+  it('NaN, Infinity, объект и null вместо числа пропускаются', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': NaN, '2026-09-02': Infinity, '2026-09-03': {}, '2026-09-04': null, '2026-09-05': 1 }) })
+    expect([...projectCommitDays(s, 'a')]).toEqual([['2026-09-05', 1]])
+  })
+  it('ключ с переводом строки или суффиксом не проходит', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01\n': 1, '2026-09-01T00': 1, '12026-09-01': 1 }) })
+    expect(projectCommitDays(s, 'a').size).toBe(0)
+  })
+  it('fullName не строка или пустой: репо не схлопываются', () => {
+    const s = status({
+      a: { repo: { fullName: 5, commitsByDay: { '2026-09-01': 1 } } },
+      b: { repo: { fullName: 5, commitsByDay: { '2026-09-01': 1 } } },
+      c: { repo: { fullName: '', commitsByDay: { '2026-09-01': 1 } } },
+      d: { repo: { commitsByDay: { '2026-09-01': 1 } } },
+    })
+    expect(commitDays(s, ['a', 'b', 'c', 'd']).get('2026-09-01')).toBe(4)
+  })
+  it('повторяющийся slug в списке не удваивает', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': 2 }) })
+    expect(commitDays(s, ['a', 'a']).get('2026-09-01')).toBe(2)
+  })
+  it('проект без репо не мешает остальным', () => {
+    const s = status({ a: {}, b: repo('o/b', { '2026-09-01': 2 }) })
+    expect(commitDays(s, ['a', 'b']).get('2026-09-01')).toBe(2)
+  })
+})
