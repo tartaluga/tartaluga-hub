@@ -163,6 +163,42 @@ describe('POST /api/commit', () => {
     expect(gh.calls.length).toBeLessThan(45)
   })
 
+  it('шапка и обложка одного проекта — одним коммитом; обе считаются картинками лимита', async () => {
+    const { gh, cookie, send } = await setup(...gitData)
+    const res = await send(
+      mutation('POST', '/api/commit', cookie, {
+        expectedHead: HEAD,
+        changes: [
+          { path: 'projects/tartaluga-hub.json', text: PROJECT },
+          { path: 'banners/tartaluga-hub.webp', base64: WEBP.toString('base64') },
+          { path: 'covers/tartaluga-hub.webp', base64: WEBP.toString('base64') },
+        ],
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(Object.keys((await res.json()).shas)).toContain('banners/tartaluga-hub.webp')
+    expect(gh.repoCalls().find((c) => c.url.endsWith('/git/trees'))!.body.tree.map((t: { path: string }) => t.path)).toContain('banners/tartaluga-hub.webp')
+
+    const banners = Array.from({ length: COMMIT_IMAGE_LIMIT + 1 }, (_, i) => ({ path: `banners/p${i}.webp`, base64: WEBP.toString('base64') }))
+    const over = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes: banners }))
+    expect(over.status).toBe(413)
+    expect((await over.json()).error.message).toContain(`${COMMIT_IMAGE_LIMIT} картинок`)
+  })
+
+  it('шапка: не картинка внутри — отказ, больше 2 МБ — 413, удаление можно, через PUT нельзя', async () => {
+    const { cookie, send } = await setup(...gitData)
+    const fake = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes: [{ path: 'banners/x.webp', base64: Buffer.from('not an image at all').toString('base64') }] }))
+    expect(fake.status).toBeGreaterThanOrEqual(400)
+    expect(fake.status).toBeLessThan(500)
+    const big = Buffer.concat([WEBP, Buffer.alloc(2 * 1024 * 1024)])
+    const tooBig = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes: [{ path: 'banners/x.webp', base64: big.toString('base64') }] }))
+    expect(tooBig.status).toBe(413)
+    const del = await send(mutation('POST', '/api/commit', cookie, { expectedHead: HEAD, changes: [{ path: 'banners/x.webp', base64: null }] }))
+    expect(del.status).toBe(200)
+    const put = await send(mutation('PUT', '/api/file', cookie, { path: 'banners/x.webp', text: 'x' }))
+    expect(put.status).toBe(400)
+  })
+
   it('тело коммита больше лимита — 413, в GitHub ничего не пишется', async () => {
     const { gh, cookie, send } = await setup(...gitData)
     const changes = [{ path: 'projects/p0.json', text: 'x'.repeat(COMMIT_BODY_LIMIT) }]

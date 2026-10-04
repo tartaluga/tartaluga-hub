@@ -109,6 +109,9 @@ describe('разрешённые пути и ветки', () => {
     'settings.json',
     'covers/tartaluga-hub.webp',
     'covers/x.jpg',
+    'banners/tartaluga-hub.webp',
+    'banners/x.jpg',
+    `banners/${'a'.repeat(64)}.jpg`,
   ])('можно: %s', (p) => expect(isDataPath(p)).toBe(true))
 
   it.each([
@@ -124,6 +127,17 @@ describe('разрешённые пути и ветки', () => {
     'ideas/lowercase00000000000000000.json',
     'covers/x.svg',
     'covers/x.png',
+    'banners/../x.webp',
+    'banners/%2e%2e.webp',
+    'banners/x.png',
+    'banners/x.svg',
+    'banners/A.webp',
+    'banners/a--b.webp',
+    'banners/sub/x.webp',
+    'banners/x.webp/y',
+    'banners/.webp',
+    'banners/x.webp ',
+    `banners/${'a'.repeat(65)}.webp`,
     'status.json',
     'schema/project.schema.json',
     'README.md',

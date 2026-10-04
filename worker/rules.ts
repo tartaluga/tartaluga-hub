@@ -2,8 +2,9 @@
 import { HttpError } from './http'
 
 // Путь проверяется целиком: никаких «..», «%2e», «.github/». slug и ULID — те же, что в schema/defs.schema.json.
+// Шапка проекта лежит в banners/, а не в covers/<slug>-banner.*: при slug с дефисом путь был бы двусмысленным (ADR-016).
 const SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*'
-const DATA_PATH = new RegExp(`^(?:projects/(${SLUG})\\.json|ideas/[0-9A-HJKMNP-TV-Z]{26}\\.json|settings\\.json|covers/(${SLUG})\\.(?:webp|jpg))$`)
+const DATA_PATH = new RegExp(`^(?:projects/(${SLUG})\\.json|ideas/[0-9A-HJKMNP-TV-Z]{26}\\.json|settings\\.json|(?:covers|banners)/(${SLUG})\\.(?:webp|jpg))$`)
 
 export function isDataPath(path: string): boolean {
   const m = DATA_PATH.exec(path)
