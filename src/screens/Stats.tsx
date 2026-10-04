@@ -1,9 +1,11 @@
 // «Статистика» по макету 2c: итоги за месяц, квартал или полгода. Экран только читает файлы ветки.
-// Коммиты требуют виджетов репо (ADR-005) — до них вместо чисел пустое состояние, а не выдумка.
+// Коммиты — из status.json виджетов (ADR-015); пока его нет, вместо чисел пустое состояние, а не выдумка.
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { MAIN, useSession } from '../app/session'
+import { useWidgets } from '../app/widgets'
 import { StatsHeatLegend, StatsHeatmap, StatsMeter, StatsStackBar } from '../components/StatsCharts'
+import { commitDays, sumDays } from '../data/commits'
 import { parseLocalDate } from '../data/model'
 import { buildLibrary, STATUS_LABEL } from '../data/projects'
 import {
@@ -45,6 +47,7 @@ function useToday(): string {
 export function Stats() {
   const files = useSession((s) => s.files)
   const branch = useSession((s) => s.branch)
+  const status = useWidgets((s) => s.status)
   const day = useToday()
   const [params, setParams] = useSearchParams()
   const raw = params.get('period')
@@ -55,18 +58,20 @@ export function Stats() {
     const lib = buildLibrary(files, today)
     const range = periodRange(period, today)
     const ps = lib.projects
+    const commits = status ? commitDays(status, ps.map((p) => p.data.slug)) : undefined
     return {
       lib,
       range,
       log: logCount(ps, range),
       closed: tasksClosed(ps, range),
       deadlines: deadlines(ps, range),
-      pulse: statsPulse(ps, range),
-      activity: activityByProject(ps, range),
+      commits: commits ? sumDays(commits, range.start, range.end) : null,
+      pulse: statsPulse(ps, range, commits),
+      activity: activityByProject(ps, range, status),
       published: published(ps, range),
       shares: statusShares(ps),
     }
-  }, [files, day, period])
+  }, [files, day, period, status])
   const { lib, range, deadlines: dl } = view
   const total = lib.projects.length
 
@@ -109,7 +114,11 @@ export function Stats() {
         <>
           <dl className={css.kpis}>
             <Kpi label="Записей в логе" value={String(view.log)} />
-            <Kpi label="Коммитов" value="—" note="появится с виджетами" muted />
+            {view.commits === null ? (
+              <Kpi label="Коммитов" value="—" note="после первой проверки виджетов" muted />
+            ) : (
+              <Kpi label="Коммитов" value={String(view.commits)} />
+            )}
             <Kpi label="Задач закрыто" value={String(view.closed)} />
             <Kpi
               label="Дедлайнов в срок"
@@ -127,18 +136,22 @@ export function Stats() {
                 </h2>
                 <StatsHeatmap
                   weeks={view.pulse.weeks}
-                  label={`Записи лога по дням за период ${rangeLabel(range)}: всего ${view.log}.`}
+                  label={
+                    view.commits === null
+                      ? `Записи лога по дням за период ${rangeLabel(range)}: всего ${view.log}.`
+                      : `Записи лога и коммиты по дням за период ${rangeLabel(range)}: всего ${view.log + view.commits}.`
+                  }
                 />
                 <StatsHeatLegend />
-                <p className={css.hint}>Пока только записи лога — коммиты добавятся с виджетами репо.</p>
+                {!status && <p className={css.hint}>Пока только записи лога — коммиты появятся после первой проверки виджетов.</p>}
               </section>
 
               <section aria-labelledby="s-activity">
                 <h2 id="s-activity" className={css.label}>
-                  Активность по проектам · записи лога
+                  Активность по проектам · {status ? 'записи + коммиты' : 'записи лога'}
                 </h2>
                 {view.activity.length === 0 ? (
-                  <p className={css.none}>За период в логе нет записей.</p>
+                  <p className={css.none}>{status ? 'За период нет записей и коммитов.' : 'За период в логе нет записей.'}</p>
                 ) : (
                   <>
                     <ul className={css.activity}>

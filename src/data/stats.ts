@@ -1,8 +1,10 @@
 // Экран «Статистика» (макет 2c): период, лог, закрытые задачи, дедлайны, активность по проектам, опубликованное.
 // Чистые функции поверх buildLibrary. «Сегодня» всегда приходит параметром; моменты из файлов переводятся
 // в местную дату (как в today.ts), календарные даты YYYY-MM-DD сравниваются строками.
-// Коммиты здесь не считаются: они появятся с виджетами репо (ADR-005), выдумывать их нельзя.
-import type { Task } from '../schema/types'
+// Коммиты (status.json, ADR-015) добавляются, только если их передали; без status считаются одни записи лога.
+// Дни коммитов — по Москве; считаем их совпадающими с местными (владелец в Москве).
+import type { Status as WidgetStatus, Task } from '../schema/types'
+import { projectCommitDays, sumDays } from './commits'
 import { firstDue } from './model'
 import type { ProjectView, Status } from './projects'
 import { localKey, pulseLevel } from './today'
@@ -141,23 +143,26 @@ export interface ProjectActivity {
   slug: string
   title: string
   status: Status
+  /** Записи лога + коммиты репо за период. */
   count: number
+  /** Записей лога за период. */
+  log: number
+  /** Коммитов репо за период (0 без status). */
+  commits: number
   /** Доля от самого активного проекта, 0..1: длина полосы. */
   share: number
 }
 
 const collator = new Intl.Collator('ru', { sensitivity: 'base', numeric: true })
 
-/** Записи лога за период по проектам, самые активные сверху; проекты без записей не показываются. */
-export function activityByProject(projects: ProjectView[], r: Range): ProjectActivity[] {
+/** Записи лога и коммиты репо (если есть status) за период, самые активные сверху; пустые проекты не показываются. */
+export function activityByProject(projects: ProjectView[], r: Range, status?: WidgetStatus | null): ProjectActivity[] {
   const rows = projects
-    .map((p) => ({
-      slug: p.data.slug,
-      title: p.data.title,
-      status: p.data.status,
-      count: (p.data.log ?? []).filter((e) => isIn(dayOf(e.at), r)).length,
-      share: 0,
-    }))
+    .map((p) => {
+      const log = (p.data.log ?? []).filter((e) => isIn(dayOf(e.at), r)).length
+      const commits = status ? sumDays(projectCommitDays(status, p.data.slug), r.start, r.end) : 0
+      return { slug: p.data.slug, title: p.data.title, status: p.data.status, count: log + commits, log, commits, share: 0 }
+    })
     .filter((a) => a.count > 0)
     .sort((a, b) => b.count - a.count || collator.compare(a.title, b.title))
   const max = rows[0]?.count ?? 0
@@ -203,9 +208,10 @@ export interface StatsPulse {
   max: number
 }
 
-/** Тепловая карта записей лога по дням периода. Уровни — как на «Сегодня», коммиты добавятся с виджетами. */
-export function statsPulse(projects: ProjectView[], r: Range): StatsPulse {
+/** Тепловая карта записей лога (и коммитов дня, если переданы) по дням периода. Уровни — как на «Сегодня». */
+export function statsPulse(projects: ProjectView[], r: Range, commits?: ReadonlyMap<string, number>): StatsPulse {
   const byDay = new Map<string, number>()
+  if (commits) for (const [key, n] of commits) if (inRange(key, r) && n > 0) byDay.set(key, n)
   for (const p of projects) {
     for (const e of p.data.log ?? []) {
       const key = dayOf(e.at)

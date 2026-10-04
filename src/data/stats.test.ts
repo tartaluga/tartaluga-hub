@@ -237,6 +237,60 @@ describe('activityByProject', () => {
   })
 })
 
+const st = (projects: Record<string, Record<string, number>>) =>
+  ({
+    schemaVersion: 1,
+    generatedAt: null,
+    lastSuccess: null,
+    errors: [],
+    projects: Object.fromEntries(Object.entries(projects).map(([slug, commitsByDay]) => [slug, { repo: { fullName: `me/${slug}`, commitsByDay } }])),
+  }) as unknown as Parameters<typeof activityByProject>[2]
+
+describe('activityByProject с коммитами', () => {
+  const ps = () =>
+    lib([
+      project('a', { log: log([at(2026, 9, 3)]) }),
+      project('b', { log: log([at(2026, 9, 4)]) }),
+      project('c'),
+    ])
+  const status = st({ a: { '2026-09-01': 2, '2026-05-01': 9 }, c: { '2026-09-02': 5, 'мусор': 3, '2026-09-03': -1 } })
+
+  it('count = записи + коммиты периода, поля log и commits', () => {
+    const rows = activityByProject(ps(), QUARTER, status)
+    expect(rows.map((r) => [r.slug, r.count, r.log, r.commits])).toEqual([
+      ['c', 5, 0, 5],
+      ['a', 3, 1, 2],
+      ['b', 1, 1, 0],
+    ])
+    expect(rows[0]!.share).toBe(1)
+  })
+
+  it('без status или с null — как раньше, commits = 0', () => {
+    for (const s of [undefined, null]) {
+      const rows = activityByProject(ps(), QUARTER, s)
+      expect(rows.map((r) => [r.slug, r.count, r.commits])).toEqual([
+        ['a', 1, 0],
+        ['b', 1, 0],
+      ])
+    }
+  })
+})
+
+describe('activityByProject: границы коммитов', () => {
+  it('коммиты в первый и последний день периода входят, за ними нет', () => {
+    const s = st({ a: { [QUARTER.start]: 1, [QUARTER.end]: 2, '2026-06-21': 9, '2026-09-24': 9 } })
+    const rows = activityByProject(lib([project('a')]), QUARTER, s)
+    expect(rows.map((r) => [r.slug, r.commits])).toEqual([['a', 3]])
+  })
+  it('status без проектов — как без коммитов', () => {
+    expect(activityByProject(lib([project('a')]), QUARTER, st({}))).toEqual([])
+  })
+  it('равные count сортируются по названию', () => {
+    const s = st({ a: { '2026-09-01': 1 }, b: { '2026-09-01': 1 } })
+    expect(activityByProject(lib([project('b'), project('a')]), QUARTER, s).map((r) => r.slug)).toEqual(['a', 'b'])
+  })
+})
+
 describe('published', () => {
   it('готовые проекты с doneAt в периоде, свежие сверху; без doneAt — нет', () => {
     const ps = lib([
@@ -250,6 +304,46 @@ describe('published', () => {
       { slug: 'fresh', title: 'FRESH', day: '2026-09-23' },
       { slug: 'first', title: 'FIRST', day: '2026-06-23' },
     ])
+  })
+})
+
+describe('statsPulse с коммитами', () => {
+  it('коммиты дня добавляются к записям, дни вне периода игнорируются', () => {
+    const ps = lib([project('a', { log: log([at(2026, 9, 23)]) })])
+    const commits = new Map([
+      ['2026-09-23', 3],
+      ['2026-06-22', 7],
+      ['2026-09-24', 7],
+      ['2026-07-01', 1],
+    ])
+    const p = statsPulse(ps, QUARTER, commits)
+    const days = p.weeks.flat()
+    expect(days.find((d) => d.date === '2026-09-23')!.count).toBe(4)
+    expect(days.find((d) => d.date === '2026-07-01')!.count).toBe(1)
+    expect(days.find((d) => d.date === '2026-06-22')).toMatchObject({ count: 0, out: true })
+    expect(days.find((d) => d.date === '2026-09-24')).toMatchObject({ count: 0, out: true })
+    expect(p.max).toBe(4)
+  })
+
+  it('без commits — прежнее поведение', () => {
+    const ps = lib([project('a', { log: log([at(2026, 9, 23)]) })])
+    expect(statsPulse(ps, QUARTER).max).toBe(1)
+  })
+})
+
+describe('statsPulse: граничные коммиты', () => {
+  it('нулевые и отрицательные коммиты дня не создают активность', () => {
+    const p = statsPulse(lib([project('a')]), QUARTER, new Map([['2026-09-01', 0], ['2026-09-02', -3]]))
+    expect(p.max).toBe(0)
+    expect(p.weeks.flat().every((d) => d.count === 0)).toBe(true)
+  })
+  it('пустая карта коммитов', () => {
+    expect(statsPulse(lib([project('a')]), QUARTER, new Map()).max).toBe(0)
+  })
+  it('границы периода включительно', () => {
+    const p = statsPulse(lib([project('a')]), QUARTER, new Map([[QUARTER.start, 2], [QUARTER.end, 3]])).weeks.flat()
+    expect(p.find((d) => d.date === QUARTER.start)!.count).toBe(2)
+    expect(p.find((d) => d.date === QUARTER.end)!.count).toBe(3)
   })
 })
 
