@@ -35,6 +35,48 @@ describe('projectCommitDays', () => {
   })
 })
 
+describe('projectCommitDays: недоверенные формы', () => {
+  it('commitsByDay не объект: строка, число, null, массив', () => {
+    for (const bad of ['2026-09-01', 5, null, true]) {
+      expect(projectCommitDays(status({ a: repo('o/a', bad) }), 'a').size).toBe(0)
+    }
+    expect(projectCommitDays(status({ a: repo('o/a', [3]) }), 'a').size).toBe(0)
+  })
+  it('NaN, Infinity, null, вложенные значения отбрасываются', () => {
+    const s = status({
+      a: repo('o/a', { '2026-09-01': NaN, '2026-09-02': Infinity, '2026-09-03': null, '2026-09-04': { n: 1 }, '2026-09-05': 7 }),
+    })
+    expect([...projectCommitDays(s, 'a')]).toEqual([['2026-09-05', 7]])
+  })
+  it('ключ с переводом строки или хвостом не проходит', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01\n': 1, '2026-09-01x': 1, 'x2026-09-01': 1, '2026-09-01': 2 }) })
+    expect([...projectCommitDays(s, 'a')]).toEqual([['2026-09-01', 2]])
+  })
+})
+
+describe('commitDays: граничные', () => {
+  it('один slug дважды в списке считается один раз', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': 2 }) })
+    expect(commitDays(s, ['a', 'a']).get('2026-09-01')).toBe(2)
+  })
+  it('репо без fullName не склеиваются и суммируются', () => {
+    const s = status({
+      a: { repo: { commitsByDay: { '2026-09-01': 1 } } },
+      b: { repo: { fullName: '', commitsByDay: { '2026-09-01': 2 } } },
+      c: { repo: { fullName: 42, commitsByDay: { '2026-09-01': 4 } } },
+    })
+    expect(commitDays(s, ['a', 'b', 'c']).get('2026-09-01')).toBe(7)
+  })
+  it('принимает любой Iterable (Set)', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': 1 }), b: repo('o/b', { '2026-09-01': 1 }) })
+    expect(commitDays(s, new Set(['a', 'b'])).get('2026-09-01')).toBe(2)
+  })
+  it('нулевые дни сохраняются как ключи', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': 0 }) })
+    expect([...commitDays(s, ['a'])]).toEqual([['2026-09-01', 0]])
+  })
+})
+
 describe('commitDays', () => {
   it('суммирует по дням разные репо', () => {
     const s = status({
