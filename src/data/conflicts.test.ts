@@ -92,3 +92,77 @@ describe('совпадение без служебных меток', () => {
     expect(sameContent({ a: 1 }, { a: 2 })).toBe(false)
   })
 })
+
+describe('задача: подписи и выбор (ADR-016)', () => {
+  const T = '01K5Z0000000000000000000T1'
+  const K = '01K5Z0000000000000000000K1'
+  const L = '01K5Z0000000000000000000L1'
+  const doc = {
+    tasks: [
+      {
+        id: T,
+        title: 'Сдать главу',
+        links: [{ id: L, kind: 'doc', value: 'https://example.com/spec', label: 'Спека' }],
+        comments: [{ id: K, text: 'Сделал X' }],
+      },
+    ],
+  }
+
+  it('поля задачи — по-русски', () => {
+    const label = (field: string) => conflictLabel(field_(['tasks', T, field]), doc, doc)
+    const field_ = (path: string[]) => field(path, 'а', 'б', 'в')
+    expect(label('description')).toBe('задача «Сдать главу» · описание')
+    expect(label('inProgress')).toBe('задача «Сдать главу» · в работе')
+    expect(label('cancelled')).toBe('задача «Сдать главу» · отменена')
+    expect(label('milestoneId')).toBe('задача «Сдать главу» · веха')
+    expect(label('links')).toBe('задача «Сдать главу» · ссылки')
+    expect(label('comments')).toBe('задача «Сдать главу» · комментарии')
+  })
+
+  it('banner и cover — по-русски', () => {
+    expect(conflictLabel(field(['banner'], null, 'a', 'b'), {}, {})).toBe('шапка')
+    expect(conflictLabel(field(['cover'], null, 'a', 'b'), {}, {})).toBe('обложка')
+  })
+
+  it('ссылка и комментарий задачи: имя задачи, имя элемента и поле', () => {
+    expect(conflictLabel(field(['tasks', T, 'links', L, 'value'], 'a', 'b', 'c'), doc, doc)).toBe('задача «Сдать главу» · ссылка «Спека» · адрес')
+    expect(conflictLabel(field(['tasks', T, 'comments', K, 'text'], 'a', 'b', 'c'), doc, doc)).toBe('задача «Сдать главу» · комментарий «Сделал X» · текст')
+    const gone: MergeConflict = { kind: 'element', path: ['tasks', T, 'comments', K], deletedBy: 'remote', base: { id: K, text: 'Сделал X' }, local: { id: K, text: 'Сделал X, Y' }, remote: undefined }
+    expect(conflictLabel(gone, doc, doc)).toBe('задача «Сдать главу» · комментарий «Сделал X, Y» · удалён в репо')
+    const goneLink: MergeConflict = { kind: 'element', path: ['tasks', T, 'links', L], deletedBy: 'local', base: { id: L, value: 'https://e/' }, local: undefined, remote: { id: L, value: 'https://e2/' } }
+    expect(conflictLabel(goneLink, doc, doc)).toBe('задача «Сдать главу» · ссылка «https://e2/» · удалена у тебя')
+  })
+
+  it('задачи уже нет ни в одной версии — подпись без имени, а не падение', () => {
+    expect(conflictLabel(field(['tasks', T, 'comments', K, 'text'], 'a', 'b', 'c'), {}, {})).toBe('задача · комментарий · текст')
+  })
+
+  it('ключи-прототипы не находят подписей', () => {
+    expect(conflictLabel(field(['tasks', T, 'constructor'], 1, 2, 3), doc, doc)).toBe('задача «Сдать главу» · constructor')
+    expect(conflictLabel(field(['tasks', T, 'toString', K, 'text'], 1, 2, 3), doc, doc)).toBe('задача «Сдать главу» · текст')
+  })
+
+  it('длинный текст: описание задачи и текст комментария — по кускам, однострочные и другие поля — нет', () => {
+    expect(isLongText(field(['tasks', T, 'description'], 'а\nб', 'а\nв', 'г\nб'))).toBe(true)
+    expect(isLongText(field(['tasks', T, 'comments', K, 'text'], 'а\nб', 'а\nв', 'г\nб'))).toBe(true)
+    expect(isLongText(field(['tasks', T, 'description'], 'а', 'б', 'в'))).toBe(false)
+    expect(isLongText(field(['tasks', T, 'title'], 'а\nб', 'в\nг', 'д'))).toBe(false)
+    expect(isLongText(field(['tasks', T, 'links', L, 'value'], 'а\nб', 'в\nг', 'д'))).toBe(false)
+    expect(isLongText(field(['banner'], 'а\nб', 'в\nг', 'д'))).toBe(false)
+  })
+
+  it('выбор по куску ставит описание задачи; «моя» ставит моё значение; последний комментарий удалён — массив убран', () => {
+    const d = { tasks: [{ id: T, title: 'З', description: 'репо', comments: [{ id: K, text: 'х' }] }] }
+    const item = field(['tasks', T, 'description'], 'а', 'моё', 'репо')
+    expect(applyOps(d, opsFor(item, { text: 'сборка' })).tasks).toEqual([{ id: T, title: 'З', description: 'сборка', comments: [{ id: K, text: 'х' }] }])
+    expect(applyOps(d, opsFor(item, 'mine')).tasks).toEqual([{ id: T, title: 'З', description: 'моё', comments: [{ id: K, text: 'х' }] }])
+    const del: MergeConflict = { kind: 'element', path: ['tasks', T, 'comments', K], deletedBy: 'remote', base: { id: K }, local: { id: K, text: 'х!' }, remote: undefined }
+    expect(applyOps(d, opsFor(del, 'repo')).tasks).toEqual([{ id: T, title: 'З', description: 'репо' }])
+  })
+
+  it('значения: булевы метки и шапка', () => {
+    expect(formatValue(true, 'inProgress')).toBe('да')
+    expect(formatValue('banners/a.webp', 'banner')).toBe('banners/a.webp')
+    expect(formatValue(undefined, 'cancelled')).toBe('— пусто')
+  })
+})

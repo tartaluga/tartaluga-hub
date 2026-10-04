@@ -25,7 +25,26 @@ const ELEMENT_FIELD_LABEL: Record<string, string> = {
   at: 'время',
   value: 'адрес',
   label: 'подпись',
+  // Задача (ADR-016)
+  description: 'описание',
+  inProgress: 'в работе',
+  cancelled: 'отменена',
+  milestoneId: 'веха',
+  links: 'ссылки',
+  comments: 'комментарии',
+  editedAt: 'время правки',
+  author: 'автор',
+  taskId: 'задача',
 }
+
+/** Вложенные в задачу id-массивы (ADR-016): как называть элемент и как сказать «удалён». */
+const NESTED: Record<string, { name: string; gone: string }> = {
+  links: { name: 'ссылка', gone: 'удалена' },
+  comments: { name: 'комментарий', gone: 'удалён' },
+}
+
+/** Поля проекта верхнего уровня, которых нет среди правок карточки (FIELD_LABEL). */
+const PROJECT_FIELD_LABEL: Record<string, string> = { banner: 'шапка', cover: 'обложка' }
 
 /** Поля идеи (ideas/<ulid>.json), которых нет у проекта. Теги — общие, подпись из FIELD_LABEL. */
 const IDEA_FIELD_LABEL: Record<string, string> = { text: 'текст', project: 'привязка к проекту' }
@@ -55,6 +74,12 @@ function findElement(doc: JsonObject | undefined, arrayKey: string, id: string):
   return Array.isArray(arr) ? arr.find((e) => isObject(e) && e.id === id) : undefined
 }
 
+/** Элемент вложенного массива задачи по id задачи и id элемента. */
+function findNested(doc: JsonObject | undefined, taskId: string, key: string, id: string): Json | undefined {
+  const task = findElement(doc, 'tasks', taskId)
+  return isObject(task) ? findElement(task, key, id) : undefined
+}
+
 /**
  * Подпись спорного места: «следующий шаг», «задача «Сдать главу» · срок», «задача «Макет» · удалена в репо».
  * local и remote — мои и удалённые данные файла, из них берутся имена элементов.
@@ -62,7 +87,19 @@ function findElement(doc: JsonObject | undefined, arrayKey: string, id: string):
 export function conflictLabel(item: MergeConflict, local: JsonObject | undefined, remote: JsonObject | undefined): string {
   const [top = '', id, ...rest] = item.path
   // Ключи из файла — недоверенный ввод: «constructor» и подобные не должны находить свойства прототипа.
-  if (id === undefined) return labelOf(FIELD_LABEL, top) ?? labelOf(IDEA_FIELD_LABEL, top) ?? top
+  if (id === undefined) return labelOf(FIELD_LABEL, top) ?? labelOf(IDEA_FIELD_LABEL, top) ?? labelOf(PROJECT_FIELD_LABEL, top) ?? top
+  const nestedKey = top === 'tasks' && rest.length >= 2 ? rest[0]! : undefined
+  const nested = nestedKey !== undefined && hasOwn(NESTED, nestedKey) ? NESTED[nestedKey] : undefined
+  if (nestedKey !== undefined && nested) {
+    // tasks/<id>/links|comments/<eid>[/поле]: ссылка или комментарий задачи.
+    const eid = rest[1]!
+    const taskName = elementName(findElement(remote, 'tasks', id)) ?? elementName(findElement(local, 'tasks', id))
+    const own = elementName(item.kind === 'element' ? (item.local ?? item.remote ?? item.base) : undefined) ?? elementName(findNested(remote, id, nestedKey, eid)) ?? elementName(findNested(local, id, nestedKey, eid))
+    const what = `задача${taskName ? ` «${taskName}»` : ''} · ${nested.name}${own ? ` «${own}»` : ''}`
+    if (item.kind === 'element') return `${what} · ${item.deletedBy === 'local' ? `${nested.gone} у тебя` : `${nested.gone} в репо`}`
+    const f = rest[rest.length - 1] ?? ''
+    return `${what} · ${labelOf(ELEMENT_FIELD_LABEL, f) ?? f}`
+  }
   const name =
     elementName(item.kind === 'element' ? (item.local ?? item.remote ?? item.base) : undefined) ??
     elementName(findElement(remote, top, id)) ??
@@ -95,13 +132,18 @@ export function sideText(item: MergeConflict, side: 'local' | 'remote'): string 
 }
 
 /**
- * Длинный текст (ADR-010 §2): описание проекта, текст записи лога, текст идеи — и в нём несколько строк.
+ * Длинный текст (ADR-010 §2, ADR-016): описание проекта, текст записи лога, текст идеи, описание задачи и текст её
+ * комментария — и в нём несколько строк.
  * Для него выбор по кускам; однострочный текст — две кнопки, как у остальных полей.
  */
 export function isLongText(item: MergeConflict): boolean {
   if (item.kind !== 'field') return false
   const p = item.path
-  const listed = (p.length === 1 && (p[0] === 'description' || p[0] === 'text')) || (p.length === 3 && p[0] === 'log' && p[2] === 'text')
+  const listed =
+    (p.length === 1 && (p[0] === 'description' || p[0] === 'text')) ||
+    (p.length === 3 && p[0] === 'log' && p[2] === 'text') ||
+    (p.length === 3 && p[0] === 'tasks' && p[2] === 'description') ||
+    (p.length === 5 && p[0] === 'tasks' && p[2] === 'comments' && p[4] === 'text')
   if (!listed) return false
   const sides = [item.base, item.local, item.remote]
   return sides.every((v) => v === undefined || typeof v === 'string') && sides.some((v) => typeof v === 'string' && v.includes('\n'))
@@ -151,10 +193,16 @@ export function sameValue(a: Json | undefined, b: Json | undefined): boolean {
 export function applyOps(doc: JsonObject, ops: readonly ConflictOp[]): JsonObject {
   const out = structuredClone(doc)
   for (const op of ops) setAt(out, op.path, op.value)
-  // Пустой массив после удаления элемента — ключа нет, как после правки в карточке (applyEdit).
+  // Пустой массив после удаления элемента — ключа нет, как после правки в карточке (applyEdit);
+  // то же для ссылок и комментариев задачи (tasks/<id>/links|comments/<eid>, ADR-016).
   for (const op of ops) {
     const top = op.path[0]
     if (top !== undefined && op.path.length === 2 && hasOwn(out, top) && Array.isArray(out[top]) && (out[top] as Json[]).length === 0) delete out[top]
+    if (op.value === undefined && op.path.length === 4 && top === 'tasks') {
+      const task = valueAt(out, op.path.slice(0, 2))
+      const key = op.path[2]!
+      if (isObject(task) && hasOwn(task, key) && Array.isArray(task[key]) && (task[key] as Json[]).length === 0) delete task[key]
+    }
   }
   return out
 }
