@@ -1,6 +1,7 @@
 // Обложка проекта. Своя картинка появится на этапе 8; пока — генеративная заглушка в духе визора:
 // тёмное стекло, свечение и узор линий. Всё выводится из slug, поэтому у проекта обложка всегда одна и та же.
 import { useId } from 'react'
+import { useCoverUrl } from '../app/useCoverUrl'
 import css from './Cover.module.css'
 
 /** FNV-1a: быстрый стабильный хэш строки. */
@@ -39,6 +40,12 @@ export function coverSpec(slug: string): CoverSpec {
 
 /** muted — приглушённая обложка (пауза, готово, архив), как в макете: свечение почти гаснет. */
 export function Cover({ slug, className, muted = false }: { slug: string; className?: string; muted?: boolean }) {
+  const url = useCoverUrl(slug)
+  if (url) return <img className={`${css.cover} ${css.image} ${muted ? css.muted : ''} ${className ?? ''}`} src={url} alt="" />
+  return <Placeholder slug={slug} className={className} muted={muted} />
+}
+
+function Placeholder({ slug, className, muted }: { slug: string; className?: string; muted: boolean }) {
   const s = coverSpec(slug)
   const id = useId().replace(/:/g, '')
   const glow = muted ? `hsl(${s.hue} 25% 45%)` : `hsl(${s.hue} 70% 62%)`
