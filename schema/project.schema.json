@@ -42,6 +42,11 @@
       "type": ["string", "null"],
       "pattern": "^covers/[a-z0-9-]+\\.(webp|jpg)$"
     },
+    "banner": {
+      "description": "Путь к шапке карточки (banners/<slug>.webp или .jpg), полоса 5:2. null или отсутствие — шапки нет (ADR-016).",
+      "type": ["string", "null"],
+      "pattern": "^banners/[a-z0-9-]+\\.(webp|jpg)$"
+    },
     "links": {
       "type": "array",
       "items": { "$ref": "#/$defs/link" }
@@ -144,9 +149,45 @@
         "originalDue": {
           "description": "v2. Первый срок задачи для статистики «в срок / перенесено». Допустимо только при due. Хаб копирует due при первом задании срока и дальше не меняет; если поля нет, первым сроком считается due (ADR-009).",
           "$ref": "defs.schema.json#/$defs/date"
+        },
+        "description": {
+          "description": "Подробности задачи, Markdown без сырого HTML (ADR-016).",
+          "type": "string",
+          "maxLength": 10000
+        },
+        "inProgress": {
+          "description": "Задача в работе. Значимо только при done = false: при done = true не показывается, хаб при записи убирает (ADR-016).",
+          "const": true
+        },
+        "links": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/link" }
+        },
+        "cancelled": {
+          "description": "Задача отменена. Значимо только при done = true; при done = false хаб при записи убирает (ADR-016).",
+          "const": true
+        },
+        "comments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/comment" }
         }
       },
       "dependentRequired": { "originalDue": ["due"] }
+    },
+    "comment": {
+      "type": "object",
+      "required": ["id", "at", "text"],
+      "properties": {
+        "id": { "$ref": "defs.schema.json#/$defs/ulid" },
+        "at": { "$ref": "defs.schema.json#/$defs/dateTime" },
+        "text": { "type": "string", "$ref": "defs.schema.json#/$defs/nonEmptyText", "maxLength": 2000 },
+        "editedAt": { "$ref": "defs.schema.json#/$defs/dateTime" },
+        "author": {
+          "description": "Кто написал. Отсутствие — владелец. Известные: claude. Список открытый: незнакомый автор показывается как «другой».",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        }
+      }
     },
     "logEntry": {
       "type": "object",
@@ -155,11 +196,15 @@
         "id": { "$ref": "defs.schema.json#/$defs/ulid" },
         "at": { "$ref": "defs.schema.json#/$defs/dateTime" },
         "kind": {
-          "description": "Известные виды: done — что сделано; decision — решение; thought — мысль. Список открытый: незнакомый вид показывается как «запись».",
+          "description": "Известные виды: done — что сделано; decision — решение; thought — мысль; task — смена статуса или срока задачи (ADR-016). Список открытый: незнакомый вид показывается как «запись».",
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*$"
         },
-        "text": { "$ref": "defs.schema.json#/$defs/nonEmptyText" }
+        "text": { "$ref": "defs.schema.json#/$defs/nonEmptyText" },
+        "taskId": {
+          "description": "Задача этого проекта, к которой относится запись (kind = task, ADR-016). Только ссылка для перехода: задачи нет — запись показывается без ссылки.",
+          "type": "string"
+        }
       }
     }
   }

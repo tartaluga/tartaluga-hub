@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 2,
+  "slug": "task-details",
+  "title": "Задачи с подробностями",
+  "status": "active",
+  "banner": "banners/task-details.webp",
+  "milestones": [
+    {
+      "id": "01K5TQ0000000000000000B001",
+      "title": "MVP"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "01K5TQ0000000000000000C001",
+      "title": "Страница задачи",
+      "done": false,
+      "inProgress": true,
+      "description": "Описание с **Markdown**.",
+      "milestoneId": "01K5TQ0000000000000000B001",
+      "links": [
+        {
+          "id": "01K5TQ0000000000000000A001",
+          "kind": "doc",
+          "value": "https://example.com/spec"
+        }
+      ],
+      "comments": [
+        {
+          "id": "01K5TQ0000000000000000E001",
+          "at": "2026-10-04T10:00:00+03:00",
+          "text": "Начал."
+        },
+        {
+          "id": "01K5TQ0000000000000000E002",
+          "at": "2026-10-04T11:00:00+03:00",
+          "editedAt": "2026-10-04T11:05:00+03:00",
+          "author": "claude",
+          "text": "Сделал X, осталось Y."
+        }
+      ]
+    },
+    {
+      "id": "01K5TQ0000000000000000C002",
+      "title": "Ненужное",
+      "done": true,
+      "cancelled": false,
+      "doneAt": "2026-10-04T12:00:00+03:00"
+    }
+  ],
+  "log": [
+    {
+      "id": "01K5TQ0000000000000000D001",
+      "at": "2026-10-04T12:00:00+03:00",
+      "kind": "task",
+      "text": "«Ненужное»: отменена",
+      "taskId": "01K5TQ0000000000000000C002"
+    }
+  ],
+  "createdAt": "2026-10-04T09:00:00+03:00",
+  "updatedAt": "2026-10-04T12:00:00+03:00"
+}
