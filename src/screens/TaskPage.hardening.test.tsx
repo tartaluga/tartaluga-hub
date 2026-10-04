@@ -248,17 +248,17 @@ describe('комментарии: правка и удаление', () => {
     const save = vi.fn<SaveFn>(async () => {})
     await open(`/projects/bot/tasks/${A}`, save)
     const edit = allByLabel('Изменить комментарий')
-    expect(edit).toHaveLength(2)
-    await act(async () => edit[1]!.click())
+    expect(edit).toHaveLength(1)
+    await act(async () => edit[0]!.click())
     const area = byLabel<HTMLTextAreaElement>('Комментарий')
-    expect(area.value).toBe('Второй')
-    await typeArea(area, 'Второй, исправлено')
+    expect(area.value).toBe('Первый')
+    await typeArea(area, 'Первый, исправлено')
     await ctrlEnter(area)
     expect(save).toHaveBeenCalledTimes(1)
     const comments = save.mock.calls[0]![1].taskSet![0]!.comments!
     expect(comments).toHaveLength(2)
-    expect(comments.find((c) => c.id === C1)).toEqual(c1)
-    expect(comments.find((c) => c.id === C2)).toEqual({ ...c2, text: 'Второй, исправлено', editedAt: expect.any(String) })
+    expect(comments.find((c) => c.id === C2)).toEqual(c2)
+    expect(comments.find((c) => c.id === C1)).toEqual({ ...c1, text: 'Первый, исправлено', editedAt: expect.any(String) })
   })
 
   it('Esc при правке не сохраняет', async () => {

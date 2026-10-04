@@ -308,9 +308,11 @@ function Comments({ draftKey, comments, readOnly, commit }: { draftKey: string; 
                   {c.editedAt && <span>изменено</span>}
                   {!readOnly && editing !== c.id && (
                     <span className={css.commentActions}>
-                      <button type="button" className={pcss.iconButton} onClick={() => setEditing(c.id)} aria-label="Изменить комментарий">
-                        <PencilSimple size={15} aria-hidden />
-                      </button>
+                      {c.author === undefined && (
+                        <button type="button" className={pcss.iconButton} onClick={() => setEditing(c.id)} aria-label="Изменить комментарий">
+                          <PencilSimple size={15} aria-hidden />
+                        </button>
+                      )}
                       <button type="button" className={pcss.iconButton} onClick={() => void remove(c)} aria-label="Удалить комментарий">
                         <X size={15} aria-hidden />
                       </button>

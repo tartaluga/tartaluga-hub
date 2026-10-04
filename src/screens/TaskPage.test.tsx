@@ -161,6 +161,15 @@ describe('страница задачи', () => {
     expect(area.value).toBe('')
   })
 
+  it('карандаш только у своих комментариев; у комментария Claude его нет, удаление есть', async () => {
+    await open(`/projects/bot/tasks/${A}`, vi.fn(async () => {}))
+    const items = [...host.querySelectorAll('ol li')]
+    expect(items[0]!.querySelector('[aria-label="Изменить комментарий"]')).not.toBeNull()
+    expect(items[1]!.textContent).toContain('Сделал X')
+    expect(items[1]!.querySelector('[aria-label="Изменить комментарий"]')).toBeNull()
+    expect(items[1]!.querySelector('[aria-label="Удалить комментарий"]')).not.toBeNull()
+  })
+
   it('удаление комментария — с подтверждением; последний убран — поле уходит (comments: null)', async () => {
     const save = vi.fn<SaveFn>(async () => {})
     const one = { ...project, tasks: [{ ...project.tasks[0]!, comments: [project.tasks[0]!.comments![0]!] }, project.tasks[1]!] }
