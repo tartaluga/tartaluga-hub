@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { resetGitHubAppCaches } from '../githubApp'
-import { COMMIT_BODY_LIMIT, COMMIT_IMAGE_LIMIT, COMMIT_LIMIT } from '../write'
+import { COMMIT_BODY_LIMIT, COMMIT_IMAGE_LIMIT, COMMIT_LIMIT, JSON_LIMIT } from '../write'
 import { jsonResponse, mutation, on, ORIGIN, setup, type Handler } from './helpers'
 
 const example = (name: string) => readFileSync(new URL(`../../schema/examples/valid/${name}`, import.meta.url), 'utf8')
@@ -61,9 +61,19 @@ describe('PUT /api/file', () => {
   it('не JSON — 415, слишком большой — 413, чужой Origin — 403', async () => {
     const { cookie, send } = await setup(putOk)
     expect((await send(mutation('PUT', '/api/file', cookie, 'x', { 'Content-Type': 'text/plain' }))).status).toBe(415)
-    const huge = JSON.stringify({ path: 'projects/tartaluga-hub.json', text: 'x'.repeat(2 * 1024 * 1024 + 10) })
+    const huge = JSON.stringify({ path: 'projects/tartaluga-hub.json', text: 'x'.repeat(JSON_LIMIT + 10) })
     expect((await send(mutation('PUT', '/api/file', cookie, huge))).status).toBe(413)
     expect((await send(mutation('PUT', '/api/file', cookie, { path: 'settings.json' }, { Origin: 'https://evil.example' }))).status).toBe(403)
+  })
+
+  it('файл данных у предела: 4 МБ проходит, больше JSON_LIMIT — 413', async () => {
+    const { cookie, send } = await setup(putOk)
+    const withLog = (bytes: number) => {
+      const p = JSON.parse(PROJECT)
+      return JSON.stringify({ ...p, unknownBlob: 'я'.repeat(bytes / 2) })
+    }
+    expect((await send(mutation('PUT', '/api/file', cookie, { path: 'projects/tartaluga-hub.json', text: withLog(4 * 1024 * 1024) }))).status).toBe(200)
+    expect((await send(mutation('PUT', '/api/file', cookie, { path: 'projects/tartaluga-hub.json', text: withLog(JSON_LIMIT + 2) }))).status).toBe(413)
   })
 })
 

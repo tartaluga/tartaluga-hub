@@ -10,14 +10,15 @@ import { HttpError, json, readJson } from './http'
 import { assertDataPath, assertSha, branchParam, isBranchName, isDataPath, MAIN, STATUS, writableBranch } from './rules'
 import { isFresh, type Session } from './sessions'
 
-const JSON_LIMIT = 1024 * 1024 // файл данных — до 1 МБ
+export const JSON_LIMIT = 5 * 1024 * 1024 // файл данных — до 5 МБ (ADR-016)
 const IMAGE_LIMIT = 2 * 1024 * 1024 // обложка — до 2 МБ
 export const COMMIT_LIMIT = 100 // файлов в одном коммите (клиент: src/app/session.ts)
-// Тело запроса коммита: до COMMIT_LIMIT JSON обычного размера (десятки КБ) и обложка в base64 (2 МБ → ~2,7 МБ).
+// Тело запроса коммита: до COMMIT_LIMIT JSON обычного размера (десятки КБ) и обложка в base64 (2 МБ → ~2,7 МБ);
+// влезает и проект на пределе JSON_LIMIT вместе с обложкой (5 + 2,7 МБ).
 // Картинки уходят в GitHub отдельным запросом каждая, а у Workers Free лимит 50 подзапросов на запрос.
 // Текстовые файлы идут в одном запросе дерева, их число на подзапросы не влияет.
 export const COMMIT_IMAGE_LIMIT = 20
-export const COMMIT_BODY_LIMIT = 8 * 1024 * 1024
+export const COMMIT_BODY_LIMIT = 12 * 1024 * 1024
 const MERGE_FILES_LIMIT = 300 // больше compare API не отдаёт — такое слияние делаем руками на GitHub
 
 type F = typeof fetch | undefined
@@ -27,7 +28,7 @@ type F = typeof fetch | undefined
 /** Текст файла данных, проверенный схемой. Файл с незнакомыми полями проходит (они сохраняются как есть). */
 function validatedText(path: string, text: unknown): string {
   if (typeof text !== 'string') throw new HttpError(400, 'bad_request', `${path}: нет текста файла`)
-  if (new TextEncoder().encode(text).byteLength > JSON_LIMIT) throw new HttpError(413, 'payload_too_large', `${path}: файл больше 1 МБ`)
+  if (new TextEncoder().encode(text).byteLength > JSON_LIMIT) throw new HttpError(413, 'payload_too_large', `${path}: файл больше 5 МБ`)
   const parsed = parseFile(path, '', text)
   if (!parsed.ok) throw new HttpError(422, 'validation', `${path}: ${parsed.error}`)
   if (parsed.readOnly) throw new HttpError(422, 'validation', `${path}: ${parsed.reason}`)

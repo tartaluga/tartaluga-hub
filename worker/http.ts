@@ -93,7 +93,7 @@ export function assertSameOriginMutation(request: Request, appOrigin: string): v
   }
 }
 
-/** Тело JSON с пределом размера (ADR-007: JSON до 1 МБ, с картинкой в base64 — чуть больше). */
+/** Тело JSON с пределом размера (ADR-007, ADR-016: JSON до 5 МБ, с картинкой в base64 — чуть больше). */
 export async function readJson<T>(request: Request, limitBytes: number): Promise<T> {
   if (!(request.headers.get('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
     throw new HttpError(415, 'bad_request', 'Ожидается application/json')
