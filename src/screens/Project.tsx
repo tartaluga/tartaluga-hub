@@ -1,7 +1,7 @@
 // Карточка проекта с правкой на месте (C4). Каждая правка — один коммит; правки, сделанные, пока идёт запись,
 // склеиваются в следующий (session.saveProject). До ответа сервера на экране уже новое значение; при ошибке оно
 // откатывается, а причина видна рядом с полем.
-import { lazy, Suspense, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import {
   ArrowLeft,
@@ -21,43 +21,35 @@ import {
   X,
   type Icon,
 } from '@phosphor-icons/react'
-import { errorText, useSession } from '../app/session'
+import { errorText } from '../app/session'
+import { useProjectEditing, type Save } from '../app/useProjectEditing'
 import { Cover } from '../components/Cover'
 import { CoverEditor } from '../components/CoverEditor'
 import { ownCoverPath } from '../lib/coverImage'
 import { InlineText } from '../components/InlineText'
-import { activityText, buildLibrary, listSearchFromState, STATUS_LABEL, type Status } from '../data/projects'
+import { activityText, listSearchFromState, STATUS_LABEL, type Status } from '../data/projects'
 import { NEXT_STEP_MAX, TITLE_MAX } from '../data/newProject'
 import { deleteProject } from '../data/ideas'
 import {
-  applyEdit,
   DESCRIPTION_MAX,
-  EditConflict,
   LINK_KIND_LABEL,
   LINK_KINDS,
   LINK_LABEL_MAX,
   LINK_PLACEHOLDER,
   linkHref,
   linkText,
-  mergePatch,
   newLink,
-  normalizePatch,
-  patchError,
-  settledPatch,
   STACK_ITEM_MAX,
   vscodeHref,
   type LinkKind,
   type ProjectPatch,
 } from '../data/editProject'
-import type { Link as ProjectLink, Project as ProjectData } from '../schema/types'
+import type { Link as ProjectLink } from '../schema/types'
 import { ApiError } from '../lib/api'
-import { normalizeProject } from '../data/normalize'
-import type { WithUnknown } from '../data/model'
 import { ProjectTasks } from '../components/ProjectTasks'
 import { CopyContext } from '../components/CopyContext'
 import { restoredDraft, useDraftText } from '../lib/drafts'
 import { ProjectLog } from './ProjectLog'
-import { useWidgets } from '../app/widgets'
 import { ProjectWidgets } from '../components/Widgets'
 import css from './Project.module.css'
 
@@ -67,8 +59,6 @@ const Markdown = lazy(() => import('../components/Markdown').then((m) => ({ defa
 const STATUSES: Status[] = ['idea', 'active', 'paused', 'done', 'archived']
 
 const LINK_ICON: Record<string, Icon> = { folder: Folder, repo: GithubLogo, site: Globe, local: HardDrives, doc: FileText }
-
-type Save = (patch: ProjectPatch) => Promise<string | null>
 
 export function Project() {
   const { slug = '' } = useParams()
@@ -80,17 +70,9 @@ function ProjectCard({ slug }: { slug: string }) {
   const navigate = useNavigate()
   // «Проекты» возвращают на тот фильтр списка, с которого открыли карточку.
   const back = `/projects${listSearchFromState(useLocation().state)}`
-  const files = useSession((s) => s.files)
-  const sync = useSession((s) => s.sync)
-  const saveProject = useSession((s) => s.saveProject)
-  const commits = useWidgets((s) => s.commits)
-  const lib = useMemo(() => buildLibrary(files, new Date(), commits), [files, commits])
-  const p = lib.projects.find((x) => x.data.slug === slug)
-  const broken = lib.broken.find((b) => b.path === `projects/${slug}.json`)
+  const { lib, p, d, broken, sync, save, ro } = useProjectEditing(slug)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Правки, отправленные, но ещё не подтверждённые сервером: показываем их сразу.
-  const [pending, setPending] = useState<ProjectPatch>({})
 
   async function remove(title: string) {
     const ok = window.confirm(
@@ -108,26 +90,7 @@ function ProjectCard({ slug }: { slug: string }) {
     }
   }
 
-  const save: Save = async (raw) => {
-    const patch = normalizePatch(raw)
-    const invalid = patchError(patch)
-    if (invalid) return invalid
-    setPending((cur) => mergePatch(cur, patch))
-    try {
-      await saveProject(slug, patch)
-      return null
-    } catch (e) {
-      if (e instanceof EditConflict) return e.message
-      if (e instanceof ApiError && e.status === 0) return 'Нет связи с сервером хаба — правка не сохранена. Попробуй, когда появится сеть.'
-      if (e instanceof ApiError && e.status === 409) return 'Файл снова изменился в другом месте. Показаны свежие данные — внеси правку ещё раз.'
-      return errorText(e)
-    } finally {
-      // Убираем только свои значения: если поле успели поправить ещё раз, его новое значение остаётся.
-      setPending((cur) => settledPatch(cur, patch))
-    }
-  }
-
-  if (!p) {
+  if (!p || !d) {
     return (
       <section className={css.page}>
         <Link to={back} className={css.back}>
@@ -151,11 +114,6 @@ function ProjectCard({ slug }: { slug: string }) {
     )
   }
 
-  // Неподтверждённые правки показываем так, как они будут записаны: originalDue и прочие инварианты v2
-  // ставит тот же normalizeProject, что и перед записью, — «перенесено с …» видно сразу.
-  const shown = p.data as WithUnknown<ProjectData>
-  const d = normalizeProject(shown, applyEdit(shown, pending))
-  const ro = p.readOnly
   return (
     <section className={css.page}>
       <div className={css.top}>
@@ -198,14 +156,14 @@ function ProjectCard({ slug }: { slug: string }) {
 
       <div className={css.body}>
         <div className={css.main}>
-          <ProjectTasks tasks={d.tasks ?? []} milestones={d.milestones ?? []} readOnly={ro} save={save} draftKey={`project:${d.slug}`} />
-          <ProjectLog slug={d.slug} log={d.log ?? []} readOnly={ro} save={save} />
+          <ProjectTasks slug={d.slug} tasks={d.tasks ?? []} milestones={d.milestones ?? []} readOnly={ro} save={save} draftKey={`project:${d.slug}`} />
+          <ProjectLog slug={d.slug} log={d.log ?? []} tasks={d.tasks ?? []} readOnly={ro} save={save} />
         </div>
         <aside className={css.aside}>
           <ProjectWidgets slug={d.slug} />
           <Stack slug={d.slug} items={d.stack ?? []} readOnly={ro} save={save} />
           <Tags ids={d.tags ?? []} known={lib.tags} settingsProblem={lib.settingsProblem} readOnly={ro} save={save} />
-          <Links slug={d.slug} links={d.links ?? []} readOnly={ro} save={save} />
+          <LinksEditor draftKey={`project:${d.slug}`} links={d.links ?? []} readOnly={ro} commit={(links) => save({ links })} />
         </aside>
       </div>
 
@@ -415,10 +373,22 @@ function Tags({ ids, known, settingsProblem, readOnly, save }: { ids: string[]; 
   )
 }
 
-function Links({ slug, links, readOnly, save }: { slug: string; links: ProjectLink[]; readOnly: boolean; save: Save }) {
-  const { run, alert } = useAction(save)
-  const [value, setValue] = useDraftText(`project:${slug}:link`, 'Новая ссылка: адрес')
-  const [label, setLabel] = useDraftText(`project:${slug}:link-label`, 'Новая ссылка: подпись')
+/** Ссылки проекта или задачи: commit получает новый список целиком; draftKey — префикс ключей черновиков формы. */
+export function LinksEditor({ draftKey, links, readOnly, commit }: { draftKey: string; links: ProjectLink[]; readOnly: boolean; commit(next: ProjectLink[]): Promise<string | null> }) {
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const run = async (next: ProjectLink[]) => {
+    setSaveError(null)
+    const err = await commit(next)
+    setSaveError(err)
+    return err
+  }
+  const alert = saveError && (
+    <p className={css.error} role="alert">
+      {saveError}
+    </p>
+  )
+  const [value, setValue] = useDraftText(`${draftKey}:link`, 'Новая ссылка: адрес')
+  const [label, setLabel] = useDraftText(`${draftKey}:link-label`, 'Новая ссылка: подпись')
   const [adding, setAdding] = useState(() => !readOnly && (value !== '' || label !== ''))
   const [kind, setKind] = useState<LinkKind>('site')
   const [formError, setFormError] = useState<string | null>(null)
@@ -429,7 +399,7 @@ function Links({ slug, links, readOnly, save }: { slug: string; links: ProjectLi
     const r = newLink(kind, value, label)
     if (!r.ok) return setFormError(r.error)
     setFormError(null)
-    if (!(await run({ links: [...links, r.link] }))) {
+    if (!(await run([...links, r.link]))) {
       setValue('')
       setLabel('')
       setAdding(false)
@@ -486,7 +456,7 @@ function Links({ slug, links, readOnly, save }: { slug: string; links: ProjectLi
                   </>
                 )}
                 {!readOnly && (
-                  <button type="button" className={css.iconButton} aria-label={`Убрать ссылку ${text}`} onClick={() => void run({ links: links.filter((x) => x.id !== l.id) })}>
+                  <button type="button" className={css.iconButton} aria-label={`Убрать ссылку ${text}`} onClick={() => void run(links.filter((x) => x.id !== l.id))}>
                     <X size={16} aria-hidden />
                   </button>
                 )}

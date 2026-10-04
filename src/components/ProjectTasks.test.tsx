@@ -87,7 +87,10 @@ describe('ProjectTasks', () => {
   it('отметка «сделано» сохраняет done и doneAt', async () => {
     await render(tasks)
     await click(byLabel('Сделано: Макет'))
-    expect(save).toHaveBeenCalledWith({ taskSet: [{ id: B, done: true, doneAt: expect.any(String) }] })
+    expect(save).toHaveBeenCalledWith({
+      taskSet: [{ id: B, done: true, doneAt: expect.any(String), inProgress: null, cancelled: null }],
+      logAdd: [{ id: expect.any(String), at: expect.any(String), kind: 'task', taskId: B, text: '«Макет»: готово' }],
+    })
   })
 
   it('добавить задачу со сроком: поля очищаются; при ошибке ввод возвращается и видна причина', async () => {
@@ -115,7 +118,10 @@ describe('ProjectTasks', () => {
     expect(field.value).toBe('2026-09-22')
     await type(field, '2026-09-30')
     await submit(field.form!)
-    expect(save).toHaveBeenCalledWith({ taskSet: [{ id: B, due: '2026-09-30' }] })
+    expect(save).toHaveBeenCalledWith({
+      taskSet: [{ id: B, due: '2026-09-30' }],
+      logAdd: [{ id: expect.any(String), at: expect.any(String), kind: 'task', taskId: B, text: '«Макет»: срок 22.09 → 30.09' }],
+    })
     expect(byLabel('Срок задачи')).toBeNull()
   })
 
@@ -129,7 +135,10 @@ describe('ProjectTasks', () => {
     expect(save).not.toHaveBeenCalled()
     await click(byLabel('Срок: −1 дн · 22.09. Изменить срок'))
     await click(button('Без срока'))
-    expect(save).toHaveBeenCalledWith({ taskSet: [{ id: B, due: null }] })
+    expect(save).toHaveBeenCalledWith({
+      taskSet: [{ id: B, due: null }],
+      logAdd: [{ id: expect.any(String), at: expect.any(String), kind: 'task', taskId: B, text: '«Макет»: срок снят (было 22.09)' }],
+    })
   })
 
   it('задать срок задаче без срока: кнопки «Без срока» нет', async () => {
@@ -138,7 +147,10 @@ describe('ProjectTasks', () => {
     expect(host.textContent).not.toContain('Без срока')
     await type(byLabel('Срок задачи'), '2026-10-01')
     await click(button('Сохранить'))
-    expect(save).toHaveBeenCalledWith({ taskSet: [{ id: A, due: '2026-10-01' }] })
+    expect(save).toHaveBeenCalledWith({
+      taskSet: [{ id: A, due: '2026-10-01' }],
+      logAdd: [{ id: expect.any(String), at: expect.any(String), kind: 'task', taskId: A, text: '«Без даты»: срок 01.10' }],
+    })
   })
 
   it('удаление — после подтверждения; отказ ничего не пишет', async () => {
@@ -301,6 +313,36 @@ describe('ProjectTasks: вехи', () => {
     expect(host.querySelectorAll('button').length).toBe(
       // Только отметки задач (они выключены) и названия InlineText в режиме чтения — не кнопки.
       host.querySelectorAll('button[role="checkbox"]').length,
+    )
+  })
+})
+
+describe('ProjectTasks: статусы и подробности (ADR-016)', () => {
+  it('«в работе» с меткой, отменённая серая и вне счётчика, значки описания, ссылок и комментариев', async () => {
+    await render([
+      { id: A, title: 'В процессе', done: false, inProgress: true, description: 'текст', links: [{ id: 'L', kind: 'site', value: 'https://a.b' }], comments: [{ id: 'C', at: 'x', text: 'y' }] },
+      { id: B, title: 'Не нужно', done: true, cancelled: true },
+      { id: 'C', title: 'Сделано', done: true },
+    ])
+    expect(host.querySelector('h2')?.textContent).toBe('Задачи · 1/2')
+    expect(host.textContent).toContain('в работе')
+    expect(host.textContent).toContain('отменена')
+    const rows = host.querySelectorAll('li')
+    expect(rows[1]!.hasAttribute('data-cancelled')).toBe(true)
+    expect(rows[0]!.querySelector('[aria-label="Есть описание"]')).not.toBeNull()
+    expect(rows[0]!.querySelector('[aria-label="Есть ссылки"]')).not.toBeNull()
+    expect(rows[0]!.querySelector('[aria-label="Комментариев: 1"]')).not.toBeNull()
+    expect(rows[2]!.querySelector('[aria-label="Есть описание"]')).toBeNull()
+  })
+
+  it('у отменённой задачи галочка возвращает её к выполнению и снимает отмену', async () => {
+    await render([{ id: B, title: 'Не нужно', done: true, cancelled: true }])
+    await click(byLabel('Сделано: Не нужно'))
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskSet: [{ id: B, done: false, doneAt: null, inProgress: null, cancelled: null }],
+        logAdd: [expect.objectContaining({ text: '«Не нужно»: снова к выполнению' })],
+      }),
     )
   })
 })

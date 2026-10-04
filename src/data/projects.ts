@@ -137,7 +137,8 @@ export function buildLibrary(files: CachedFile[], today: Date, commits: Readonly
   }
   // Проекты считаем после settings.json: порог тишины берётся оттуда, а порядок файлов в кэше любой.
   for (const { path, data, readOnly } of parsedProjects) {
-    const tasks = data.tasks ?? []
+    // Отменённые задачи (done + cancelled) вне прогресса: ни в числителе, ни в знаменателе (ADR-016).
+    const tasks = (data.tasks ?? []).filter((t) => !(t.done && t.cancelled))
     const done = tasks.filter((t) => t.done).length
     projects.push({
       path,

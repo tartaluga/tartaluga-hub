@@ -3,6 +3,7 @@ import { Shell } from './Shell'
 import { Today } from '../screens/Today'
 import { Projects } from '../screens/Projects'
 import { Project } from '../screens/Project'
+import { TaskPage } from '../screens/TaskPage'
 import { Ideas } from '../screens/Ideas'
 import { Stats } from '../screens/Stats'
 import { NotFound } from '../screens/NotFound'
@@ -18,6 +19,7 @@ export const routes: RouteObject[] = [
       { index: true, element: <Today /> },
       { path: 'projects', element: <Projects /> },
       { path: 'projects/:slug', element: <Project /> },
+      { path: 'projects/:slug/tasks/:taskId', element: <TaskPage /> },
       { path: 'ideas', element: <Ideas /> },
       { path: 'stats', element: <Stats /> },
       { path: 'conflicts', element: <Conflicts /> },

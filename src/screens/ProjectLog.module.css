@@ -147,6 +147,21 @@
   color: var(--accent);
 }
 
+.taskLink {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+}
+
+.taskLink:hover {
+  text-decoration-color: var(--accent);
+}
+
+.kind[data-kind='task'] {
+  color: var(--accent);
+}
+
 .kind[data-kind='thought'] {
   color: var(--status-paused);
 }

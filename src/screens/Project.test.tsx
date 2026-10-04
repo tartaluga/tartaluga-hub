@@ -72,7 +72,10 @@ describe('карточка проекта: задачи', () => {
     await setDate(field, '2099-09-28')
     await act(async () => field.form!.requestSubmit())
 
-    expect(saveProject).toHaveBeenCalledWith('bot', { taskSet: [{ id: A, due: '2099-09-28' }] })
+    expect(saveProject).toHaveBeenCalledWith('bot', {
+      taskSet: [{ id: A, due: '2099-09-28' }],
+      logAdd: [expect.objectContaining({ kind: 'task', taskId: A, text: '«Сдать главу»: срок 21.09.2099 → 28.09.2099' })],
+    })
     // Сервер ещё не ответил, а на экране уже прежний срок как «перенесено с»; форма срока ждёт ответа.
     expect(host.textContent).toContain('перенесено с 21.09.2099')
     await act(async () => finish())

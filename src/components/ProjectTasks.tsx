@@ -3,7 +3,8 @@
 // (originalDue) ведёт normalizeProject при записи — здесь он только показывается: «перенесено с 21.09».
 // Вехи идут в порядке файла, задачи без вехи (или с id вехи, которой нет) — в группе «Без вехи» в конце.
 import { useState, type FormEvent, type KeyboardEvent } from 'react'
-import { Check, Flag, Plus, X } from '@phosphor-icons/react'
+import { Link } from 'react-router'
+import { ChatText, Check, Flag, LinkSimple, Plus, TextAlignLeft, X } from '@phosphor-icons/react'
 import {
   MILESTONE_TITLE_MAX,
   newMilestone,
@@ -11,15 +12,17 @@ import {
   TASK_TITLE_MAX,
   taskDue,
   taskProgress,
-  toggleTask,
   type ProjectPatch,
 } from '../data/editProject'
+import { setTaskDue, toggleTaskDone } from '../data/taskEdit'
 import type { Milestone, Task } from '../schema/types'
 import { InlineText } from './InlineText'
 import { restoredDraft, useDraft } from '../lib/drafts'
 import css from './ProjectTasks.module.css'
 
 interface Props {
+  /** Проект: с ним название задачи — ссылка на страницу задачи (ADR-016 п. 6); без него — просто текст. */
+  slug?: string
   tasks: Task[]
   milestones?: Milestone[]
   readOnly: boolean
@@ -53,7 +56,7 @@ const milestoneKeys = (prefix: string | undefined) =>
 /** Больше задач — полоса вехи сплошная с заливкой, а не по сегменту на задачу. */
 export const SEGMENTS_MAX = 20
 
-export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = new Date(), draftKey }: Props) {
+export function ProjectTasks({ slug, tasks, milestones = [], readOnly, save, today = new Date(), draftKey }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [addingMilestone, setAddingMilestone] = useState(() => {
     const k = milestoneKeys(draftKey)
@@ -76,7 +79,7 @@ export function ProjectTasks({ tasks, milestones = [], readOnly, save, today = n
   const list = (items: Task[]) => (
     <ul className={css.list}>
       {items.map((t) => (
-        <TaskRow key={t.id} task={t} today={today} readOnly={readOnly} milestones={milestones} run={run} onRemove={() => void remove(t)} />
+        <TaskRow key={t.id} slug={slug} task={t} today={today} readOnly={readOnly} milestones={milestones} run={run} onRemove={() => void remove(t)} />
       ))}
     </ul>
   )
@@ -332,6 +335,7 @@ function Progress({ done, total }: { done: number; total: number }) {
 }
 
 interface RowProps {
+  slug?: string
   task: Task
   today: Date
   readOnly: boolean
@@ -340,12 +344,16 @@ interface RowProps {
   onRemove(): void
 }
 
-function TaskRow({ task, today, readOnly, milestones, run, onRemove }: RowProps) {
+function TaskRow({ slug, task, today, readOnly, milestones, run, onRemove }: RowProps) {
   const [editingDue, setEditingDue] = useState(false)
   const info = taskDue(task, today)
   const known = milestones.some((m) => m.id === task.milestoneId)
+  const cancelled = task.done && task.cancelled === true
+  const doing = !task.done && task.inProgress === true
+  const comments = task.comments?.length ?? 0
+  const title = task.title || 'Без названия'
   return (
-    <li className={css.row} data-done={task.done || undefined} data-overdue={info?.overdue || undefined} data-today={info?.today || undefined}>
+    <li className={css.row} data-done={task.done || undefined} data-cancelled={cancelled || undefined} data-doing={doing || undefined} data-overdue={info?.overdue || undefined} data-today={info?.today || undefined}>
       <button
         type="button"
         role="checkbox"
@@ -353,17 +361,43 @@ function TaskRow({ task, today, readOnly, milestones, run, onRemove }: RowProps)
         aria-label={`Сделано: ${task.title}`}
         className={css.check}
         disabled={readOnly}
-        onClick={() => void run({ taskSet: [toggleTask(task.id, !task.done)] })}
+        onClick={() => void run(toggleTaskDone(task))}
       >
-        {task.done && <Check size={14} weight="bold" aria-hidden />}
+        {task.done && (cancelled ? <X size={12} weight="bold" aria-hidden /> : <Check size={14} weight="bold" aria-hidden />)}
       </button>
       <div className={css.main}>
-        {/* Название задачи здесь не правится: правка будет карандашом на странице задачи. */}
-        <span className={css.taskTitle}>{task.title || 'Без названия'}</span>
+        {/* Название здесь не правится: карандаш — на странице задачи, куда ведёт название. */}
+        {slug ? (
+          <Link to={`/projects/${slug}/tasks/${task.id}`} className={css.taskTitle} data-link>
+            {title}
+          </Link>
+        ) : (
+          <span className={css.taskTitle}>{title}</span>
+        )}
+        {(doing || cancelled || task.description || !!task.links?.length || comments > 0) && (
+          <span className={css.meta}>
+            {doing && <span className={css.badge}>в работе</span>}
+            {cancelled && (
+              <span className={css.badge} data-kind="cancelled">
+                отменена
+              </span>
+            )}
+            {task.description && <TextAlignLeft size={13} aria-label="Есть описание" role="img" />}
+            {!!task.links?.length && <LinkSimple size={13} aria-label="Есть ссылки" role="img" />}
+            {comments > 0 && (
+              <span className={css.commentCount} role="img" aria-label={`Комментариев: ${comments}`}>
+                <ChatText size={13} aria-hidden /> {comments}
+              </span>
+            )}
+          </span>
+        )}
         {info?.movedFrom && <span className={css.moved}>перенесено с {info.movedFrom}</span>}
       </div>
       {editingDue ? (
-        <DueForm due={task.due} label="Срок задачи" onCommit={(due) => run({ taskSet: [{ id: task.id, due }] })} onClose={() => setEditingDue(false)} />
+        <DueForm due={task.due} label="Срок задачи" onCommit={(due) => {
+            const patch = setTaskDue(task, due)
+            return patch ? run(patch) : Promise.resolve(null)
+          }} onClose={() => setEditingDue(false)} />
       ) : readOnly ? (
         info && <span className={css.due}>{info.text}</span>
       ) : (
@@ -408,7 +442,7 @@ function TaskRow({ task, today, readOnly, milestones, run, onRemove }: RowProps)
 
 /** Правка срока: дата и «Сохранить» (Enter), «Без срока», Esc — отмена. Сохраняем по кнопке, а не на каждое изменение
  *  поля даты: при наборе с клавиатуры поле проходит через промежуточные даты. */
-function DueForm({ due, label, onCommit, onClose }: { due: string | undefined; label: string; onCommit(due: string | null): Promise<string | null>; onClose(): void }) {
+export function DueForm({ due, label, onCommit, onClose }: { due: string | undefined; label: string; onCommit(due: string | null): Promise<string | null>; onClose(): void }) {
   const [value, setValue] = useState(due ?? '')
   const [busy, setBusy] = useState(false)
 

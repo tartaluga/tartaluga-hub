@@ -338,7 +338,7 @@ describe('задачи', () => {
     const cur = mergePatch(sent, { taskSet: [{ id: A, due: '2026-10-01' }, toggleTask(t.id, true, NOW)] })
     expect(settledPatch(cur, sent)).toEqual({
       taskSet: [
-        { id: t.id, title: 'Релиз', done: true, doneAt: expect.stringMatching(/^2026-09-23T15/), due: null, milestoneId: null },
+        { id: t.id, title: 'Релиз', done: true, doneAt: expect.stringMatching(/^2026-09-23T15/), due: null, milestoneId: null, description: null, inProgress: null, cancelled: null, links: null, comments: null },
         { id: A, due: '2026-10-01' },
       ],
     })

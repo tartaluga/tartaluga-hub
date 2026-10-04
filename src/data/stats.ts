@@ -71,7 +71,7 @@ export function logCount(projects: ProjectView[], r: Range): number {
 /** Задачи, закрытые за период. Закрытые без doneAt (правка мимо хаба) не датированы и не считаются. */
 export function tasksClosed(projects: ProjectView[], r: Range): number {
   let n = 0
-  for (const p of projects) for (const t of p.data.tasks ?? []) if (t.done && isIn(dayOf(t.doneAt), r)) n++
+  for (const p of projects) for (const t of p.data.tasks ?? []) if (t.done && !t.cancelled && isIn(dayOf(t.doneAt), r)) n++
   return n
 }
 
@@ -96,7 +96,9 @@ export const OUTCOME_LABEL: Record<Outcome, string> = { onTime: 'в срок', m
  * - открыта, срок перенесён и ещё не прошёл — перенесено (первый срок, но не позже сегодня);
  * - открыта, срок не переносился и не прошёл — ещё впереди.
  */
-export function taskOutcome(task: Pick<Task, 'done' | 'due' | 'originalDue' | 'doneAt'>, todayKey: string): { outcome: Outcome; day: string } | null {
+export function taskOutcome(task: Pick<Task, 'done' | 'due' | 'originalDue' | 'doneAt' | 'cancelled'>, todayKey: string): { outcome: Outcome; day: string } | null {
+  // Отменённая задача (done + cancelled) срока не держала и не срывала (ADR-016).
+  if (task.done && task.cancelled) return null
   const first = firstDue(task)
   if (!first) return null
   const due = task.due ?? first

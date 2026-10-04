@@ -1,7 +1,7 @@
 // Правка проекта на месте: нормализация полей, применение к файлу и слияние по полям при конфликте версий.
 // Чистые функции — сеть и очередь записей в session.ts. Незнакомые поля файла проходят насквозь (ADR-003).
 import { ulid } from 'ulid'
-import type { Link, LogEntry, Milestone, Project, Task } from '../schema/types'
+import type { Comment, Link, LogEntry, Milestone, Project, Task } from '../schema/types'
 import { nowIso, parseLocalDate } from './model'
 import { NEXT_STEP_MAX, TITLE_MAX } from './newProject'
 
@@ -50,6 +50,16 @@ export interface TaskChange {
   due?: string | null
   /** Перенести задачу в веху; null — задача без вехи. */
   milestoneId?: string | null
+  /** Подробности задачи (ADR-016); null или пустой текст — убрать поле. */
+  description?: string | null
+  /** «В работе» (только true; null — снять метку). */
+  inProgress?: true | null
+  /** «Отменена» (только true; null — снять метку). */
+  cancelled?: true | null
+  /** Ссылки задачи целиком; null или пустой список — убрать поле. */
+  links?: Link[] | null
+  /** Комментарии задачи целиком; null или пустой список — убрать поле. */
+  comments?: Comment[] | null
 }
 
 /** Операции над элементами массивов: накладываются по id и с чужими правками других элементов не конфликтуют. */
@@ -68,6 +78,10 @@ export const LINK_LABEL_MAX = 80
 export const LOG_TEXT_MAX = 2000
 export const TASK_TITLE_MAX = 200
 export const MILESTONE_TITLE_MAX = 120
+export const TASK_DESCRIPTION_MAX = 10_000
+export const COMMENT_MAX = 2000
+/** Две записи лога о задаче в пределах этого времени — одно действие и его отмена (см. mergePatch). */
+export const TASK_LOG_REPLACE_MS = 5000
 
 const oneLine = (s: string) => s.trim().replace(/\s+/g, ' ')
 
@@ -95,7 +109,7 @@ export function normalizePatch(patch: ProjectPatch): ProjectPatch {
   if (patch.logAdd?.length) out.logAdd = patch.logAdd.map((e) => ({ ...e, text: e.text.replace(/\r\n?/g, '\n').trim() }))
   if (patch.logRemove?.length) out.logRemove = [...new Set(patch.logRemove)]
   if (patch.taskAdd?.length) out.taskAdd = patch.taskAdd.map((t) => ({ ...t, title: oneLine(t.title) }))
-  if (patch.taskSet?.length) out.taskSet = patch.taskSet.map((c) => (c.title === undefined ? c : { ...c, title: oneLine(c.title) }))
+  if (patch.taskSet?.length) out.taskSet = patch.taskSet.map(normalizeTaskChange)
   if (patch.taskRemove?.length) out.taskRemove = [...new Set(patch.taskRemove)]
   if (patch.milestoneAdd?.length) out.milestoneAdd = patch.milestoneAdd.map((m) => ({ ...m, title: oneLine(m.title) }))
   if (patch.milestoneSet?.length) out.milestoneSet = patch.milestoneSet.map((c) => (c.title === undefined ? c : { ...c, title: oneLine(c.title) }))
@@ -103,11 +117,20 @@ export function normalizePatch(patch: ProjectPatch): ProjectPatch {
   return out
 }
 
+function normalizeTaskChange(c: TaskChange): TaskChange {
+  const out: TaskChange = { ...c }
+  if (c.title !== undefined) out.title = oneLine(c.title)
+  if (c.description !== undefined) out.description = c.description?.replace(/\r\n?/g, '\n').trim() || null
+  if (c.links !== undefined) out.links = c.links?.length ? c.links : null
+  if (c.comments !== undefined) out.comments = c.comments?.length ? c.comments : null
+  return out
+}
+
 /** Две правки одного файла в одну: поля — последнее значение, записи лога и операции с задачами — копятся. */
 export function mergePatch(a: ProjectPatch, b: ProjectPatch): ProjectPatch {
   const out: ProjectPatch = mergeTasks(a, b)
   const removed = new Set([...(a.logRemove ?? []), ...(b.logRemove ?? [])])
-  const adds = [...(a.logAdd ?? []), ...(b.logAdd ?? [])]
+  const adds = replaceTaskLog([...(a.logAdd ?? []), ...(b.logAdd ?? [])])
   const pending = new Set(adds.map((e) => e.id))
   // Запись, которую добавили и тут же убрали до отправки, в файл не попадает вовсе.
   const logAdd = adds.filter((e) => !removed.has(e.id))
@@ -116,6 +139,28 @@ export function mergePatch(a: ProjectPatch, b: ProjectPatch): ProjectPatch {
   delete out.logRemove
   if (logAdd.length) out.logAdd = logAdd
   if (logRemove.length) out.logRemove = logRemove
+  return out
+}
+
+/** О чём запись лога задачи: смена срока или смена статуса (текст записи строит taskEdit.ts). */
+const taskLogTopic = (e: LogEntry) => (e.text.includes('»: срок ') ? 'due' : 'status')
+
+/**
+ * Отмена своей правки в течение нескольких секунд (поставил галочку и сразу снял) не оставляет двух записей:
+ * новая запись о той же задаче и о том же (статус или срок) заменяет непосланную прежнюю (ADR-016 п. 3).
+ */
+function replaceTaskLog(entries: LogEntry[]): LogEntry[] {
+  const out: LogEntry[] = []
+  for (const e of entries) {
+    if (e.kind === 'task' && e.taskId) {
+      const at = Date.parse(e.at)
+      const i = out.findIndex(
+        (x) => x.kind === 'task' && x.taskId === e.taskId && taskLogTopic(x) === taskLogTopic(e) && Math.abs(at - Date.parse(x.at)) <= TASK_LOG_REPLACE_MS,
+      )
+      if (i >= 0) out.splice(i, 1)
+    }
+    out.push(e)
+  }
   return out
 }
 
@@ -232,6 +277,11 @@ export function settledPatch(cur: ProjectPatch, done: ProjectPatch): ProjectPatc
     doneAt: t.doneAt ?? null,
     due: t.due ?? null,
     milestoneId: t.milestoneId ?? null,
+    description: t.description ?? null,
+    inProgress: t.inProgress ?? null,
+    cancelled: t.cancelled ?? null,
+    links: t.links ?? null,
+    comments: t.comments ?? null,
   }))
   const ms = settleItems<Milestone, MilestoneChange>(
     next.milestoneAdd,
@@ -300,6 +350,13 @@ export function patchError(patch: ProjectPatch): string | null {
   for (const t of [...(patch.taskAdd ?? []), ...(patch.taskSet ?? [])]) {
     const err = taskError(t)
     if (err) return err
+  }
+  for (const t of [...(patch.taskAdd ?? []), ...(patch.taskSet ?? [])]) {
+    if (t.description && t.description.length > TASK_DESCRIPTION_MAX) return `Описание задачи длиннее ${TASK_DESCRIPTION_MAX} символов`
+    for (const c of t.comments ?? []) {
+      if (!c.text.trim()) return 'Пустой комментарий не сохранить'
+      if (c.text.length > COMMENT_MAX) return `Комментарий длиннее ${COMMENT_MAX} символов`
+    }
   }
   for (const m of [...(patch.milestoneAdd ?? []), ...(patch.milestoneSet ?? [])]) {
     const err = milestoneError(m)
@@ -568,7 +625,7 @@ export type LogKind = (typeof LOG_KINDS)[number]
 export const LOG_KIND_LABEL: Record<LogKind, string> = { done: 'сделано', decision: 'решение', thought: 'мысль' }
 
 /** Подпись вида записи; незнакомый вид (список открытый, ADR-003) — просто «запись». */
-export const logKindLabel = (kind: string) => LOG_KIND_LABEL[kind as LogKind] ?? 'запись'
+export const logKindLabel = (kind: string) => (kind === 'task' ? 'задача' : (LOG_KIND_LABEL[kind as LogKind] ?? 'запись'))
 
 export function newLogEntry(kind: LogKind, text: string, now = new Date()): LogEntry {
   return { id: ulid(), at: nowIso(now), kind, text: text.replace(/\r\n?/g, '\n').trim() }
@@ -648,7 +705,8 @@ export function taskDue(task: Pick<Task, 'due' | 'originalDue' | 'done'>, today:
   return { text, overdue: !task.done && days < 0, today: !task.done && days === 0, movedFrom }
 }
 
-/** Сколько задач сделано из скольких — для заголовка «ЗАДАЧИ · 2/5». */
-export function taskProgress(tasks: Pick<Task, 'done'>[]): { done: number; total: number } {
-  return { done: tasks.filter((t) => t.done).length, total: tasks.length }
+/** Сколько задач сделано из скольких — для заголовка «ЗАДАЧИ · 2/5». Отменённые не считаются ни там, ни там (ADR-016). */
+export function taskProgress(tasks: Pick<Task, 'done' | 'cancelled'>[]): { done: number; total: number } {
+  const live = tasks.filter((t) => !(t.done && t.cancelled))
+  return { done: live.filter((t) => t.done).length, total: live.length }
 }

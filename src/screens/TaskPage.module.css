@@ -1,0 +1,269 @@
+/* Страница задачи (ADR-016 п. 6). Макета-страницы нет: макет v3/task-page.html рисует боковую панель, владелец
+   выбрал отдельную страницу — колонка той же ширины, что у карточки проекта, язык «1a Визор». */
+
+.page {
+  max-width: 760px;
+  gap: var(--space-4);
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font: 500 12px/1.3 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.crumbLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  letter-spacing: normal;
+  text-transform: none;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.crumbLink:hover {
+  color: var(--text);
+}
+
+.heading {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 34px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.heading[data-status='done'],
+.heading[data-status='cancelled'] {
+  color: var(--text-muted);
+}
+
+.props {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-block: 1px solid var(--line);
+}
+
+.prop {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+@media (max-width: 520px) {
+  .prop {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+}
+
+.k {
+  font: 500 12px/1.3 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: 15px;
+}
+
+.segment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.segment button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.segment button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.segment button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.segment button:disabled {
+  cursor: default;
+}
+
+.segment button:disabled:not([aria-pressed='true']) {
+  opacity: 0.5;
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+[data-task-status='todo'] .dot {
+  background: var(--status-idea);
+}
+[data-task-status='doing'] .dot {
+  background: var(--status-active);
+}
+[data-task-status='done'] .dot {
+  background: var(--status-done);
+}
+[data-task-status='cancelled'] .dot {
+  background: var(--status-archived);
+}
+
+.due {
+  font: 400 13px/1.4 var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.due[data-today] {
+  color: var(--accent);
+}
+
+.due[data-overdue] {
+  color: var(--magenta);
+}
+
+.moved {
+  font: 400 12px/1.4 var(--font-mono);
+  color: var(--status-paused);
+}
+
+.select {
+  min-height: 36px;
+  max-width: 100%;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+/* ---------- Комментарии ---------- */
+
+.feed {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comment {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.commentMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  font: 400 12px/1.4 var(--font-mono);
+  color: var(--text-faint);
+}
+
+.author {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.author[data-author='claude'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.commentActions {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.commentActions button {
+  width: 28px;
+  height: 28px;
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 56px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  resize: vertical;
+}
+
+.send {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+}
+
+.send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
