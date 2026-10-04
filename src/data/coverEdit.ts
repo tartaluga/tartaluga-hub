@@ -51,6 +51,7 @@ export function buildCoverChanges(slug: string, projectText: string, cover: NewC
  */
 export const saveCover = onlyWriter(async (slug: string, cover: NewCover | null): Promise<void> => {
   const branch = useSession.getState().branch
+  const epoch = deviceEpoch() // «Выйти» во время коммита: после стирания устройства в базу ничего не пишем
   const jsonPath = `projects/${slug}.json`
   if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new ApiError(0, 'network', OFFLINE_HINT)
   if (hasQueued(branch, jsonPath)) throw new ApiError(423, 'queue_pending', QUEUE_HINT)
@@ -84,11 +85,11 @@ export const saveCover = onlyWriter(async (slug: string, cover: NewCover | null)
     if (sha) {
       covers[p] = sha
       const type = cover.ext === 'webp' ? 'image/webp' : 'image/jpeg'
-      await putCoverIfCurrent(deviceEpoch(), { sha, type, bytes: new Blob([cover.bytes as BlobPart], { type }) }).catch(() => undefined)
+      await putCoverIfCurrent(epoch, { sha, type, bytes: new Blob([cover.bytes as BlobPart], { type }) }).catch(() => undefined)
     }
   }
   const t = useSession.getState().tree
   if (t && useSession.getState().branch === branch) useSession.setState({ tree: { ...t, covers } })
-  saveCoverIndex(branch, covers)
+  if (epoch === deviceEpoch()) saveCoverIndex(branch, covers)
   void useSession.getState().refresh()
 })

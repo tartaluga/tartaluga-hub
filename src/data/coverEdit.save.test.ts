@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   refresh: vi.fn(async () => undefined),
   put: vi.fn(async (..._a: unknown[]) => undefined),
   saveIndex: vi.fn(),
+  epoch: { value: 1 },
 }))
 vi.mock('../app/session', () => {
   const useSession = Object.assign(() => undefined, {
@@ -22,7 +23,7 @@ vi.mock('../app/session', () => {
     writeRemote: () => ({ commit: h.commit, putFile: vi.fn() }),
   }
 })
-vi.mock('../lib/localdb', () => ({ deviceEpoch: () => 1, putCoverIfCurrent: h.put, saveCoverIndex: h.saveIndex }))
+vi.mock('../lib/localdb', () => ({ deviceEpoch: () => h.epoch.value, putCoverIfCurrent: h.put, saveCoverIndex: h.saveIndex }))
 
 import { ApiError } from '../lib/api'
 import { saveCover } from './coverEdit'
@@ -33,6 +34,7 @@ const projText = JSON.stringify({ schemaVersion: 2, slug: 'bot', title: 'Бот'
 beforeEach(() => {
   vi.clearAllMocks()
   h.queued.value = false
+  h.epoch.value = 1
   Object.assign(h.state, {
     branch: 'main',
     refresh: h.refresh,
@@ -100,6 +102,15 @@ describe('saveCover', () => {
     h.commit.mockRejectedValue(new ApiError(503, 'upstream_unavailable', 'x'))
     await expect(saveCover('bot', webp)).rejects.toMatchObject({ status: 503 })
     expect(h.refresh).not.toHaveBeenCalled()
+  })
+  it('«Выйти» во время коммита: ни байты, ни индекс в базу не пишутся', async () => {
+    h.commit.mockImplementation(async () => {
+      h.epoch.value = 2
+      return { head: 'h2', shas: { 'covers/bot.webp': 'newsha', 'projects/bot.json': 'psha' } }
+    })
+    await saveCover('bot', webp)
+    expect(h.put).toHaveBeenCalledWith(1, expect.anything())
+    expect(h.saveIndex).not.toHaveBeenCalled()
   })
   it('сбой кэша обложки не ломает сохранение', async () => {
     h.put.mockRejectedValueOnce(new Error('quota'))
