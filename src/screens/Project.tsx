@@ -23,6 +23,8 @@ import {
 } from '@phosphor-icons/react'
 import { errorText, useSession } from '../app/session'
 import { Cover } from '../components/Cover'
+import { CoverEditor } from '../components/CoverEditor'
+import { ownCoverPath } from '../lib/coverImage'
 import { InlineText } from '../components/InlineText'
 import { activityText, buildLibrary, listSearchFromState, STATUS_LABEL, type Status } from '../data/projects'
 import { NEXT_STEP_MAX, TITLE_MAX } from '../data/newProject'
@@ -165,6 +167,7 @@ function ProjectCard({ slug }: { slug: string }) {
       <div className={css.cover} data-status={d.status} style={{ viewTransitionName: `cover-${d.slug}` }}>
         <Cover slug={d.slug} muted={d.status === 'paused' || d.status === 'done' || d.status === 'archived'} />
       </div>
+      {!ro && <CoverEditor slug={d.slug} hasOwn={ownCoverPath(d.slug, d.cover) !== null} />}
       <div className="eyebrow">
         {STATUS_LABEL[d.status as Status]} · {activityText(p.activityDays)}
       </div>
