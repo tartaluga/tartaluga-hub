@@ -76,4 +76,26 @@ describe('Today: пульс', () => {
     mockState.files = [{ ...project('a'), text: project('a').text.replace(/"log":\[.*\]/, '"log":[]') }]
     expect(render()).toContain('За сентябрь записей и коммитов нет</p>')
   })
+
+  it('мусорный status (commitsByDay не объект, отрицательные) не ломает экран', () => {
+    widgets.status = status(['x'])
+    expect(render()).toContain('1 запись за сентябрь</p>')
+    widgets.status = status({ '2026-09-22': -5, '2026-09-21': 1.5 })
+    expect(render()).toContain('1 запись за сентябрь</p>')
+  })
+
+  it('коммиты в будущем дне не попадают в подпись; подсказка клетки — «события»', () => {
+    widgets.status = status({ '2026-09-24': 9, '2026-09-23': 1 })
+    const html = render()
+    expect(html).toContain('1 запись и 1 коммит за сентябрь</p>')
+    expect(html).toContain('23.09 · 1 событие')
+    expect(html).toContain('20.09 · 1 событие')
+  })
+
+  it('без status и без записей — «записей в логе нет», слов про коммиты нет', () => {
+    mockState.files = [{ ...project('a'), text: project('a').text.replace(/"log":\[.*\]/, '"log":[]') }]
+    const html = render()
+    expect(html).toContain('За сентябрь записей в логе нет</p>')
+    expect(html).not.toContain('записей и коммитов нет')
+  })
 })

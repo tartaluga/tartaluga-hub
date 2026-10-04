@@ -76,3 +76,37 @@ describe('sumDays', () => {
     expect(sumDays(days, '2026-09-10', '2026-09-01')).toBe(0)
   })
 })
+
+describe('недоверенный status.json', () => {
+  it('commitsByDay не объект: массив, строка, число, null — пусто', () => {
+    for (const bad of [['2026-09-01'], 'x', 5, null, true]) {
+      expect(projectCommitDays(status({ a: repo('o/a', bad) }), 'a').size).toBe(0)
+    }
+  })
+  it('NaN, Infinity, null, объект как значение пропускаются', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': NaN, '2026-09-02': Infinity, '2026-09-03': null, '2026-09-04': {}, '2026-09-05': 2 }) })
+    expect([...projectCommitDays(s, 'a')]).toEqual([['2026-09-05', 2]])
+  })
+  it('ключ с переводом строки или префиксом/суффиксом не проходит', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01\n': 1, 'x2026-09-01': 1, '2026-09-011': 1 }) })
+    expect(projectCommitDays(s, 'a').size).toBe(0)
+  })
+  it('fullName не строка или пустой: репо не склеиваются между собой', () => {
+    const s = status({
+      a: { repo: { fullName: 5, commitsByDay: { '2026-09-01': 1 } } },
+      b: { repo: { fullName: 5, commitsByDay: { '2026-09-01': 2 } } },
+      c: repo('', { '2026-09-01': 4 }),
+      d: repo('', { '2026-09-01': 8 }),
+    })
+    expect(commitDays(s, ['a', 'b', 'c', 'd']).get('2026-09-01')).toBe(15)
+  })
+  it('один и тот же slug дважды в списке не удваивает', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': 2 }) })
+    expect(commitDays(s, ['a', 'a']).get('2026-09-01')).toBe(2)
+  })
+  it('нулевой день сохраняется в карте, но сумма не растёт', () => {
+    const m = commitDays(status({ a: repo('o/a', { '2026-09-01': 0 }) }), ['a'])
+    expect(m.get('2026-09-01')).toBe(0)
+    expect(sumDays(m, '2026-09-01', '2026-09-01')).toBe(0)
+  })
+})

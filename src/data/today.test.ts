@@ -279,6 +279,19 @@ describe('pulse', () => {
     expect(p.monthCommits).toBe(6)
   })
 
+  it('коммиты сегодняшнего дня считаются, 1-е число месяца и пустая карта', () => {
+    const p = pulse(lib([]), TODAY, 12, new Map([['2026-09-23', 3], ['2026-09-01', 2], ['2026-10-01', 7]]))
+    expect(p.monthCommits).toBe(5)
+    expect(p.max).toBe(3)
+    expect(pulse(lib([]), TODAY, 12, new Map()).monthCommits).toBe(0)
+  })
+
+  it('коммиты за пределами 12 недель идут в месяц, но не в клетки', () => {
+    const p = pulse(lib([]), new Date(2026, 8, 23), 1, new Map([['2026-09-01', 4]]))
+    expect(p.monthCommits).toBe(4)
+    expect(p.max).toBe(0)
+  })
+
   it('без карты коммитов monthCommits = 0, клетки как раньше', () => {
     const p = pulse(lib([project('a', { log: [log('A', at(2026, 9, 23))] })]), TODAY)
     expect(p.monthCommits).toBe(0)
