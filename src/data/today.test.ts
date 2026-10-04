@@ -252,6 +252,52 @@ describe('pulse', () => {
     expect(pulseCaption(0, new Date(2026, 0, 5))).toBe('За январь записей в логе нет')
   })
 
+  it('подпись с коммитами: все четыре случая и склонение', () => {
+    expect(pulseCaption(31, TODAY, 40)).toBe('31 запись и 40 коммитов за сентябрь')
+    expect(pulseCaption(2, TODAY, 1)).toBe('2 записи и 1 коммит за сентябрь')
+    expect(pulseCaption(5, TODAY, 0)).toBe('5 записей за сентябрь')
+    expect(pulseCaption(0, TODAY, 3)).toBe('3 коммита за сентябрь')
+    expect(pulseCaption(0, TODAY, 0)).toBe('За сентябрь записей и коммитов нет')
+  })
+
+  it('коммиты прибавляются к записям дня; будущие дни и чужие месяцы не считаются в клетки/месяц', () => {
+    const ps = lib([project('a', { log: [log('A', at(2026, 9, 23))] })])
+    const commits = new Map([
+      ['2026-09-23', 4],
+      ['2026-09-10', 2],
+      ['2026-08-31', 5],
+      ['2026-09-25', 9],
+    ])
+    const p = pulse(ps, TODAY, 12, commits)
+    const byDate = Object.fromEntries(p.weeks.flat().map((d) => [d.date, d]))
+    expect(byDate['2026-09-23']!.count).toBe(5)
+    expect(byDate['2026-09-10']!.count).toBe(2)
+    expect(byDate['2026-08-31']!.count).toBe(5)
+    expect(byDate['2026-09-25']!.count).toBe(0)
+    expect(p.max).toBe(5)
+    expect(p.monthCount).toBe(1)
+    expect(p.monthCommits).toBe(6)
+  })
+
+  it('коммиты сегодняшнего дня считаются, 1-е число месяца и пустая карта', () => {
+    const p = pulse(lib([]), TODAY, 12, new Map([['2026-09-23', 3], ['2026-09-01', 2], ['2026-10-01', 7]]))
+    expect(p.monthCommits).toBe(5)
+    expect(p.max).toBe(3)
+    expect(pulse(lib([]), TODAY, 12, new Map()).monthCommits).toBe(0)
+  })
+
+  it('коммиты за пределами 12 недель идут в месяц, но не в клетки', () => {
+    const p = pulse(lib([]), new Date(2026, 8, 23), 1, new Map([['2026-09-01', 4]]))
+    expect(p.monthCommits).toBe(4)
+    expect(p.max).toBe(0)
+  })
+
+  it('без карты коммитов monthCommits = 0, клетки как раньше', () => {
+    const p = pulse(lib([project('a', { log: [log('A', at(2026, 9, 23))] })]), TODAY)
+    expect(p.monthCommits).toBe(0)
+    expect(p.max).toBe(1)
+  })
+
   it('localKey — местная дата', () => {
     expect(localKey(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05')
   })

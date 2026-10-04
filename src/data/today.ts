@@ -89,6 +89,8 @@ export interface Pulse {
   max: number
   /** Записей лога в текущем календарном месяце. */
   monthCount: number
+  /** Коммиты в текущем календарном месяце (0, если данных о коммитах нет). */
+  monthCommits: number
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -107,9 +109,9 @@ export function pulseLevel(count: number, max: number): number {
 /**
  * Тепловая карта записей лога по дням за последние weeks недель.
  * Недели с понедельника, как в русском календаре; архивные проекты тоже считаются — это история, а не список дел.
- * Коммиты добавятся на этапе 7 (ветка status), пока только лог.
+ * Коммиты (день → число, из status.json) прибавляются к записям дня; будущие дни не считаются.
  */
-export function pulse(projects: ProjectView[], today: Date, weeks = 12): Pulse {
+export function pulse(projects: ProjectView[], today: Date, weeks = 12, commits?: ReadonlyMap<string, number>): Pulse {
   const byDay = new Map<string, number>()
   let monthCount = 0
   for (const p of projects) {
@@ -122,9 +124,16 @@ export function pulse(projects: ProjectView[], today: Date, weeks = 12): Pulse {
       if (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth()) monthCount++
     }
   }
+  const todayKey = localKey(today)
+  const monthPrefix = todayKey.slice(0, 8)
+  let monthCommits = 0
+  for (const [key, n] of commits ?? []) {
+    if (key > todayKey) continue
+    byDay.set(key, (byDay.get(key) ?? 0) + n)
+    if (key.startsWith(monthPrefix)) monthCommits += n
+  }
   // getDay(): 0 — воскресенье; сдвиг до понедельника текущей недели.
   const offset = (today.getDay() + 6) % 7
-  const todayKey = localKey(today)
   // Дни строим через new Date(г, м, д + i): так переход на летнее время не сдвигает даты.
   const first = new Date(today.getFullYear(), today.getMonth(), today.getDate() - offset - (weeks - 1) * 7)
   const days: PulseDay[] = []
@@ -137,16 +146,24 @@ export function pulse(projects: ProjectView[], today: Date, weeks = 12): Pulse {
   for (const d of days) d.level = pulseLevel(d.count, max)
   const out: PulseDay[][] = []
   for (let w = 0; w < weeks; w++) out.push(days.slice(w * 7, w * 7 + 7))
-  return { weeks: out, max, monthCount }
+  return { weeks: out, max, monthCount, monthCommits }
 }
 
 const MONTH = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
 
-/** Подпись под пульсом: «31 запись за сентябрь». */
-export function pulseCaption(monthCount: number, today: Date): string {
+/** Подпись под пульсом: «31 запись и 40 коммитов за сентябрь». Без monthCommits — только записи лога. */
+export function pulseCaption(monthCount: number, today: Date, monthCommits?: number): string {
   const month = MONTH[today.getMonth()]!
-  if (monthCount === 0) return `За ${month} записей в логе нет`
-  return `${monthCount} ${plural(monthCount, 'запись', 'записи', 'записей')} за ${month}`
+  const entries = `${monthCount} ${plural(monthCount, 'запись', 'записи', 'записей')}`
+  if (monthCommits === undefined) {
+    if (monthCount === 0) return `За ${month} записей в логе нет`
+    return `${entries} за ${month}`
+  }
+  const commits = `${monthCommits} ${plural(monthCommits, 'коммит', 'коммита', 'коммитов')}`
+  if (monthCount === 0 && monthCommits === 0) return `За ${month} записей и коммитов нет`
+  if (monthCommits === 0) return `${entries} за ${month}`
+  if (monthCount === 0) return `${commits} за ${month}`
+  return `${entries} и ${commits} за ${month}`
 }
 
 // ---------- Статусы ----------

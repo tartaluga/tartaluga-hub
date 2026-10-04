@@ -10,6 +10,7 @@ import { hasNewProjectDraft } from '../data/newProject'
 import { parseLocalDate } from '../data/model'
 import { useWidgets } from '../app/widgets'
 import { buildLibrary, STATUS_LABEL, type ProjectView } from '../data/projects'
+import { commitDays } from '../data/commits'
 import { abandoned, eyebrowDate, hotItems, hotWhen, localKey, nextSteps, pulse, pulseCaption, statusShares, summary } from '../data/today'
 import { plural } from '../lib/plural'
 import css from './Today.module.css'
@@ -41,6 +42,7 @@ function readQuietOrder(): boolean {
 export function Today() {
   const files = useSession((s) => s.files)
   const commits = useWidgets((s) => s.commits)
+  const status = useWidgets((s) => s.status)
   const branch = useSession((s) => s.branch)
   const now = useNow()
   const [creating, setCreating] = useState(hasNewProjectDraft)
@@ -51,19 +53,22 @@ export function Today() {
     // Для сроков и тишины важен только календарный день: берём его полночь.
     const today = parseLocalDate(day)
     const lib = buildLibrary(files, today, commits)
+    const dayCommits = status ? commitDays(status, lib.projects.map((p) => p.data.slug)) : undefined
     return {
       lib,
       today,
+      withCommits: dayCommits !== undefined,
       hot: hotItems(lib.projects, today),
       next: nextSteps(lib.projects),
       quiet: abandoned(lib.projects, quietestFirst),
-      pulse: pulse(lib.projects, today),
+      pulse: pulse(lib.projects, today, 12, dayCommits),
       shares: statusShares(lib.projects),
       active: lib.projects.filter((p) => p.data.status === 'active').length,
     }
-  }, [files, day, quietestFirst, commits])
+  }, [files, day, quietestFirst, commits, status])
   const { lib, hot, next, quiet, active } = view
   const total = lib.projects.length
+  const caption = pulseCaption(view.pulse.monthCount, view.today, view.withCommits ? view.pulse.monthCommits : undefined)
 
   return (
     <section className={css.page}>
@@ -210,7 +215,7 @@ export function Today() {
               <div
                 className={css.heat}
                 role="img"
-                aria-label={`Записи лога по дням за 12 недель. ${pulseCaption(view.pulse.monthCount, view.today)}`}
+                aria-label={`${view.withCommits ? 'Записи лога и коммиты' : 'Записи лога'} по дням за 12 недель. ${caption}`}
               >
                 {view.pulse.weeks.flat().map((d) => (
                   <span
@@ -218,11 +223,17 @@ export function Today() {
                     className={css.cell}
                     data-level={d.level}
                     data-future={d.future || undefined}
-                    title={d.future ? undefined : `${d.date.slice(8)}.${d.date.slice(5, 7)} · ${d.count} ${plural(d.count, 'запись', 'записи', 'записей')}`}
+                    title={
+                      d.future
+                        ? undefined
+                        : `${d.date.slice(8)}.${d.date.slice(5, 7)} · ${d.count} ${
+                            view.withCommits ? plural(d.count, 'событие', 'события', 'событий') : plural(d.count, 'запись', 'записи', 'записей')
+                          }`
+                    }
                   />
                 ))}
               </div>
-              <p className={css.caption}>{pulseCaption(view.pulse.monthCount, view.today)}</p>
+              <p className={css.caption}>{caption}</p>
             </section>
 
             <section aria-labelledby="t-status">

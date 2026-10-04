@@ -150,4 +150,21 @@ describe('недоверенный status.json', () => {
     const s = status({ a: {}, b: repo('o/b', { '2026-09-01': 2 }) })
     expect(commitDays(s, ['a', 'b']).get('2026-09-01')).toBe(2)
   })
+  it('нулевой день сохраняется в карте, но сумма не растёт', () => {
+    const m = commitDays(status({ a: repo('o/a', { '2026-09-01': 0 }) }), ['a'])
+    expect(m.get('2026-09-01')).toBe(0)
+    expect(sumDays(m, '2026-09-01', '2026-09-01')).toBe(0)
+  })
+  it('принимает любой Iterable (Set)', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': 1 }), b: repo('o/b', { '2026-09-01': 2 }) })
+    expect(commitDays(s, new Set(['a', 'b'])).get('2026-09-01')).toBe(3)
+  })
+  it('повторяющийся slug без fullName не удваивает', () => {
+    const s = status({ a: { repo: { commitsByDay: { '2026-09-01': 2 } } } })
+    expect(commitDays(s, ['a', 'a']).get('2026-09-01')).toBe(2)
+  })
+  it('нелепо большое число за день отбрасывается', () => {
+    const s = status({ a: repo('o/a', { '2026-09-01': 1e300, '2026-09-02': 100_000, '2026-09-03': 100_001 }) })
+    expect([...projectCommitDays(s, 'a')]).toEqual([['2026-09-02', 100_000]])
+  })
 })

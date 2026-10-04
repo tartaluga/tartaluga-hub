@@ -4,15 +4,17 @@ import type { Status } from '../schema/types'
 import { projectStatus } from './widgets'
 
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
+/** Больше 100 000 коммитов за день — битый или подделанный файл: такое число сожмёт пульс до нуля. */
+const MAX_PER_DAY = 100_000
 
-/** Коммиты репо проекта по дням. Мусорные ключи и значения (не целые, < 0) пропускаются. */
+/** Коммиты репо проекта по дням. Мусорные ключи и значения (не целые, < 0, > MAX_PER_DAY) пропускаются. */
 export function projectCommitDays(status: Status | null, slug: string): Map<string, number> {
   const out = new Map<string, number>()
   const byDay = projectStatus(status, slug)?.repo?.commitsByDay
   if (!byDay || typeof byDay !== 'object') return out
   for (const key of Object.keys(byDay)) {
     const n = byDay[key]
-    if (DAY_KEY.test(key) && typeof n === 'number' && Number.isInteger(n) && n >= 0) out.set(key, n)
+    if (DAY_KEY.test(key) && typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= MAX_PER_DAY) out.set(key, n)
   }
   return out
 }
@@ -21,7 +23,10 @@ export function projectCommitDays(status: Status | null, slug: string): Map<stri
 export function commitDays(status: Status | null, slugs: Iterable<string>): Map<string, number> {
   const out = new Map<string, number>()
   const seen = new Set<string>()
+  const seenSlugs = new Set<string>()
   for (const slug of slugs) {
+    if (seenSlugs.has(slug)) continue
+    seenSlugs.add(slug)
     const repo = projectStatus(status, slug)?.repo
     if (!repo) continue
     const name = typeof repo.fullName === 'string' ? repo.fullName.toLowerCase() : ''
