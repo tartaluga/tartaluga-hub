@@ -413,6 +413,7 @@
 .coverWrap {
   position: relative;
   aspect-ratio: 16 / 6.4;
+  overflow: hidden;
   border-bottom: 1px solid var(--line);
 }
 
