@@ -67,6 +67,12 @@ export async function readBlobText(sha: string): Promise<string> {
   return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(base64ToBytes(base64))
 }
 
+/** Содержимое blob-а байтами (обложки). */
+export async function readBlobBytes(sha: string): Promise<Uint8Array> {
+  const { base64 } = await api<{ base64: string }>(`/api/blob/${sha}`)
+  return base64ToBytes(base64)
+}
+
 /** Создать (без sha) или обновить (с sha) один JSON-файл данных. Сервер проверяет его схемой. */
 export const putFile = (branch: string, path: string, text: string, sha?: string) =>
   api<{ branch: string; path: string; sha: string }>('/api/file', { method: 'PUT', body: { branch, path, text, ...(sha ? { sha } : {}) } })

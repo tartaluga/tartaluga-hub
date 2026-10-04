@@ -67,7 +67,15 @@ export interface StoredConflict {
   deleted?: { mine: string }
 }
 
+/** Обложка на устройстве. Ключ — sha blob-а: содержимое под одним sha не меняется, поэтому запись не устаревает. */
+export interface CachedCover {
+  sha: string
+  type: 'image/webp' | 'image/jpeg'
+  bytes: Blob
+}
+
 interface HubDB extends DBSchema {
+  covers: { key: string; value: CachedCover }
   kv: { key: string; value: unknown }
   branchFiles: { key: [string, string]; value: StoredFile; indexes: { branch: string } }
   queue: { key: [string, string]; value: QueuedEdit; indexes: { branch: string } }
@@ -93,7 +101,7 @@ const tellBlocked = (blocked: boolean) => blockedListeners.forEach((fn) => fn(bl
 function db() {
   if (dbPromise) return dbPromise
   let wasBlocked = false
-  const opening: Promise<IDBPDatabase<HubDB>> = openDB<HubDB>(DB_NAME, 3, {
+  const opening: Promise<IDBPDatabase<HubDB>> = openDB<HubDB>(DB_NAME, 4, {
     // Другая вкладка со старой версией не закрывает базу: обновление ждёт, пока её закроют.
     blocked() {
       wasBlocked = true
@@ -124,6 +132,8 @@ function db() {
         d.createObjectStore('queue', { keyPath: ['branch', 'path'] }).createIndex('branch', 'branch')
         d.createObjectStore('conflicts', { keyPath: ['branch', 'path'] }).createIndex('branch', 'branch')
       }
+      // Версия 4: байты обложек по sha. Остальные хранилища не трогаем.
+      if (oldVersion < 4) d.createObjectStore('covers', { keyPath: 'sha' })
     },
   })
   dbPromise = opening
@@ -161,6 +171,49 @@ export async function dropBranchCache(branch: string): Promise<void> {
     await Promise.all(keys.map((k) => store.delete(k)))
   }
   await Promise.all([drop('branchFiles'), drop('queue'), drop('conflicts'), tx.done])
+  await (await db()).delete('kv', COVER_INDEX_PREFIX + branch)
+  await pruneCovers().catch(() => undefined)
+}
+
+// ---------- Обложки ----------
+const COVER_INDEX_PREFIX = 'coverIndex:'
+
+/** Обложки ветки на момент последней сверки: путь covers/<slug>.<ext> → sha. Нужен офлайн, где списка файлов с сервера нет. */
+export type CoverIndex = Record<string, string>
+
+export async function getCoverIndex(branch: string): Promise<CoverIndex> {
+  const v = await (await db()).get('kv', COVER_INDEX_PREFIX + branch)
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return {}
+  return Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string'))
+}
+
+export async function putCoverIndex(branch: string, index: CoverIndex): Promise<void> {
+  await (await db()).put('kv', index, COVER_INDEX_PREFIX + branch)
+}
+
+export async function getCover(sha: string): Promise<CachedCover | undefined> {
+  return (await db()).get('covers', sha)
+}
+
+export async function putCover(cover: CachedCover): Promise<void> {
+  await (await db()).put('covers', cover)
+}
+
+/**
+ * Чистка: убрать байты обложек, чьих sha нет ни в одном индексе веток. Вызывается после каждой сверки списка
+ * файлов, поэтому на устройстве остаются только обложки, которые есть в какой-то известной ветке:
+ * не больше «проекты × ветки» картинок (каждая до 300 КБ), старые версии уходят при первой же сверке.
+ */
+export async function pruneCovers(): Promise<void> {
+  const d = await db()
+  const live = new Set<string>()
+  for (const key of await d.getAllKeys('kv')) {
+    if (typeof key !== 'string' || !key.startsWith(COVER_INDEX_PREFIX)) continue
+    const idx = await getCoverIndex(key.slice(COVER_INDEX_PREFIX.length))
+    for (const sha of Object.values(idx)) live.add(sha)
+  }
+  const tx = d.transaction('covers', 'readwrite')
+  await Promise.all([...(await tx.store.getAllKeys()).filter((k) => !live.has(k)).map((k) => tx.store.delete(k)), tx.done])
 }
 
 /**
@@ -295,8 +348,21 @@ export async function putCachedStatus(value: CachedStatus | null): Promise<void>
   else await d.delete('kv', STATUS_KEY)
 }
 
+const pendingBackground = new Set<Promise<unknown>>()
+
+/**
+ * Сохранить индекс обложек ветки и вычистить лишние картинки — в фоне, ошибки глотаются (кэш картинок необязателен).
+ * «Выйти» (wipeDevice) дожидается таких записей, чтобы они не воскресили стёртую базу.
+ */
+export function saveCoverIndex(branch: string, index: CoverIndex): void {
+  const p: Promise<unknown> = putCoverIndex(branch, index).then(pruneCovers).catch(() => undefined)
+  pendingBackground.add(p)
+  void p.then(() => pendingBackground.delete(p))
+}
+
 /** «Выйти»: стереть с устройства кэш данных. */
 export async function wipeDevice(): Promise<void> {
+  await Promise.all([...pendingBackground])
   // Не ждать открытия: если оно ждёт другие вкладки (blocked), «Выйти» зависло бы. Закроется, как только откроется.
   const opening = dbPromise
   dbPromise = null

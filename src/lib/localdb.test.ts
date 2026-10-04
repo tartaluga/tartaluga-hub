@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getCachedFiles, getCurrentBranch, dropQueuedKey, getQueue, getQueued, getUnreadableQueued, onDbBlocked, putQueued, readQueued, wipeDevice, type QueuedEdit } from './localdb'
+import { getCachedFiles, getCover, putCover, getCurrentBranch, dropQueuedKey, getQueue, getQueued, getUnreadableQueued, onDbBlocked, putQueued, readQueued, wipeDevice, type QueuedEdit } from './localdb'
 
 beforeEach(() => wipeDevice())
 
@@ -106,4 +106,31 @@ describe('localdb: записи очереди разных версий', () =>
     expect(await getUnreadableQueued()).toHaveLength(1)
   })
 
+})
+
+describe('localdb: версия 4, хранилище обложек', () => {
+  it('апгрейд с версии 3 сохраняет кэш, очередь и добавляет covers', async () => {
+    const old = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open('tartaluga-hub', 3)
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore('kv')
+        req.result.createObjectStore('branchFiles', { keyPath: ['branch', 'path'] }).createIndex('branch', 'branch')
+        req.result.createObjectStore('queue', { keyPath: ['branch', 'path'] }).createIndex('branch', 'branch')
+        req.result.createObjectStore('conflicts', { keyPath: ['branch', 'path'] }).createIndex('branch', 'branch')
+        req.transaction!.objectStore('branchFiles').put({ branch: 'main', path: 'projects/a.json', sha: 'a1', text: '{}' })
+      }
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+    })
+    old.close()
+    expect(await getCachedFiles('main')).toEqual([{ path: 'projects/a.json', sha: 'a1', text: '{}' }])
+    expect(await getCover('x')).toBeUndefined()
+    await putCover({ sha: 'x', type: 'image/webp', bytes: new Blob([new Uint8Array([1])]) })
+    expect((await getCover('x'))?.type).toBe('image/webp')
+  })
+  it('wipeDevice стирает и обложки', async () => {
+    await putCover({ sha: 'x', type: 'image/webp', bytes: new Blob([new Uint8Array([1])]) })
+    await wipeDevice()
+    expect(await getCover('x')).toBeUndefined()
+  })
 })

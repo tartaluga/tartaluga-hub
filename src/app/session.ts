@@ -17,6 +17,7 @@ import {
   getUnreadableQueued,
   onDbBlocked,
   putCachedFiles,
+  saveCoverIndex,
   putConflict,
   putQueued,
   requestPersistence,
@@ -69,6 +70,8 @@ const serverRemote: Remote = {
 export interface Tree {
   head: string
   paths: string[]
+  /** Обложки ветки: путь → sha (для показа картинок). Нет — дерево собрано без них. */
+  covers?: Record<string, string>
 }
 
 export const MAIN = 'main'
@@ -698,6 +701,7 @@ export async function applyWrite(branch: string, changed: CachedFile[], removed:
   for (const p of removed) files.delete(p)
   for (const f of changed) files.set(f.path, f)
   const tree = state.tree && {
+    ...state.tree,
     head: head ?? state.tree.head,
     paths: [...state.tree.paths.filter((p) => !removed.includes(p)), ...changed.map((f) => f.path).filter((p) => !state.tree!.paths.includes(p))],
   }
@@ -734,7 +738,10 @@ async function syncBranch(branch: string): Promise<void> {
     const next = new Map(cached)
     for (const p of removed) next.delete(p)
     for (const f of changed) next.set(f.path, f)
-    useSession.setState({ files: overlay(branch, [...next.values()]), tree: { head, paths: remoteFiles.map((f) => f.path) }, sync: 'idle', lastSync: new Date() })
+    const covers = Object.fromEntries(remoteFiles.filter((f) => f.path.startsWith('covers/')).map((f) => [f.path, f.sha]))
+    // Индекс обложек для офлайна и чистка кэша картинок: в фоне, экран базу не ждёт.
+    if (canWrite()) saveCoverIndex(branch, covers)
+    useSession.setState({ files: overlay(branch, [...next.values()]), tree: { head, paths: remoteFiles.map((f) => f.path), covers }, sync: 'idle', lastSync: new Date() })
     upstreamOk()
     if (!useSession.getState().me) void useSession.getState().refreshMe() // запускались без сети — теперь узнаём сессию
   } catch (caught) {
