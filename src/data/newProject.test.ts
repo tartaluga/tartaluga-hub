@@ -57,4 +57,15 @@ describe('takenSlugs и projectPaths', () => {
     const tree = ['projects/a.json', 'covers/a.webp', 'covers/a.jpg', 'covers/a-b.webp', 'projects/a-b.json', 'covers/b.webp']
     expect(projectPaths('a', tree)).toEqual(['projects/a.json', 'covers/a.webp', 'covers/a.jpg'])
   })
+
+  it('шапки banners/<slug>.* удаляются вместе с проектом по дереву; шапка проекта с дефисом в slug — не чужая (ADR-016)', () => {
+    const tree = ['projects/foo.json', 'projects/foo-banner.json', 'covers/foo.webp', 'covers/foo-banner.webp', 'banners/foo.webp', 'banners/foo.jpg', 'banners/foo-banner.webp', 'banners/bar.webp']
+    expect(projectPaths('foo', tree)).toEqual(['projects/foo.json', 'covers/foo.webp', 'banners/foo.webp', 'banners/foo.jpg'])
+    expect(projectPaths('foo-banner', tree)).toEqual(['projects/foo-banner.json', 'covers/foo-banner.webp', 'banners/foo-banner.webp'])
+  })
+
+  it('поле banner не используется: чужой путь в нём не попадёт в удаление', () => {
+    // projectPaths смотрит только на дерево: чужой banners/other.webp не входит, даже если кто-то вписал его в banner.
+    expect(projectPaths('a', ['projects/a.json', 'banners/other.webp'])).toEqual(['projects/a.json'])
+  })
 })

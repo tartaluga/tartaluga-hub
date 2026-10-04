@@ -84,33 +84,82 @@ export function parseFile(path: string, sha: string, text: string): Parsed {
   return { ok: true, kind, path, sha, data: obj as never, readOnly: false, idsAssigned }
 }
 
-/** Задачи, вехи, ссылки и записи лога, добавленные руками без id, получают id (ADR-003, правило 4). */
+/** Предел файла данных в байтах UTF-8: столько принимает сервер (ADR-016), клиент не ставит в очередь больше. */
+export const FILE_BYTES_LIMIT = 5 * 1024 * 1024
+
+export const FILE_TOO_BIG: Record<'project' | 'idea', string> = {
+  project: 'Проект слишком большой: сократите описания',
+  idea: 'Идея слишком большая: сократите текст',
+}
+
+/** Файл не больше предела (размер в байтах UTF-8, не в символах). */
+export const fitsFileLimit = (text: string): boolean => new TextEncoder().encode(text).byteLength <= FILE_BYTES_LIMIT
+
+/**
+ * Массивы объектов с id в проекте (ADR-003, правило 4; ADR-016): верхний уровень и вложенные в каждую задачу.
+ * Единственное место списка: новый вложенный массив добавляется сюда, и присвоение id с проверкой повторов
+ * подхватывают его сами.
+ */
+export const PROJECT_ID_ARRAYS: readonly string[] = ['links', 'milestones', 'tasks', 'log']
+export const TASK_ID_ARRAYS: readonly string[] = ['links', 'comments']
+
+interface IdArray {
+  /** Как назвать массив в ошибке: links или tasks[<id задачи>].links. */
+  label: string
+  items: unknown[]
+}
+
+/** Верхние массивы по порядку списка, потом вложенные в задачи (задачи к этому времени уже с id). */
+function idArrays(obj: Record<string, unknown>): IdArray[] {
+  const out: IdArray[] = []
+  for (const key of PROJECT_ID_ARRAYS) {
+    const arr = obj[key]
+    if (Array.isArray(arr)) out.push({ label: key, items: arr })
+  }
+  const tasks = obj.tasks
+  if (Array.isArray(tasks)) {
+    for (const task of tasks) {
+      if (!task || typeof task !== 'object' || Array.isArray(task)) continue
+      const t = task as Record<string, unknown>
+      for (const key of TASK_ID_ARRAYS) {
+        const arr = t[key]
+        if (Array.isArray(arr)) out.push({ label: `tasks[${String(t.id)}].${key}`, items: arr })
+      }
+    }
+  }
+  return out
+}
+
+/** Задачи, вехи, ссылки, записи лога, а также ссылки и комментарии задач, добавленные руками без id, получают id. */
 function assignMissingIds(obj: Record<string, unknown>): boolean {
   let changed = false
-  for (const key of ['links', 'milestones', 'tasks', 'log']) {
-    const arr = obj[key]
-    if (!Array.isArray(arr)) continue
-    for (const item of arr) {
-      if (item && typeof item === 'object' && !('id' in item)) {
+  const fill = (items: unknown[]) => {
+    for (const item of items) {
+      if (item && typeof item === 'object' && !Array.isArray(item) && !('id' in item)) {
         ;(item as Record<string, unknown>).id = ulid()
         changed = true
       }
     }
   }
+  // Сначала верхний уровень (у задач появятся id), потом вложенные массивы.
+  for (const key of PROJECT_ID_ARRAYS) {
+    const arr = obj[key]
+    if (Array.isArray(arr)) fill(arr)
+  }
+  for (const { label, items } of idArrays(obj)) if (label.startsWith('tasks[')) fill(items)
   return changed
 }
 
 /** Схема не ловит повторы id в массивах, а правки и слияние адресуют элементы по id — повтор делает файл неоднозначным. */
 function checkUniqueIds(kind: FileKind, obj: Record<string, unknown>): string | null {
-  const keys = kind === 'project' ? ['links', 'milestones', 'tasks', 'log'] : kind === 'settings' ? ['tags'] : []
-  for (const key of keys) {
-    const arr = obj[key]
-    if (!Array.isArray(arr)) continue
+  const arrays: IdArray[] = kind === 'project' ? idArrays(obj) : kind === 'settings' && Array.isArray(obj.tags) ? [{ label: 'tags', items: obj.tags }] : []
+  // Уникальность — в пределах одного массива: одинаковый id у ссылок разных задач не ошибка.
+  for (const { label, items } of arrays) {
     const seen = new Set<unknown>()
-    for (const item of arr) {
+    for (const item of items) {
       if (!item || typeof item !== 'object' || !('id' in item)) continue
       const id = (item as Record<string, unknown>).id
-      if (seen.has(id)) return `два элемента ${key} с id «${String(id)}»`
+      if (seen.has(id)) return `два элемента ${label} с id «${String(id)}»`
       seen.add(id)
     }
   }

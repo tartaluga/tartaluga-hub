@@ -480,3 +480,57 @@ describe('ревью E1', () => {
     expect((first.merged.tasks as JsonObject[]).map((t) => t.id)).toEqual([A, C, B])
   })
 })
+
+describe('задача: ссылки, описание, комментарии (ADR-016)', () => {
+  const L1 = '01K5Z0000000000000000000L1'
+  const L2 = '01K5Z0000000000000000000L2'
+  const L3 = '01K5Z0000000000000000000L3'
+  const K1 = '01K5Z0000000000000000000K1'
+  const K2 = '01K5Z0000000000000000000K2'
+  const lnk = (id: string, value: string) => ({ id, kind: 'doc', value })
+  const cm = (id: string, text: string) => ({ id, at: '2026-10-04T10:00:00+03:00', text })
+  const withTask = (extra: Record<string, unknown>) => edit({ tasks: [{ ...T[0]!, ...extra }, T[1]!] })
+  const taskA = (r: { merged: JsonObject }) => (r.merged.tasks as JsonObject[])[0]!
+
+  it('tasks[id].links сливается по элементам: добавления с двух сторон остаются, правки разных ссылок не конфликтуют', () => {
+    const b = withTask({ links: [lnk(L1, 'https://a/'), lnk(L2, 'https://b/')] })
+    const r = merge('project', b, withTask({ links: [lnk(L1, 'https://a2/'), lnk(L2, 'https://b/'), lnk(L3, 'https://mine/')] }), withTask({ links: [lnk(L1, 'https://a/'), lnk(L2, 'https://b2/')] }))
+    expect(r.conflicts).toEqual([])
+    expect(taskA(r).links).toEqual([lnk(L1, 'https://a2/'), lnk(L2, 'https://b2/'), lnk(L3, 'https://mine/')])
+  })
+
+  it('одну ссылку задачи правят по-разному — конфликт по пути с id задачи и ссылки', () => {
+    const b = withTask({ links: [lnk(L1, 'https://a/')] })
+    const r = merge('project', b, withTask({ links: [lnk(L1, 'https://mine/')] }), withTask({ links: [lnk(L1, 'https://theirs/')] }))
+    expect(r.conflicts).toEqual([{ kind: 'field', path: ['tasks', A, 'links', L1, 'value'], base: 'https://a/', local: 'https://mine/', remote: 'https://theirs/' }])
+  })
+
+  it('tasks[id].description: правка с одной стороны принимается, с двух разная — конфликт', () => {
+    const b = withTask({ description: 'строка 1\nстрока 2' })
+    const one = merge('project', b, withTask({ description: 'строка 1\nмоя' }), b)
+    expect(one.conflicts).toEqual([])
+    expect(taskA(one).description).toBe('строка 1\nмоя')
+    const both = merge('project', b, withTask({ description: 'моя' }), withTask({ description: 'чужая' }))
+    expect(both.conflicts).toEqual([{ kind: 'field', path: ['tasks', A, 'description'], base: 'строка 1\nстрока 2', local: 'моя', remote: 'чужая' }])
+  })
+
+  it('tasks[id].comments: комментарии с двух устройств остаются оба; правка текста против правки — конфликт', () => {
+    const b = withTask({ comments: [cm(K1, 'один')] })
+    const r = merge('project', b, withTask({ comments: [cm(K1, 'один'), cm(K2, 'мой')] }), withTask({ comments: [cm(K1, 'один'), cm('01K5Z0000000000000000000K3', 'чужой')] }))
+    expect(r.conflicts).toEqual([])
+    expect((taskA(r).comments as JsonObject[]).map((c) => c.text)).toEqual(['один', 'чужой', 'мой'])
+    const c = merge('project', b, withTask({ comments: [cm(K1, 'моё')] }), withTask({ comments: [cm(K1, 'чужое')] }))
+    expect(c.conflicts).toEqual([{ kind: 'field', path: ['tasks', A, 'comments', K1, 'text'], base: 'один', local: 'моё', remote: 'чужое' }])
+  })
+
+  it('inProgress и cancelled — обычные скаляры', () => {
+    const r = merge('project', base, withTask({ inProgress: true }), withTask({ done: true, cancelled: true }))
+    expect(r.conflicts).toEqual([])
+    expect(taskA(r)).toMatchObject({ inProgress: true, done: true, cancelled: true })
+  })
+
+  it('banner — скаляр: разные пути с двух сторон — конфликт, null — значение', () => {
+    const r = merge('project', edit({ banner: null }), edit({ banner: 'banners/bot.webp' }), edit({ banner: 'banners/bot.jpg' }))
+    expect(r.conflicts).toEqual([{ kind: 'field', path: ['banner'], base: null, local: 'banners/bot.webp', remote: 'banners/bot.jpg' }])
+  })
+})

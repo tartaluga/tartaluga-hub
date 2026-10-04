@@ -207,3 +207,40 @@ describe('normalizeProject: originalDue', () => {
     expect(tasksOf(out)[2]!.originalDue).toBe('2026-10-01')
   })
 })
+
+describe('normalizeProject: inProgress и cancelled (ADR-016)', () => {
+  it('done = true убирает inProgress, остальное у задачи сохраняется', () => {
+    const out = normalizeProject(undefined, project({ tasks: [task(T1, { done: true, inProgress: true, description: 'д', unknown: 1 })] }), NOW)
+    expect(tasksOf(out)[0]).toEqual({ id: T1, title: 'задача', done: true, description: 'д', unknown: 1 })
+  })
+
+  it('done = false оставляет inProgress', () => {
+    const out = normalizeProject(undefined, project({ tasks: [task(T1, { inProgress: true })] }), NOW)
+    expect(tasksOf(out)[0]!.inProgress).toBe(true)
+  })
+
+  it('done = false убирает cancelled, done = true оставляет', () => {
+    const out = normalizeProject(undefined, project({ tasks: [task(T1, { cancelled: true }), task(T2, { done: true, cancelled: true })] }), NOW)
+    expect(tasksOf(out)[0]).not.toHaveProperty('cancelled')
+    expect(tasksOf(out)[1]!.cancelled).toBe(true)
+  })
+
+  it('метки убираются вместе с нормализацией срока: порядок ключей и originalDue сохраняются', () => {
+    const out = normalizeProject(undefined, project({ tasks: [task(T1, { done: true, inProgress: true, due: '2026-10-01' })] }), NOW)
+    expect(tasksOf(out)[0]).toEqual({ id: T1, title: 'задача', done: true, due: '2026-10-01', originalDue: '2026-10-01' })
+  })
+
+  it('результат проходит схему; исходный объект не меняется', () => {
+    const next = project({ tasks: [task(T1, { done: true, inProgress: true }), task(T2, { cancelled: true })] })
+    const snapshot = structuredClone(next)
+    const out = normalizeProject(undefined, next, NOW)
+    expect(next).toEqual(snapshot)
+    expect(validateProject(out)).toBe(true)
+  })
+
+  it('done не boolean (мусор) — метки не трогаются, схема отвергнет файл сама', () => {
+    const out = normalizeProject(undefined, project({ tasks: [{ id: T1, title: 'т', done: 'да', inProgress: true }] as never }), NOW)
+    expect(tasksOf(out)[0]!.inProgress).toBe(true)
+    expect(validateProject(out)).toBe(false)
+  })
+})

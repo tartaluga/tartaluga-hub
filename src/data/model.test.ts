@@ -163,3 +163,87 @@ describe('firstDue', () => {
     expect(firstDue({})).toBeUndefined()
   })
 })
+
+describe('вложенные id-массивы задач (ADR-016)', () => {
+  const T1 = '01K5TQ0000000000000000C001'
+  const T2 = '01K5TQ0000000000000000C002'
+  const L1 = '01K5TQ0000000000000000A001'
+  const L2 = '01K5TQ0000000000000000A002'
+  const link = (extra: object = {}) => ({ kind: 'doc', value: 'https://example.com/', ...extra })
+  const comment = (extra: object = {}) => ({ at: '2026-10-04T10:00:00+03:00', text: 'привет', ...extra })
+  const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/
+  const read = (text: string) => {
+    const p = parseFile('projects/x.json', 'sha', text)
+    if (!p.ok) throw new Error(p.error)
+    return p
+  }
+  const tasksOf = (p: ReturnType<typeof read>) => (p.data as Project).tasks as unknown as Record<string, unknown>[]
+
+  it('ссылка и комментарий задачи без id получают id, проект открывается, idsAssigned = true', () => {
+    const p = read(project({ tasks: [{ id: T1, title: 'т', done: false, links: [link()], comments: [comment()] }] }))
+    expect(p.idsAssigned).toBe(true)
+    const t = tasksOf(p)[0]!
+    expect((t.links as { id: string }[])[0]!.id).toMatch(ULID)
+    expect((t.comments as { id: string }[])[0]!.id).toMatch(ULID)
+  })
+
+  it('задача без id со ссылками без id: получают id и задача, и ссылки', () => {
+    const p = read(project({ tasks: [{ title: 'т', done: false, links: [link(), link()] }] }))
+    expect(p.idsAssigned).toBe(true)
+    const t = tasksOf(p)[0]!
+    expect(t.id).toMatch(ULID)
+    const ids = (t.links as { id: string }[]).map((l) => l.id)
+    expect(ids[0]).toMatch(ULID)
+    expect(new Set(ids).size).toBe(2)
+  })
+
+  it('все id на месте — idsAssigned = false', () => {
+    const p = read(project({ tasks: [{ id: T1, title: 'т', done: false, links: [link({ id: L1 })], comments: [comment({ id: L2 })] }] }))
+    expect(p.idsAssigned).toBe(false)
+  })
+
+  it('повтор id в tasks[i].links — ошибка с путём; в comments — тоже', () => {
+    const dup = parseFile('projects/x.json', 'sha', project({ tasks: [{ id: T1, title: 'т', done: false, links: [link({ id: L1 }), link({ id: L1 })] }] }))
+    expect(dup).toMatchObject({ ok: false, error: `два элемента tasks[${T1}].links с id «${L1}»` })
+    const dupC = parseFile('projects/x.json', 'sha', project({ tasks: [{ id: T1, title: 'т', done: false, comments: [comment({ id: L1 }), comment({ id: L1 })] }] }))
+    expect(dupC).toMatchObject({ ok: false, error: `два элемента tasks[${T1}].comments с id «${L1}»` })
+  })
+
+  it('одинаковый id у ссылок разных задач и у ссылки задачи и ссылки проекта — не ошибка', () => {
+    const p = parseFile(
+      'projects/x.json',
+      'sha',
+      project({
+        links: [link({ id: L1 })],
+        tasks: [
+          { id: T1, title: 'а', done: false, links: [link({ id: L1 })] },
+          { id: T2, title: 'б', done: false, links: [link({ id: L1 })] },
+        ],
+      }),
+    )
+    expect(p).toMatchObject({ ok: true, idsAssigned: false })
+  })
+
+  it('ссылка задачи с javascript: не проходит схему (kind doc), комментарий длиннее 2000 — тоже', () => {
+    const bad = parseFile('projects/x.json', 'sha', project({ tasks: [{ id: T1, title: 'т', done: false, links: [link({ id: L1, value: 'javascript:alert(1)' })] }] }))
+    expect(bad).toMatchObject({ ok: false })
+    const long = parseFile('projects/x.json', 'sha', project({ tasks: [{ id: T1, title: 'т', done: false, comments: [comment({ id: L1, text: 'x'.repeat(2001) })] }] }))
+    expect(long).toMatchObject({ ok: false })
+  })
+
+  it('мусор вместо задачи или массива не роняет разбор', () => {
+    expect(parseFile('projects/x.json', 'sha', project({ tasks: [null, 'x', { id: T1, title: 'т', done: false, links: 'нет' }] }))).toMatchObject({ ok: false })
+  })
+})
+
+describe('предел размера файла (ADR-016)', () => {
+  it('5 МБ — в байтах UTF-8, а не в символах', async () => {
+    const { FILE_BYTES_LIMIT, fitsFileLimit } = await import('./model')
+    expect(FILE_BYTES_LIMIT).toBe(5 * 1024 * 1024)
+    expect(fitsFileLimit('x'.repeat(FILE_BYTES_LIMIT))).toBe(true)
+    expect(fitsFileLimit('x'.repeat(FILE_BYTES_LIMIT + 1))).toBe(false)
+    // «я» — 2 байта: половина предела в символах уже не влезает.
+    expect(fitsFileLimit('я'.repeat(FILE_BYTES_LIMIT / 2))).toBe(true)
+    expect(fitsFileLimit('я'.repeat(FILE_BYTES_LIMIT / 2 + 1))).toBe(false)
+  })
+})

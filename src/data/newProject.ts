@@ -56,11 +56,11 @@ export function takenSlugs(paths: Iterable<string>): string[] {
 }
 
 /**
- * Что удаляется вместе с проектом: его файл и его обложки covers/<slug>.webp|.jpg.
- * Поле cover не используется: его мог вписать кто угодно, и оно может указывать на обложку другого проекта.
+ * Что удаляется вместе с проектом: его файл, его обложки covers/<slug>.webp|.jpg и шапки banners/<slug>.webp|.jpg.
+ * Поля cover и banner не используются: их мог вписать кто угодно, и они могут указывать на чужой файл (ADR-016).
  */
 export function projectPaths(slug: string, treePaths: string[]): string[] {
-  const own = new Set([`projects/${slug}.json`, `covers/${slug}.webp`, `covers/${slug}.jpg`])
+  const own = new Set([`projects/${slug}.json`, `covers/${slug}.webp`, `covers/${slug}.jpg`, `banners/${slug}.webp`, `banners/${slug}.jpg`])
   return treePaths.filter((p) => own.has(p))
 }
 

@@ -17,6 +17,8 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== 
  *   в next стал done и даты нет. Проекты, закрытые до v2, при правке даты не получают;
  * - tasks[].originalDue: удаляется у задач без due; задаче с due без originalDue ставится первое найденное:
  *   originalDue этой задачи (по id) в prev, её due в prev, текущий due;
+ * - tasks[].inProgress: удаляется у выполненных задач (done = true); tasks[].cancelled: у невыполненных (done = false)
+ *   (ADR-016). Если done не boolean, метки не трогаем: схема такой файл всё равно отвергнет;
  * - schemaVersion: 2.
  */
 export function normalizeProject<T extends WithUnknown<Project>>(prev: WithUnknown<Project> | undefined, next: T, now: string = nowIso()): T {
@@ -34,13 +36,19 @@ export function normalizeProject<T extends WithUnknown<Project>>(prev: WithUnkno
   return out as T
 }
 
-function normalizeTask(task: Obj, prevTasks: Map<string, Obj>): Obj {
+function normalizeTask(input: Obj, prevTasks: Map<string, Obj>): Obj {
+  let task = input
+  const drop = (key: string) => {
+    if (!(key in task)) return
+    task = { ...task }
+    delete task[key]
+  }
+  if (task.done === true) drop('inProgress')
+  if (task.done === false) drop('cancelled')
   const due = str(task.due)
   if (due === undefined) {
-    if (!('originalDue' in task)) return task
-    const rest = { ...task }
-    delete rest.originalDue
-    return rest
+    drop('originalDue')
+    return task
   }
   if (str(task.originalDue) !== undefined) return task
   const before = typeof task.id === 'string' ? prevTasks.get(task.id) : undefined
