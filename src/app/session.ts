@@ -29,7 +29,7 @@ import {
   type StoredConflict,
 } from '../lib/localdb'
 import { STALE_BUILD } from '../lib/update'
-import { nowIso, parseFile, SCHEMA_VERSIONS, serialize, type WithUnknown } from '../data/model'
+import { FILE_TOO_BIG, fitsFileLimit, nowIso, parseFile, SCHEMA_VERSIONS, serialize, type WithUnknown } from '../data/model'
 import { merge, MergeRefused, type Json, type JsonObject, type MergeConflict } from '../data/merge'
 import { applyOps, conflictLabel, heldValue, opsFor, sameContent, sameValue, valueAt, type ConflictOp, type ConflictPick } from '../data/conflicts'
 import type { Idea, Project } from '../schema/types'
@@ -1033,6 +1033,12 @@ function mergeAny(kind: QueueKind, a: Patch, b: Patch): Patch {
   return kind === 'idea' ? mergeIdeaPatch(a as IdeaPatch, b as IdeaPatch) : mergePatch(a as ProjectPatch, b as ProjectPatch)
 }
 
+/** Файл больше предела сервера (5 МБ) в очередь не ставим: иначе правка застрянет с отказом 413 (ADR-016). */
+function fitted(text: string, kind: QueueKind): string {
+  if (!fitsFileLimit(text)) throw new ApiError(413, 'payload_too_large', FILE_TOO_BIG[kind])
+  return text
+}
+
 /**
  * Моя версия файла: базовая копия с правкой. Проект нормализуется (ADR-009), идея — нет (applyIdeaPatch + схема).
  * Пустой baseSha у идеи — создание: baseText — новый файл, правка ложится на него.
@@ -1045,10 +1051,10 @@ function render(kind: QueueKind, path: string, baseSha: string, baseText: string
   if (kind === 'idea') {
     const r = applyIdeaPatch(parsed.data as WithUnknown<Idea>, patch as IdeaPatch)
     if (!r.ok) throw new ApiError(422, 'validation', r.error)
-    return r.changed ? serialize(r.data) : baseText
+    return fitted(r.changed ? serialize(r.data) : baseText, 'idea')
   }
   const prev = parsed.data as WithUnknown<Project>
-  return serialize(normalizeProject(prev, applyEdit(prev, patch as ProjectPatch) as WithUnknown<Project>))
+  return fitted(serialize(normalizeProject(prev, applyEdit(prev, patch as ProjectPatch) as WithUnknown<Project>)), 'project')
 }
 
 /**

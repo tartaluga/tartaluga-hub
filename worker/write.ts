@@ -2,7 +2,7 @@
 // сервер никогда не повторяет запись «поверх свежего sha» сам.
 import { base64ToBytes } from '../src/lib/base64'
 import { GitHubError, type FileChange, type GitHubClient } from '../src/lib/github'
-import { parseFile } from '../src/data/model'
+import { FILE_BYTES_LIMIT, parseFile } from '../src/data/model'
 import type { Env } from './env'
 import { dataRepo } from './githubApp'
 import { assertRepoVisible, confirmGone, upstreamUnavailable } from './gone'
@@ -10,7 +10,7 @@ import { HttpError, json, readJson } from './http'
 import { assertDataPath, assertSha, branchParam, isBranchName, isDataPath, MAIN, STATUS, writableBranch } from './rules'
 import { isFresh, type Session } from './sessions'
 
-export const JSON_LIMIT = 5 * 1024 * 1024 // файл данных — до 5 МБ (ADR-016)
+export const JSON_LIMIT = FILE_BYTES_LIMIT // файл данных — до 5 МБ (ADR-016); тот же предел проверяет клиент
 const IMAGE_LIMIT = 2 * 1024 * 1024 // обложка — до 2 МБ
 export const COMMIT_LIMIT = 100 // файлов в одном коммите (клиент: src/app/session.ts)
 // Тело запроса коммита: до COMMIT_LIMIT JSON обычного размера (десятки КБ) и обложка в base64 (2 МБ → ~2,7 МБ);

@@ -1430,3 +1430,47 @@ describe('запись очереди, которую сборка не пони
     expect(useSession.getState().deviceError).toBeNull()
   })
 })
+
+describe('предел размера файла перед очередью (ADR-016)', () => {
+  const BIG = 5 * 1024 * 1024
+  /** Описание такой длины, что файл проекта занимает BIG - gap байт. */
+  const fill = (gap: number) => 'x'.repeat(BIG - new TextEncoder().encode(project({ description: '' })).byteLength - gap)
+
+  it('проект больше 5 МБ в очередь не ставится: ошибка с понятным текстом, очередь и экран не тронуты', async () => {
+    const srv = server({ main: { [PATH]: project({ description: 'x'.repeat(BIG) }) } })
+    await start(srv)
+    srv.state.down = true
+    await expect(useSession.getState().saveProject('a', { title: 'Б' })).rejects.toMatchObject({ status: 413, message: 'Проект слишком большой: сократите описания' })
+    expect(await getQueue()).toEqual([])
+    expect(useSession.getState().queued).toBe(0)
+    expect(shown().title).toBe('А')
+    expect(srv.state.writes).toEqual([])
+  })
+
+  it('размер считается в байтах UTF-8: кириллица на половине предела в символах не проходит', async () => {
+    const srv = server({ main: { [PATH]: project({ description: 'я'.repeat(BIG / 2) }) } })
+    await start(srv)
+    srv.state.down = true
+    await expect(useSession.getState().saveProject('a', { title: 'Б' })).rejects.toMatchObject({ status: 413 })
+    expect(await getQueue()).toEqual([])
+  })
+
+  it('вторая правка, после которой файл вырос за предел, не портит уже стоящую в очереди', async () => {
+    const srv = server({ main: { [PATH]: project({ description: fill(50) }) } })
+    await start(srv)
+    srv.state.down = true
+    await useSession.getState().saveProject('a', { title: 'Б' })
+    await expect(useSession.getState().saveProject('a', { nextStep: 'ы'.repeat(200) })).rejects.toMatchObject({ status: 413 })
+    const queue = await getQueue()
+    expect(queue).toHaveLength(1)
+    expect(queue[0]!.patch).toEqual({ title: 'Б' })
+    expect(shown()).toMatchObject({ title: 'Б', nextStep: 'шаг' })
+  })
+
+  it('проект у предела, но не больше, ставится и уходит', async () => {
+    const srv = server({ main: { [PATH]: project({ description: fill(100) }) } })
+    await start(srv)
+    await useSession.getState().saveProject('a', { title: 'Б' })
+    expect(srv.state.writes).toEqual([`main ${PATH}`])
+  })
+})
