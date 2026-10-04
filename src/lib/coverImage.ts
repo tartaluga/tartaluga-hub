@@ -1,7 +1,7 @@
 // Загрузка обложки проекта: проверка поля cover, sha файла, кэш на устройстве, запрос blob-а, проверка байт.
 // Поле cover — недоверенный ввод из репо: берём только covers/<этот slug>.webp|.jpg, и только если файл есть в списке ветки.
 import { readBlobBytes } from './api'
-import { getCover, getCoverIndex, putCover, type CoverIndex } from './localdb'
+import { deviceEpoch, getCover, getCoverIndex, putCoverIfCurrent, type CoverIndex } from './localdb'
 
 export type CoverType = 'image/webp' | 'image/jpeg'
 
@@ -33,7 +33,8 @@ export function resetCoverState(): void {
   failedAt.clear()
 }
 
-async function fetchCover(sha: string): Promise<Blob | null> {
+async function fetchCover(sha: string, epoch: number): Promise<Blob | null> {
+  if (epoch !== deviceEpoch()) return null
   try {
     const cached = await getCover(sha)
     if (cached && sniffCover(new Uint8Array(await cached.bytes.slice(0, 12).arrayBuffer()))) return new Blob([cached.bytes], { type: cached.type })
@@ -51,7 +52,7 @@ async function fetchCover(sha: string): Promise<Blob | null> {
       return null
     }
     const blob = new Blob([bytes as BlobPart], { type })
-    await putCover({ sha, type, bytes: blob }).catch(() => undefined)
+    await putCoverIfCurrent(epoch, { sha, type, bytes: blob }).catch(() => undefined)
     failedAt.delete(sha)
     return blob
   } catch {
@@ -64,12 +65,17 @@ async function fetchCover(sha: string): Promise<Blob | null> {
 export async function loadCover(branch: string, slug: string, cover: unknown, liveIndex?: CoverIndex): Promise<Blob | null> {
   const path = ownCoverPath(slug, cover)
   if (!path) return null
+  const epoch = deviceEpoch() // после «Выйти» базу не открываем заново: запрос, начатый до выхода, молча отменяется
   let sha = liveIndex?.[path]
-  if (!sha) sha = (await getCoverIndex(branch).catch(() => ({}) as CoverIndex))[path]
+  if (!sha) {
+    const idx = await getCoverIndex(branch).catch(() => ({}) as CoverIndex)
+    if (epoch !== deviceEpoch()) return null
+    sha = idx[path]
+  }
   if (!sha || !SHA.test(sha)) return null
   let p = inFlight.get(sha)
   if (!p) {
-    p = fetchCover(sha).finally(() => inFlight.delete(sha))
+    p = fetchCover(sha, epoch).finally(() => inFlight.delete(sha))
     inFlight.set(sha, p)
   }
   return p

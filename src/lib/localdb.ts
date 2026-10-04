@@ -349,6 +349,27 @@ export async function putCachedStatus(value: CachedStatus | null): Promise<void>
 }
 
 const pendingBackground = new Set<Promise<unknown>>()
+let wipeEpoch = 0
+
+/** Номер «поколения» устройства: растёт при каждом «Выйти». Запрос, начатый до выхода, по нему видит, что базу стёрли. */
+export function deviceEpoch(): number {
+  return wipeEpoch
+}
+
+/**
+ * Положить обложку, только если с начала запроса (epoch) устройство не стирали: иначе запись заново открыла бы
+ * стёртую базу. Идущую запись «Выйти» дожидается.
+ */
+export async function putCoverIfCurrent(epoch: number, cover: CachedCover): Promise<void> {
+  if (epoch !== wipeEpoch) return
+  const p: Promise<unknown> = putCover(cover)
+  pendingBackground.add(p)
+  try {
+    await p
+  } finally {
+    pendingBackground.delete(p)
+  }
+}
 
 /**
  * Сохранить индекс обложек ветки и вычистить лишние картинки — в фоне, ошибки глотаются (кэш картинок необязателен).
@@ -362,6 +383,8 @@ export function saveCoverIndex(branch: string, index: CoverIndex): void {
 
 /** «Выйти»: стереть с устройства кэш данных. */
 export async function wipeDevice(): Promise<void> {
+  wipeEpoch++
+  await Promise.all([...pendingBackground].map((p) => p.catch(() => undefined)))
   await Promise.all([...pendingBackground])
   // Не ждать открытия: если оно ждёт другие вкладки (blocked), «Выйти» зависло бы. Закроется, как только откроется.
   const opening = dbPromise

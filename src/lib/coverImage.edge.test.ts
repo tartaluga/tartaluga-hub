@@ -171,4 +171,22 @@ describe('индекс и чистка', () => {
     saveCoverIndex('main', { 'covers/a.webp': SHA })
     await vi.waitFor(async () => expect(await getCover(SHA2)).toBeUndefined())
   })
+  it('«Выйти» во время загрузки: ответ сети не воскрешает стёртую базу', async () => {
+    let resolve!: (b: Uint8Array) => void
+    read.mockReturnValue(new Promise<Uint8Array>((r) => (resolve = r)))
+    const p = loadCover('main', 'a', 'covers/a.webp', IDX)
+    await vi.waitFor(() => expect(read).toHaveBeenCalled())
+    await wipeDevice()
+    resolve(webp)
+    await p
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('tartaluga-hub')
+  })
+  it('«Выйти» во время чтения индекса: запрос отменяется и базу не открывает', async () => {
+    const p = loadCover('main', 'a', 'covers/a.webp')
+    await wipeDevice()
+    expect(await p).toBeNull()
+    expect(read).not.toHaveBeenCalled()
+    expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('tartaluga-hub')
+  })
 })
